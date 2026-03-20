@@ -12,9 +12,9 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 from ulid import ULID
 
-from ace_sync.identity import Identity
+from assistant_sync.identity import Identity
 
-PROTOCOL_VERSION = "ace-sync/0.1"
+PROTOCOL_VERSION = "assistant-sync/0.1"
 
 
 class ContentType(StrEnum):
@@ -40,7 +40,7 @@ class SeedContent(BaseModel):
 
 
 class Packet(BaseModel):
-    """A signed knowledge packet — the unit of transfer in Ace Sync."""
+    """A signed knowledge packet — the unit of transfer in Assistant Sync."""
 
     id: str = Field(default_factory=lambda: str(ULID()))
     version: str = PROTOCOL_VERSION

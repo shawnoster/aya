@@ -12,18 +12,18 @@ from datetime import UTC, datetime
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-from ace_sync.packet import Packet
+from assistant_sync.packet import Packet
 
 logger = logging.getLogger(__name__)
 
-# Ace Sync uses kind 5999 — within the NIP-90 Data Vending Machine range
+# Assistant Sync uses kind 5999 — within the NIP-90 Data Vending Machine range
 ACE_SYNC_KIND = 5999
 ACE_SYNC_RESULT_KIND = 6999  # read receipts / replies
 
 
 class RelayClient:
     """
-    Minimal Nostr relay client for Ace Sync packet delivery.
+    Minimal Nostr relay client for Assistant Sync packet delivery.
 
     Handles:
       - Publishing packets as signed Nostr events (kind 5999)
@@ -64,7 +64,7 @@ class RelayClient:
         if since:
             filter_["since"] = int(since.timestamp())
 
-        sub_id = f"ace-sync-{datetime.now(UTC).timestamp():.0f}"
+        sub_id = f"assistant-sync-{datetime.now(UTC).timestamp():.0f}"
 
         async with websockets.connect(self.relay_url) as ws:
             await ws.send(json.dumps(["REQ", sub_id, filter_]))
@@ -87,7 +87,7 @@ class RelayClient:
             await asyncio.wait_for(ws.recv(), timeout=10)
 
     def _build_event(self, packet: Packet) -> dict:
-        """Build a NIP-01 compliant Nostr event wrapping the Ace Sync packet."""
+        """Build a NIP-01 compliant Nostr event wrapping the Assistant Sync packet."""
         # Recipient tag: "#p" filter so relay routes to them
         recipient_pubkey = _did_to_pubkey(packet.to_did)
 
@@ -95,8 +95,8 @@ class RelayClient:
         tags = [
             ["p", recipient_pubkey],
             ["expiration", str(int(datetime.fromisoformat(packet.expires_at).timestamp()))],
-            ["ace-sync-version", "0.1"],
-            ["ace-sync-packet-id", packet.id],
+            ["assistant-sync-version", "0.1"],
+            ["assistant-sync-packet-id", packet.id],
         ]
 
         created_at = int(datetime.now(UTC).timestamp())
@@ -125,7 +125,7 @@ class RelayClient:
         tags = [
             ["p", recipient_pubkey],
             ["e", packet.id],
-            ["ace-sync-version", "0.1"],
+            ["assistant-sync-version", "0.1"],
         ]
         created_at = int(datetime.now(UTC).timestamp())
         event_id = _compute_event_id(

@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ace_sync.identity import Identity
-from ace_sync.packet import ConflictStrategy, ContentType, Packet
+from assistant_sync.identity import Identity
+from assistant_sync.packet import ConflictStrategy, ContentType, Packet
 
 
 @pytest.fixture

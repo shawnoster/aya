@@ -1,4 +1,4 @@
-"""CLI entry point — ace-sync command."""
+"""CLI entry point — assistant-sync command."""
 
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from ace_sync.identity import Identity, Profile
-from ace_sync.packet import ConflictStrategy, ContentType, Packet
-from ace_sync.relay import RelayClient
+from assistant_sync.identity import Identity, Profile
+from assistant_sync.packet import ConflictStrategy, ContentType, Packet
+from assistant_sync.relay import RelayClient
 
 app = typer.Typer(
-    name="ace-sync",
+    name="assistant-sync",
     help="Async knowledge packets between your AI assistant instances.",
     no_args_is_help=True,
 )
@@ -30,7 +30,7 @@ def _load_profile(profile_path: Path) -> Profile:
     if not profile_path.exists():
         err.print(
             f"[red]Profile not found at {profile_path}.[/red]\n"
-            "Run [bold]ace-sync init[/bold] first."
+            "Run [bold]assistant-sync init[/bold] first."
         )
         raise typer.Exit(1)
     return Profile.load(profile_path)
@@ -64,7 +64,7 @@ def init(
         f"DID:    [dim]{identity.did}[/dim]\n"
         f"Relay:  [cyan]{relay}[/cyan]\n\n"
         "[dim]Share your DID with other instances you want to trust.[/dim]",
-        title="Ace Sync — init",
+        title="Assistant Sync — init",
     ))
 
 
@@ -78,8 +78,8 @@ def trust(
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Add a DID to your trusted keys list."""
-    from ace_sync.identity import TrustedKey
-    from ace_sync.relay import _did_to_pubkey
+    from assistant_sync.identity import TrustedKey
+    from assistant_sync.relay import _did_to_pubkey
 
     p = _load_profile(profile)
     p.trusted_keys[label] = TrustedKey(
@@ -113,7 +113,7 @@ def pack(
     p = _load_profile(profile)
     local = p.instances.get(instance)
     if not local:
-        err.print(f"[red]Instance '{instance}' not found. Run ace-sync init.[/red]")
+        err.print(f"[red]Instance '{instance}' not found. Run assistant-sync init.[/red]")
         raise typer.Exit(1)
 
     # Resolve recipient DID
@@ -281,7 +281,7 @@ def _resolve_did(to: str, profile: Profile) -> str:
     if not key:
         err.print(
             f"[red]Unknown recipient '{to}'.[/red]\n"
-            "Use a full DID or add with [bold]ace-sync trust[/bold]."
+            "Use a full DID or add with [bold]assistant-sync trust[/bold]."
         )
         raise typer.Exit(1)
     return key.did
@@ -299,7 +299,7 @@ def _show_inbox(packets: list[Packet], profile: Profile) -> None:
     for pkt in packets:
         from_label = _label_for_did(pkt.from_did, profile)
         trusted = "[green]✓[/green]" if profile.is_trusted(pkt.from_did) else "[yellow]?[/yellow]"
-        from ace_sync.packet import _human_age
+        from assistant_sync.packet import _human_age
         table.add_row(
             pkt.id[:8],
             pkt.intent,

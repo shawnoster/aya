@@ -80,15 +80,15 @@ class Profile:
 
     @classmethod
     def load(cls, path: Path) -> Profile:
-        """Load from assistant_profile.json, merging ace-sync fields if present."""
+        """Load from assistant_profile.json, merging assistant-sync fields if present."""
         data = json.loads(path.read_text())
         instances = {
             k: Identity(**v)
-            for k, v in data.get("ace_sync", {}).get("instances", {}).items()
+            for k, v in data.get("assistant_sync", {}).get("instances", {}).items()
         }
         trusted = {
             k: TrustedKey(**v)
-            for k, v in data.get("ace_sync", {}).get("trusted_keys", {}).items()
+            for k, v in data.get("assistant_sync", {}).get("trusted_keys", {}).items()
         }
         return cls(
             alias=data.get("alias", "Ace"),
@@ -96,15 +96,15 @@ class Profile:
             user_name=data.get("user_name", ""),
             instances=instances,
             trusted_keys=trusted,
-            default_relay=data.get("ace_sync", {}).get("default_relay", "wss://relay.damus.io"),
-            last_checked=data.get("ace_sync", {}).get("last_checked", {}),
+            default_relay=data.get("assistant_sync", {}).get("default_relay", "wss://relay.damus.io"),
+            last_checked=data.get("assistant_sync", {}).get("last_checked", {}),
         )
 
     def save(self, path: Path) -> None:
-        """Write ace-sync fields back into the profile without clobbering other keys."""
+        """Write assistant-sync fields back into the profile without clobbering other keys."""
         data = json.loads(path.read_text()) if path.exists() else {}
-        data.setdefault("ace_sync", {})
-        data["ace_sync"]["instances"] = {
+        data.setdefault("assistant_sync", {})
+        data["assistant_sync"]["instances"] = {
             k: {
                 "did": v.did,
                 "label": v.label,
@@ -113,12 +113,12 @@ class Profile:
             }
             for k, v in self.instances.items()
         }
-        data["ace_sync"]["trusted_keys"] = {
+        data["assistant_sync"]["trusted_keys"] = {
             k: {"did": v.did, "label": v.label, "nostr_pubkey": v.nostr_pubkey}
             for k, v in self.trusted_keys.items()
         }
-        data["ace_sync"]["default_relay"] = self.default_relay
-        data["ace_sync"]["last_checked"] = self.last_checked
+        data["assistant_sync"]["default_relay"] = self.default_relay
+        data["assistant_sync"]["last_checked"] = self.last_checked
         path.write_text(json.dumps(data, indent=2))
 
     def active_instance(self, label: str = "default") -> Identity | None:

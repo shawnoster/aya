@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ace_sync.identity import Identity, Profile, TrustedKey
+from assistant_sync.identity import Identity, Profile, TrustedKey
 
 
 class TestIdentityGeneration:

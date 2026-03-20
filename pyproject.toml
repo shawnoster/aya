@@ -1,0 +1,70 @@
+[project]
+name = "ace-sync"
+version = "0.1.0"
+description = "Async knowledge packets between personal AI assistant instances"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.12",
+    "cryptography>=43",
+    "websockets>=13",
+    "python-ulid>=2",
+    "pydantic>=2",
+    "rich>=13",
+    "base58>=2",
+    "aiofiles>=24",
+]
+
+[project.scripts]
+ace-sync = "ace_sync.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ace_sync"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15",
+    "pylint>=3",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.11",
+    "respx>=0.21",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "ANN"]
+ignore = [
+    "ANN101",  # self annotation
+    "ANN102",  # cls annotation
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pylint.main]
+py-version = "3.13"
+source-roots = ["src"]
+
+[tool.pylint.messages_control]
+disable = ["C0111", "R0903"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true

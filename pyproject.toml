@@ -5,14 +5,14 @@ description = "Async knowledge packets between personal AI assistant instances"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "typer>=0.12",
-    "cryptography>=43",
-    "websockets>=13",
-    "python-ulid>=2",
+    "typer>=0.24",
+    "cryptography>=46",
+    "websockets>=16",
+    "python-ulid>=3",
     "pydantic>=2",
-    "rich>=13",
+    "rich>=14",
     "base58>=2",
-    "aiofiles>=24",
+    "aiofiles>=25",
     "coincurve>=21.0.0",
 ]
 
@@ -29,11 +29,11 @@ packages = ["src/assistant_sync"]
 [dependency-groups]
 dev = [
     "ruff>=0.15",
-    "pylint>=3",
+    "pylint>=4",
     "pytest>=9",
-    "pytest-asyncio>=0.24",
-    "mypy>=1.11",
-    "respx>=0.21",
+    "pytest-asyncio>=1",
+    "mypy>=1.19",
+    "respx>=0.22",
 ]
 
 [tool.ruff]
@@ -42,14 +42,56 @@ line-length = 100
 src = ["src"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "ANN"]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "YTT",  # flake8-2020
+    "ASYNC",# flake8-async
+    "S",    # flake8-bandit
+    "B",    # flake8-bugbear
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "DTZ",  # flake8-datetimez
+    "ISC",  # flake8-implicit-str-concat
+    "ICN",  # flake8-import-conventions
+    "G",    # flake8-logging-format
+    "PIE",  # flake8-pie
+    "T20",  # flake8-print
+    "PT",   # flake8-pytest-style
+    "Q",    # flake8-quotes
+    "RET",  # flake8-return
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "ARG",  # unused arguments
+    "PTH",  # pathlib usage
+    "ERA",  # eradicate
+    "PGH",  # pygrep-hooks
+    "PLC",  # pylint conventions
+    "PLE",  # pylint errors
+    "PLW",  # pylint warnings
+    "RUF",  # Ruff-specific rules
+    "ANN",  # flake8-annotations
+]
 ignore = [
-    "ANN101",  # self annotation
-    "ANN102",  # cls annotation
+    "ANN401",  # allow Any when unavoidable in boundary code
+    "S101",    # allow assert (especially in tests)
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["assistant_sync"]
+
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN"]
+"tests/**" = [
+    "ANN",      # test signatures don't need full annotations
+    "ARG",      # pytest fixtures often look unused
+    "PLR2004",  # magic values in test assertions
+    "S",        # tests may use patterns flagged by security rules
+    "T20",      # print useful in debugging tests
+]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -19,7 +19,6 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -349,18 +348,20 @@ def _evaluate_auto_remove(item: dict[str, Any], state: dict[str, Any]) -> bool:
     return False
 
 
-# ── CLI commands ─────────────────────────────────────────────────────────────
+# ── core operations ──────────────────────────────────────────────────────────
 
-def cmd_remind(args: argparse.Namespace) -> None:
+
+def add_reminder(message: str, due_text: str, tags: str = "") -> dict[str, Any]:
+    """Add a one-shot reminder. Returns the created item."""
     now = datetime.now(LOCAL_TZ)
-    due = parse_due(args.due, now)
+    due = parse_due(due_text, now)
     item = {
         "id": _new_id(),
         "type": "reminder",
         "status": "pending",
         "created_at": now.isoformat(),
-        "message": args.message,
-        "tags": [t.strip() for t in args.tag.split(",")] if args.tag else [],
+        "message": message,
+        "tags": _parse_tags(tags),
         "session_required": False,
         "due_at": due.isoformat(),
         "delivered_at": None,
@@ -369,111 +370,95 @@ def cmd_remind(args: argparse.Namespace) -> None:
     items = load_items()
     items.append(item)
     save_items(items)
-    print(f"  ✓ Reminder {item['id'][:8]} — {due.strftime('%a %b %d, %I:%M %p')}")
-    print(f"    {args.message}")
+    return item
 
 
-def cmd_watch(args: argparse.Namespace) -> None:
+def add_watch(
+    provider: str,
+    target: str,
+    message: str,
+    tags: str = "",
+    condition: str = "",
+    interval: int = 30,
+    remove_when: str = "",
+) -> dict[str, Any]:
+    """Add a condition-based watch. Returns the created item."""
     now = datetime.now(LOCAL_TZ)
-    provider = args.provider
-    target = args.target
-
     watch_config: dict[str, Any] = {}
-    condition = ""
 
     if provider == "github-pr":
         m = re.match(r"([^/]+)/([^#]+)#(\d+)", target)
         if not m:
-            print("Format: owner/repo#123", file=sys.stderr)
-            sys.exit(1)
+            raise ValueError("Format: owner/repo#123")
         watch_config = {"owner": m.group(1), "repo": m.group(2), "pr": int(m.group(3))}
-        condition = args.condition or "approved_or_merged"
-
+        condition = condition or "approved_or_merged"
     elif provider == "jira-query":
         watch_config = {"jql": target}
-        condition = args.condition or "new_results"
-
+        condition = condition or "new_results"
     elif provider == "jira-ticket":
         watch_config = {"ticket": target.upper()}
-        condition = args.condition or "status_changed"
-
+        condition = condition or "status_changed"
     else:
-        print(f"Unknown provider: {provider}", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"Unknown provider: {provider}")
 
     item = {
         "id": _new_id(),
         "type": "watch",
         "status": "active",
         "created_at": now.isoformat(),
-        "message": args.message,
-        "tags": [t.strip() for t in args.tag.split(",")] if args.tag else [],
+        "message": message,
+        "tags": _parse_tags(tags),
         "session_required": False,
         "provider": provider,
         "watch_config": watch_config,
         "condition": condition,
-        "poll_interval_minutes": args.interval or 30,
+        "poll_interval_minutes": interval,
         "last_checked_at": None,
         "last_state": None,
-        "remove_when": args.remove_when or "",
+        "remove_when": remove_when,
     }
-
     items = load_items()
     items.append(item)
     save_items(items)
-    print(f"  ✓ Watch {item['id'][:8]} ({provider})")
-    print(f"    {args.message}")
-    print(f"    Condition: {condition}, poll every {item['poll_interval_minutes']}m")
+    return item
 
 
-def cmd_list(args: argparse.Namespace) -> None:
-    items = load_items()
-    if args.type:
-        items = [i for i in items if i["type"] == args.type]
-    if not args.all:
-        items = [i for i in items if i["status"] in ("pending", "active", "snoozed")]
-
-    if not items:
-        print("No active items.")
-        return
-
+def add_recurring(
+    message: str, cron: str, prompt: str = "", tags: str = "",
+) -> dict[str, Any]:
+    """Add a persistent recurring session job. Returns the created item."""
     now = datetime.now(LOCAL_TZ)
-    type_icons = {"reminder": "⏰", "watch": "👁", "recurring": "🔄", "event": "⚡"}
-
-    for item_type in ("reminder", "watch", "recurring", "event"):
-        typed = [i for i in items if i["type"] == item_type]
-        if not typed:
-            continue
-        print(f"\n  {type_icons.get(item_type, '•')} {item_type.upper()}S")
-        for i in typed:
-            status_icon = {"pending": "⏳", "active": "✅", "snoozed": "💤",
-                           "delivered": "📬", "dismissed": "✗"}.get(i["status"], "•")
-            tags = f" [{', '.join(i['tags'])}]" if i.get("tags") else ""
-
-            if i["type"] == "reminder":
-                due = datetime.fromisoformat(i["due_at"])
-                due_str = due.strftime("%a %b %d, %I:%M %p")
-                overdue = due <= now and i["status"] == "pending"
-                marker = " 🔴 OVERDUE" if overdue else ""
-                print(f"    {status_icon} {i['id'][:8]}  {due_str}  {i['message'][:45]}{tags}{marker}")
-            elif i["type"] == "watch":
-                provider = i.get("provider", "?")
-                interval = i.get("poll_interval_minutes", "?")
-                last = i.get("last_checked_at")
-                last_str = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
-                print(f"    {status_icon} {i['id'][:8]}  [{provider}] {i['message'][:40]}{tags}  (every {interval}m, last: {last_str})")
-            elif i["type"] == "recurring":
-                cron = i.get("cron", "?")
-                sess = " [session]" if i.get("session_required") else ""
-                print(f"    {status_icon} {i['id'][:8]}  {i['message'][:45]}{tags}  ({cron}){sess}")
-            elif i["type"] == "event":
-                trigger = i.get("trigger", "?")
-                print(f"    {status_icon} {i['id'][:8]}  {i['message'][:45]}{tags}  on:{trigger}")
-    print()
+    item = {
+        "id": _new_id(),
+        "type": "recurring",
+        "status": "active",
+        "created_at": now.isoformat(),
+        "message": message,
+        "tags": _parse_tags(tags),
+        "session_required": True,
+        "cron": cron,
+        "prompt": prompt,
+    }
+    items = load_items()
+    items.append(item)
+    save_items(items)
+    return item
 
 
-def cmd_check(args: argparse.Namespace) -> None:
-    """Check for due reminders and unread alerts."""
+def list_items(
+    show_all: bool = False, item_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return filtered list of scheduler items."""
+    items = load_items()
+    if item_type:
+        items = [i for i in items if i["type"] == item_type]
+    if not show_all:
+        items = [i for i in items if i["status"] in ("pending", "active", "snoozed")]
+    return items
+
+
+def check_due() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Check for due reminders and unseen alerts. Returns (due_items, unseen_alerts)."""
     items = load_items()
     now = datetime.now(LOCAL_TZ)
     modified = False
@@ -496,59 +481,39 @@ def cmd_check(args: argparse.Namespace) -> None:
     if modified:
         save_items(items)
 
-    alerts = load_alerts()
-    unseen = [a for a in alerts if not a.get("seen")]
-
-    if args.json:
-        json.dump({"due_reminders": due_items, "alerts": unseen}, sys.stdout, indent=2, default=str)
-        print()
-        return
-
-    if not due_items and not unseen:
-        print("Nothing due. No alerts.")
-        return
-
-    if due_items:
-        print(f"\n  ⏰ {len(due_items)} reminder(s) due:")
-        for r in due_items:
-            due = datetime.fromisoformat(r["due_at"])
-            print(f"    🔴 {r['id'][:8]}  {due.strftime('%I:%M %p')}  {r['message'][:55]}")
-
-    if unseen:
-        print(f"\n  🔔 {len(unseen)} alert(s) from background watcher:")
-        for a in unseen:
-            print(f"    📢 {a['source_item_id'][:8]}  {a['message'][:60]}")
+    unseen = [a for a in load_alerts() if not a.get("seen")]
+    return due_items, unseen
 
 
-def cmd_dismiss(args: argparse.Namespace) -> None:
+def dismiss_item(item_id: str) -> dict[str, Any]:
+    """Dismiss an item by ID (prefix match). Returns the dismissed item."""
     items = load_items()
-    item = _find(items, args.id)
+    item = _find(items, item_id)
     if not item:
-        print(f"Item {args.id} not found.", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"Item {item_id} not found.")
     item["status"] = "dismissed"
     if item["type"] == "reminder":
         item["delivered_at"] = datetime.now(LOCAL_TZ).isoformat()
     save_items(items)
-    print(f"  ✓ Dismissed {item['id'][:8]} — {item['message'][:60]}")
+    return item
 
 
-def cmd_snooze(args: argparse.Namespace) -> None:
+def snooze_item(item_id: str, until_text: str) -> tuple[dict[str, Any], datetime]:
+    """Snooze a reminder. Returns (item, snooze_until_datetime)."""
     items = load_items()
-    item = _find(items, args.id)
+    item = _find(items, item_id)
     if not item:
-        print(f"Item {args.id} not found.", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"Item {item_id} not found.")
     now = datetime.now(LOCAL_TZ)
-    snooze_until = parse_due(args.until, now)
+    snooze_until = parse_due(until_text, now)
     item["status"] = "snoozed"
     item["snoozed_until"] = snooze_until.isoformat()
     save_items(items)
-    print(f"  💤 Snoozed {item['id'][:8]} until {snooze_until.strftime('%a %b %d, %I:%M %p')}")
+    return item, snooze_until
 
 
-def cmd_poll(args: argparse.Namespace) -> None:
-    """Run one poll cycle — check all watches and due reminders. For daemon use."""
+def run_poll(quiet: bool = False) -> None:
+    """Run one poll cycle — check all watches and due reminders."""
     items = load_items()
     alerts = load_alerts()
     now = datetime.now(LOCAL_TZ)
@@ -581,16 +546,16 @@ def cmd_poll(args: argparse.Namespace) -> None:
                     }
                     alerts.append(alert)
                     alerts_modified = True
-                    if not args.quiet:
+                    if not quiet:
                         print(f"  🔔 {item['id'][:8]} — {alert['message'][:60]}")
 
                 if _evaluate_auto_remove(item, new_state):
                     item["status"] = "dismissed"
                     items_modified = True
-                    if not args.quiet:
+                    if not quiet:
                         print(f"  ✓ Auto-dismissed {item['id'][:8]} (condition met)")
 
-            elif not args.quiet:
+            elif not quiet:
                 print(f"  ⚠ {item['id'][:8]} — poll failed (network/auth?)")
 
         elif item["type"] == "reminder" and item["status"] == "pending":
@@ -608,7 +573,7 @@ def cmd_poll(args: argparse.Namespace) -> None:
                     }
                     alerts.append(alert)
                     alerts_modified = True
-                    if not args.quiet:
+                    if not quiet:
                         print(f"  ⏰ {item['id'][:8]} — {item['message'][:55]}")
 
     if items_modified:
@@ -616,57 +581,27 @@ def cmd_poll(args: argparse.Namespace) -> None:
     if alerts_modified:
         save_alerts(alerts)
 
-    if not args.quiet:
+    if not quiet:
         watch_count = sum(1 for i in items if i["type"] == "watch" and i["status"] == "active")
         reminder_count = sum(1 for i in items if i["type"] == "reminder" and i["status"] == "pending")
         print(f"\n  Poll complete. {watch_count} watches, {reminder_count} pending reminders.")
 
 
-def cmd_recurring(args: argparse.Namespace) -> None:
-    now = datetime.now(LOCAL_TZ)
-    item = {
-        "id": _new_id(),
-        "type": "recurring",
-        "status": "active",
-        "created_at": now.isoformat(),
-        "message": args.message,
-        "tags": [t.strip() for t in args.tag.split(",")] if args.tag else [],
-        "session_required": True,
-        "cron": args.cron,
-        "prompt": args.prompt or "",
-    }
-    items = load_items()
-    items.append(item)
-    save_items(items)
-    print(f"  ✓ Recurring {item['id'][:8]} — {args.cron}")
-    print(f"    {args.message}")
-
-
-def cmd_alerts(args: argparse.Namespace) -> None:
-    """Show and optionally clear alerts from daemon."""
+def show_alerts(as_json: bool = False, mark_seen: bool = False) -> list[dict[str, Any]]:
+    """Show and optionally clear alerts. Returns unseen alerts."""
     alerts = load_alerts()
     unseen = [a for a in alerts if not a.get("seen")]
 
-    if args.json:
-        json.dump(unseen, sys.stdout, indent=2, default=str)
-        print()
-        return
-
-    if not unseen:
-        print("No unseen alerts.")
-        return
-
-    print(f"\n  🔔 {len(unseen)} alert(s):")
-    for a in unseen:
-        ts = datetime.fromisoformat(a["created_at"]).strftime("%b %d %I:%M %p")
-        print(f"    📢 {a['source_item_id'][:8]}  {ts}  {a['message'][:55]}")
-
-    if args.mark_seen:
+    if mark_seen and unseen:
         for a in alerts:
             a["seen"] = True
         save_alerts(alerts)
-        print(f"\n  Marked {len(unseen)} alert(s) as seen.")
-    print()
+
+    return unseen
+
+
+def _parse_tags(tags: str) -> list[str]:
+    return [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
 
 def _format_watch_alert(item: dict[str, Any], state: dict[str, Any]) -> str:
@@ -739,76 +674,42 @@ def get_active_watches() -> list[dict[str, Any]]:
     return [i for i in load_items() if i["type"] == "watch" and i["status"] == "active"]
 
 
-# ── CLI entry ────────────────────────────────────────────────────────────────
+def _display_items(items: list[dict[str, Any]]) -> None:
+    """Pretty-print scheduler items grouped by type."""
+    if not items:
+        print("No active items.")
+        return
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Unified scheduler — reminders, watches, recurring, events.",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
+    now = datetime.now(LOCAL_TZ)
+    type_icons = {"reminder": "⏰", "watch": "👁", "recurring": "🔄", "event": "⚡"}
 
-    # remind
-    p = sub.add_parser("remind", help="Add a one-shot reminder")
-    p.add_argument("--due", "-d", required=True, help="When: 'tomorrow 9am', 'in 2 hours', ISO8601")
-    p.add_argument("--message", "-m", required=True, help="Reminder message")
-    p.add_argument("--tag", "-t", default="", help="Comma-separated tags")
-    p.set_defaults(func=cmd_remind)
+    for item_type in ("reminder", "watch", "recurring", "event"):
+        typed = [i for i in items if i["type"] == item_type]
+        if not typed:
+            continue
+        print(f"\n  {type_icons.get(item_type, '•')} {item_type.upper()}S")
+        for i in typed:
+            status_icon = {"pending": "⏳", "active": "✅", "snoozed": "💤",
+                           "delivered": "📬", "dismissed": "✗"}.get(i["status"], "•")
+            tags = f" [{', '.join(i['tags'])}]" if i.get("tags") else ""
 
-    # watch
-    p = sub.add_parser("watch", help="Add a condition-based watch")
-    p.add_argument("provider", help="Provider: github-pr, jira-query, jira-ticket")
-    p.add_argument("target", help="Target: owner/repo#123, JQL string, or TICKET-123")
-    p.add_argument("--message", "-m", required=True, help="Watch description")
-    p.add_argument("--tag", "-t", default="", help="Comma-separated tags")
-    p.add_argument("--condition", "-c", default="", help="Condition: approved_or_merged, new_results, status_changed")
-    p.add_argument("--interval", "-i", type=int, default=30, help="Poll interval in minutes (default: 30)")
-    p.add_argument("--remove-when", default="", help="Auto-remove condition: merged_or_closed")
-    p.set_defaults(func=cmd_watch)
-
-    # recurring
-    p = sub.add_parser("recurring", help="Add a persistent recurring session job")
-    p.add_argument("--cron", "-c", required=True, help="5-field cron expression (local time)")
-    p.add_argument("--message", "-m", required=True, help="Short description")
-    p.add_argument("--prompt", "-p", default="", help="Full prompt to run at each fire time")
-    p.add_argument("--tag", "-t", default="", help="Comma-separated tags")
-    p.set_defaults(func=cmd_recurring)
-
-    # list
-    p = sub.add_parser("list", help="List scheduled items")
-    p.add_argument("--all", "-a", action="store_true", help="Include dismissed/delivered")
-    p.add_argument("--type", choices=["reminder", "watch", "recurring", "event"])
-    p.set_defaults(func=cmd_list)
-
-    # check
-    p = sub.add_parser("check", help="Check for due reminders and alerts")
-    p.add_argument("--json", action="store_true", help="Output as JSON")
-    p.set_defaults(func=cmd_check)
-
-    # dismiss
-    p = sub.add_parser("dismiss", help="Dismiss an item")
-    p.add_argument("id", help="Item ID (prefix match ok)")
-    p.set_defaults(func=cmd_dismiss)
-
-    # snooze
-    p = sub.add_parser("snooze", help="Snooze a reminder")
-    p.add_argument("id", help="Item ID (prefix match ok)")
-    p.add_argument("--until", "-u", required=True, help="Snooze until: 'in 1 hour', 'tomorrow 9am'")
-    p.set_defaults(func=cmd_snooze)
-
-    # poll
-    p = sub.add_parser("poll", help="Run one poll cycle (for daemon/cron)")
-    p.add_argument("--quiet", "-q", action="store_true", help="Suppress output on no changes")
-    p.set_defaults(func=cmd_poll)
-
-    # alerts
-    p = sub.add_parser("alerts", help="Show alerts from background watcher")
-    p.add_argument("--json", action="store_true", help="Output as JSON")
-    p.add_argument("--mark-seen", action="store_true", help="Mark all alerts as seen")
-    p.set_defaults(func=cmd_alerts)
-
-    args = parser.parse_args()
-    args.func(args)
-
-
-if __name__ == "__main__":
-    main()
+            if i["type"] == "reminder":
+                due = datetime.fromisoformat(i["due_at"])
+                due_str = due.strftime("%a %b %d, %I:%M %p")
+                overdue = due <= now and i["status"] == "pending"
+                marker = " 🔴 OVERDUE" if overdue else ""
+                print(f"    {status_icon} {i['id'][:8]}  {due_str}  {i['message'][:45]}{tags}{marker}")
+            elif i["type"] == "watch":
+                provider = i.get("provider", "?")
+                interval = i.get("poll_interval_minutes", "?")
+                last = i.get("last_checked_at")
+                last_str = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
+                print(f"    {status_icon} {i['id'][:8]}  [{provider}] {i['message'][:40]}{tags}  (every {interval}m, last: {last_str})")
+            elif i["type"] == "recurring":
+                cron = i.get("cron", "?")
+                sess = " [session]" if i.get("session_required") else ""
+                print(f"    {status_icon} {i['id'][:8]}  {i['message'][:45]}{tags}  ({cron}){sess}")
+            elif i["type"] == "event":
+                trigger = i.get("trigger", "?")
+                print(f"    {status_icon} {i['id'][:8]}  {i['message'][:45]}{tags}  on:{trigger}")
+    print()

@@ -388,9 +388,11 @@ def schedule_remind(
     tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
 ) -> None:
     """Add a one-shot reminder."""
-    from helm.scheduler import cmd_remind
-    from argparse import Namespace
-    cmd_remind(Namespace(message=message, due=due, tag=tag))
+    from helm.scheduler import add_reminder, parse_due
+    item = add_reminder(message, due, tag)
+    due_dt = parse_due(due)
+    console.print(f"[green]✓[/green] Reminder {item['id'][:8]} — {due_dt.strftime('%a %b %d, %I:%M %p')}")
+    console.print(f"  {message}")
 
 
 @schedule_app.command("watch")
@@ -404,11 +406,15 @@ def schedule_watch(
     remove_when: str = typer.Option("", help="Auto-remove: merged_or_closed"),
 ) -> None:
     """Add a condition-based watch."""
-    from helm.scheduler import cmd_watch
-    from argparse import Namespace
-    cmd_watch(Namespace(provider=provider, target=target, message=message,
-                        tag=tag, condition=condition, interval=interval,
-                        remove_when=remove_when))
+    from helm.scheduler import add_watch
+    try:
+        item = add_watch(provider, target, message, tag, condition, interval, remove_when)
+    except ValueError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"[green]✓[/green] Watch {item['id'][:8]} ({provider})")
+    console.print(f"  {message}")
+    console.print(f"  Condition: {item['condition']}, poll every {item['poll_interval_minutes']}m")
 
 
 @schedule_app.command("list")
@@ -417,9 +423,9 @@ def schedule_list(
     item_type: str = typer.Option(None, "--type", help="Filter: reminder, watch, recurring, event"),
 ) -> None:
     """List scheduled items."""
-    from helm.scheduler import cmd_list
-    from argparse import Namespace
-    cmd_list(Namespace(all=all_items, type=item_type))
+    from helm.scheduler import list_items, _display_items
+    items = list_items(show_all=all_items, item_type=item_type)
+    _display_items(items)
 
 
 @schedule_app.command("check")
@@ -427,9 +433,29 @@ def schedule_check(
     as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Check for due reminders and alerts."""
-    from helm.scheduler import cmd_check
-    from argparse import Namespace
-    cmd_check(Namespace(json=as_json))
+    from helm.scheduler import check_due
+    due_items, unseen = check_due()
+
+    if as_json:
+        import json as _json
+        print(_json.dumps({"due_reminders": due_items, "alerts": unseen}, indent=2, default=str))
+        return
+
+    if not due_items and not unseen:
+        console.print("[dim]Nothing due. No alerts.[/dim]")
+        return
+
+    if due_items:
+        console.print(f"\n  [bold]⏰ {len(due_items)} reminder(s) due:[/bold]")
+        for r in due_items:
+            from datetime import datetime
+            due_dt = datetime.fromisoformat(r["due_at"])
+            console.print(f"    🔴 {r['id'][:8]}  {due_dt.strftime('%I:%M %p')}  {r['message'][:55]}")
+
+    if unseen:
+        console.print(f"\n  [bold]🔔 {len(unseen)} alert(s):[/bold]")
+        for a in unseen:
+            console.print(f"    📢 {a['source_item_id'][:8]}  {a['message'][:60]}")
 
 
 @schedule_app.command("dismiss")
@@ -437,9 +463,13 @@ def schedule_dismiss(
     item_id: str = typer.Argument(help="Item ID (prefix match ok)"),
 ) -> None:
     """Dismiss an item."""
-    from helm.scheduler import cmd_dismiss
-    from argparse import Namespace
-    cmd_dismiss(Namespace(id=item_id))
+    from helm.scheduler import dismiss_item
+    try:
+        item = dismiss_item(item_id)
+    except ValueError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"[green]✓[/green] Dismissed {item['id'][:8]} — {item['message'][:60]}")
 
 
 @schedule_app.command("snooze")
@@ -448,9 +478,13 @@ def schedule_snooze(
     until: str = typer.Option(..., "--until", "-u", help="Snooze until: 'in 1 hour', 'tomorrow 9am'"),
 ) -> None:
     """Snooze a reminder."""
-    from helm.scheduler import cmd_snooze
-    from argparse import Namespace
-    cmd_snooze(Namespace(id=item_id, until=until))
+    from helm.scheduler import snooze_item
+    try:
+        item, snooze_until = snooze_item(item_id, until)
+    except ValueError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"💤 Snoozed {item['id'][:8]} until {snooze_until.strftime('%a %b %d, %I:%M %p')}")
 
 
 @schedule_app.command("poll")
@@ -458,9 +492,8 @@ def schedule_poll(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output on no changes"),
 ) -> None:
     """Run one poll cycle (for daemon/cron)."""
-    from helm.scheduler import cmd_poll
-    from argparse import Namespace
-    cmd_poll(Namespace(quiet=quiet))
+    from helm.scheduler import run_poll
+    run_poll(quiet=quiet)
 
 
 @schedule_app.command("alerts")
@@ -469,9 +502,26 @@ def schedule_alerts(
     mark_seen: bool = typer.Option(False, "--mark-seen", help="Mark all alerts as seen"),
 ) -> None:
     """Show alerts from background watcher."""
-    from helm.scheduler import cmd_alerts
-    from argparse import Namespace
-    cmd_alerts(Namespace(json=as_json, mark_seen=mark_seen))
+    from helm.scheduler import show_alerts
+    unseen = show_alerts(as_json=as_json, mark_seen=mark_seen)
+
+    if as_json:
+        import json as _json
+        print(_json.dumps(unseen, indent=2, default=str))
+        return
+
+    if not unseen:
+        console.print("[dim]No unseen alerts.[/dim]")
+        return
+
+    console.print(f"\n  [bold]🔔 {len(unseen)} alert(s):[/bold]")
+    for a in unseen:
+        from datetime import datetime
+        ts = datetime.fromisoformat(a["created_at"]).strftime("%b %d %I:%M %p")
+        console.print(f"    📢 {a['source_item_id'][:8]}  {ts}  {a['message'][:55]}")
+
+    if mark_seen:
+        console.print(f"\n  Marked {len(unseen)} alert(s) as seen.")
 
 
 # ── bootstrap ────────────────────────────────────────────────────────────────

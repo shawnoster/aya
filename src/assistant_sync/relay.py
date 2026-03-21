@@ -29,16 +29,18 @@ class RelayClient:
       - Publishing packets as signed Nostr events (kind 5999)
       - Querying for pending packets addressed to a pubkey
       - Sending read receipts (kind 6999)
+
+    Uses secp256k1 (Nostr) keys for transport, not ed25519 (did:key).
     """
 
-    def __init__(self, relay_url: str, private_key_hex: str, public_key_hex: str) -> None:
+    def __init__(self, relay_url: str, nostr_private_hex: str, nostr_public_hex: str) -> None:
         self.relay_url = relay_url
-        self._private_key_hex = private_key_hex
-        self.public_key_hex = public_key_hex
+        self._private_key_hex = nostr_private_hex
+        self.public_key_hex = nostr_public_hex
 
-    async def publish(self, packet: Packet) -> str:
+    async def publish(self, packet: Packet, recipient_nostr_pubkey: str) -> str:
         """Publish a packet to the relay. Returns the Nostr event ID."""
-        event = self._build_event(packet)
+        event = self._build_event(packet, recipient_nostr_pubkey)
         async with websockets.connect(self.relay_url) as ws:
             await ws.send(json.dumps(["EVENT", event]))
             response = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
@@ -79,17 +81,16 @@ class RelayClient:
 
             await ws.send(json.dumps(["CLOSE", sub_id]))
 
-    async def send_receipt(self, packet: Packet) -> None:
+    async def send_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> None:
         """Publish a read receipt for the given packet."""
-        event = self._build_receipt(packet)
+        event = self._build_receipt(packet, sender_nostr_pubkey)
         async with websockets.connect(self.relay_url) as ws:
             await ws.send(json.dumps(["EVENT", event]))
             await asyncio.wait_for(ws.recv(), timeout=10)
 
-    def _build_event(self, packet: Packet) -> dict:
+    def _build_event(self, packet: Packet, recipient_nostr_pubkey: str) -> dict:
         """Build a NIP-01 compliant Nostr event wrapping the Assistant Sync packet."""
-        # Recipient tag: "#p" filter so relay routes to them
-        recipient_pubkey = _did_to_pubkey(packet.to_did)
+        recipient_pubkey = recipient_nostr_pubkey
 
         content = packet.to_json()
         tags = [
@@ -119,9 +120,9 @@ class RelayClient:
             "sig": sig,
         }
 
-    def _build_receipt(self, packet: Packet) -> dict:
+    def _build_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> dict:
         content = json.dumps({"packet_id": packet.id, "status": "received"})
-        recipient_pubkey = _did_to_pubkey(packet.from_did)
+        recipient_pubkey = sender_nostr_pubkey
         tags = [
             ["p", recipient_pubkey],
             ["e", packet.id],
@@ -181,10 +182,10 @@ def _compute_event_id(
 
 
 def _sign_hex(event_id_hex: str, private_key_hex: str) -> str:
-    """Sign a Nostr event ID (raw bytes) and return hex signature."""
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(private_key_hex))
-    sig_bytes = key.sign(bytes.fromhex(event_id_hex))
+    """Sign a Nostr event ID with secp256k1 Schnorr (BIP-340) and return hex signature."""
+    from coincurve import PrivateKey as Secp256k1PrivateKey
+    key = Secp256k1PrivateKey(bytes.fromhex(private_key_hex))
+    sig_bytes = key.sign_schnorr(bytes.fromhex(event_id_hex))
     return sig_bytes.hex()
 
 

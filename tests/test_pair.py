@@ -101,7 +101,7 @@ class TestPairRequestEvent:
         event = _build_pair_request(work, "work", "fakehash", "wss://relay.example.com")
         assert event["sig"]
         assert event["id"]
-        assert event["pubkey"] == work.public_key_hex
+        assert event["pubkey"] == work.nostr_public_hex
 
 
 class TestPairResponseEvent:
@@ -199,7 +199,7 @@ class TestPairingFlowMocked:
 
         assert trusted.did == work.did
         assert trusted.label == "work"
-        assert trusted.nostr_pubkey == work.public_key_hex
+        assert trusted.nostr_pubkey == work.nostr_public_hex
 
     async def test_find_pair_request_no_match(self):
         # Relay returns EOSE immediately — no matching events

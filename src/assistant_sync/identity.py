@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import base58
+from coincurve import PrivateKey as Secp256k1PrivateKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -18,28 +20,45 @@ _ED25519_MULTICODEC = bytes([0xED, 0x01])
 
 @dataclass
 class Identity:
-    """A local assistant instance identity."""
+    """A local assistant instance identity.
+
+    Two keypairs:
+      - ed25519: for did:key identity and packet signing (W3C standard)
+      - secp256k1: for Nostr transport (BIP-340 Schnorr signatures)
+    """
 
     did: str
     label: str  # "work", "home", "laptop", etc.
-    private_key_hex: str
-    public_key_hex: str
+    private_key_hex: str     # ed25519 — identity / packet signing
+    public_key_hex: str      # ed25519
+    nostr_private_hex: str   # secp256k1 — Nostr transport
+    nostr_public_hex: str    # secp256k1 x-only (32 bytes)
 
     @classmethod
     def generate(cls, label: str) -> Identity:
-        """Generate a new ed25519 keypair and derive a did:key DID."""
-        private_key = Ed25519PrivateKey.generate()
-        pub_bytes = private_key.public_key().public_bytes_raw()
-        priv_bytes = private_key.private_bytes_raw()
+        """Generate ed25519 (did:key) + secp256k1 (Nostr) keypairs."""
+        # ed25519 for did:key
+        ed_private = Ed25519PrivateKey.generate()
+        ed_pub_bytes = ed_private.public_key().public_bytes_raw()
+        ed_priv_bytes = ed_private.private_bytes_raw()
 
-        multicodec = _ED25519_MULTICODEC + pub_bytes
+        multicodec = _ED25519_MULTICODEC + ed_pub_bytes
         did = "did:key:z" + base58.b58encode(multicodec).decode()
+
+        # secp256k1 for Nostr
+        nostr_secret = secrets.token_bytes(32)
+        nostr_key = Secp256k1PrivateKey(nostr_secret)
+        # x-only public key (BIP-340): drop the 0x02/0x03 prefix byte
+        nostr_pub_full = nostr_key.public_key.format(compressed=True)
+        nostr_pub_xonly = nostr_pub_full[1:]  # 32 bytes
 
         return cls(
             did=did,
             label=label,
-            private_key_hex=priv_bytes.hex(),
-            public_key_hex=pub_bytes.hex(),
+            private_key_hex=ed_priv_bytes.hex(),
+            public_key_hex=ed_pub_bytes.hex(),
+            nostr_private_hex=nostr_secret.hex(),
+            nostr_public_hex=nostr_pub_xonly.hex(),
         )
 
     def private_key(self) -> Ed25519PrivateKey:
@@ -49,11 +68,17 @@ class Identity:
         return self.private_key().public_key()
 
     def sign(self, data: bytes) -> bytes:
+        """Sign with ed25519 (for packet signatures)."""
         return self.private_key().sign(data)
 
+    def nostr_sign(self, message_bytes: bytes) -> bytes:
+        """Sign with secp256k1 Schnorr (BIP-340, for Nostr events)."""
+        key = Secp256k1PrivateKey(bytes.fromhex(self.nostr_private_hex))
+        return key.sign_schnorr(message_bytes)
+
     def nostr_pubkey(self) -> str:
-        """Hex-encoded public key for Nostr protocol use."""
-        return self.public_key_hex
+        """Hex-encoded x-only secp256k1 public key for Nostr."""
+        return self.nostr_public_hex
 
 
 @dataclass
@@ -82,10 +107,16 @@ class Profile:
     def load(cls, path: Path) -> Profile:
         """Load from assistant_profile.json, merging assistant-sync fields if present."""
         data = json.loads(path.read_text())
-        instances = {
-            k: Identity(**v)
-            for k, v in data.get("assistant_sync", {}).get("instances", {}).items()
-        }
+        instances = {}
+        for k, v in data.get("assistant_sync", {}).get("instances", {}).items():
+            # Migrate old profiles missing Nostr keys
+            if "nostr_private_hex" not in v:
+                nostr_secret = secrets.token_bytes(32)
+                nostr_key = Secp256k1PrivateKey(nostr_secret)
+                nostr_pub_xonly = nostr_key.public_key.format(compressed=True)[1:]
+                v["nostr_private_hex"] = nostr_secret.hex()
+                v["nostr_public_hex"] = nostr_pub_xonly.hex()
+            instances[k] = Identity(**v)
         trusted = {
             k: TrustedKey(**v)
             for k, v in data.get("assistant_sync", {}).get("trusted_keys", {}).items()
@@ -110,6 +141,8 @@ class Profile:
                 "label": v.label,
                 "private_key_hex": v.private_key_hex,
                 "public_key_hex": v.public_key_hex,
+                "nostr_private_hex": v.nostr_private_hex,
+                "nostr_public_hex": v.nostr_public_hex,
             }
             for k, v in self.instances.items()
         }

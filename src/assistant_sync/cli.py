@@ -76,20 +76,22 @@ def init(
 def trust(
     did: str = typer.Argument(help="DID to trust (did:key:z6Mk…)"),
     label: str = typer.Option(..., help="Human label for this key (home, friend:alice)"),
+    nostr_pubkey: str = typer.Option(None, help="Nostr pubkey hex (required for send/receive; pairing fills this automatically)"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Add a DID to your trusted keys list."""
     from assistant_sync.identity import TrustedKey
-    from assistant_sync.relay import _did_to_pubkey
 
     p = _load_profile(profile)
     p.trusted_keys[label] = TrustedKey(
         did=did,
         label=label,
-        nostr_pubkey=_did_to_pubkey(did),
+        nostr_pubkey=nostr_pubkey,
     )
     p.save(profile)
     console.print(f"[green]✓[/green] Trusted: [cyan]{label}[/cyan]  [dim]{did}[/dim]")
+    if not nostr_pubkey:
+        console.print("[dim]Note: No Nostr pubkey provided. Use --nostr-pubkey or pair to enable relay delivery.[/dim]")
 
 
 # ── pack ──────────────────────────────────────────────────────────────────────
@@ -179,9 +181,11 @@ def send(
 
     relay_url = relay or p.default_relay
     packet = Packet.from_json(packet_file.read_text())
-    client = RelayClient(relay_url, local.private_key_hex, local.public_key_hex)
+    client = RelayClient(relay_url, local.nostr_private_hex, local.nostr_public_hex)
 
-    event_id = asyncio.run(client.publish(packet))
+    # Resolve recipient's Nostr pubkey
+    recipient_nostr_pub = _resolve_nostr_pubkey(packet.to_did, p)
+    event_id = asyncio.run(client.publish(packet, recipient_nostr_pub))
     console.print(
         f"[green]✓[/green] Sent [cyan]{packet.intent}[/cyan]\n"
         f"  Packet: [dim]{packet.id[:8]}[/dim]  "
@@ -210,7 +214,7 @@ def receive(
             raise typer.Exit(1)
 
         relay_url = relay or p.default_relay
-        client = RelayClient(relay_url, local.private_key_hex, local.public_key_hex)
+        client = RelayClient(relay_url, local.nostr_private_hex, local.nostr_public_hex)
 
         packets: list[Packet] = []
         async for packet in client.fetch_pending():
@@ -236,7 +240,9 @@ def receive(
             )
             if ingest:
                 _ingest(packet)
-                await client.send_receipt(packet)
+                sender_nostr_pub = _resolve_nostr_pubkey(packet.from_did, p)
+                if sender_nostr_pub:
+                    await client.send_receipt(packet, sender_nostr_pub)
 
     asyncio.run(_run())
 
@@ -260,7 +266,7 @@ def inbox(
             raise typer.Exit(1)
 
         relay_url = relay or p.default_relay
-        client = RelayClient(relay_url, local.private_key_hex, local.public_key_hex)
+        client = RelayClient(relay_url, local.nostr_private_hex, local.nostr_public_hex)
 
         packets = [pkt async for pkt in client.fetch_pending()]
         if not packets:
@@ -333,7 +339,7 @@ def pair(
         # Poll for response
         with console.status("[bold cyan]Waiting for the other instance…[/bold cyan]"):
             trusted = asyncio.run(
-                poll_for_pair_response(relay_url, local.public_key_hex, request_event_id)
+                poll_for_pair_response(relay_url, local.nostr_public_hex, request_event_id)
             )
 
         if trusted is None:
@@ -399,6 +405,17 @@ def _label_for_did(did: str, profile: Profile) -> str:
         if key.did == did:
             return key.label
     return did[:20] + "…"
+
+
+def _resolve_nostr_pubkey(did: str, profile: Profile) -> str | None:
+    """Look up the Nostr pubkey for a DID from trusted keys or local instances."""
+    for key in profile.trusted_keys.values():
+        if key.did == did and key.nostr_pubkey:
+            return key.nostr_pubkey
+    for inst in profile.instances.values():
+        if inst.did == did:
+            return inst.nostr_public_hex
+    return None
 
 
 def _ingest(packet: Packet) -> None:

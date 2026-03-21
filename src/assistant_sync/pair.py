@@ -15,7 +15,6 @@ from assistant_sync.identity import Identity, TrustedKey
 from assistant_sync.relay import (
     ACE_SYNC_KIND,
     _compute_event_id,
-    _did_to_pubkey,
     _read_until_eose,
     _sign_hex,
 )
@@ -103,21 +102,36 @@ async def poll_for_pair_response(
     request_event_id: str,
     timeout: int = PAIR_TTL_SECONDS,
 ) -> TrustedKey | None:
-    """Poll relay for a pair-response. Returns TrustedKey on success, None on timeout."""
+    """Poll relay for a pair-response using a single persistent connection."""
     since_ts = int(datetime.now(UTC).timestamp()) - 5
     deadline = datetime.now(UTC).timestamp() + timeout
-    while datetime.now(UTC).timestamp() < deadline:
-        response = await _poll_for_response(
-            relay_url, my_pubkey, request_event_id, since_ts
-        )
-        if response:
-            content = json.loads(response["content"])
-            return TrustedKey(
-                did=content["did"],
-                label=content["label"],
-                nostr_pubkey=response["pubkey"],
-            )
-        await asyncio.sleep(PAIR_POLL_INTERVAL)
+
+    try:
+        async with websockets.connect(relay_url) as ws:
+            while datetime.now(UTC).timestamp() < deadline:
+                filter_ = {
+                    "kinds": [ACE_SYNC_KIND],
+                    "#t": [_TAG_PAIR_RESP],
+                    "#p": [my_pubkey],
+                    "#e": [request_event_id],
+                    "since": since_ts,
+                    "limit": 1,
+                }
+                sub_id = f"pair-poll-{datetime.now(UTC).timestamp():.0f}"
+                await ws.send(json.dumps(["REQ", sub_id, filter_]))
+                async for event in _read_until_eose(ws, sub_id):
+                    await ws.send(json.dumps(["CLOSE", sub_id]))
+                    content = json.loads(event["content"])
+                    return TrustedKey(
+                        did=content["did"],
+                        label=content["label"],
+                        nostr_pubkey=event["pubkey"],
+                    )
+                await ws.send(json.dumps(["CLOSE", sub_id]))
+                await asyncio.sleep(PAIR_POLL_INTERVAL)
+    except Exception as exc:
+        logger.warning("Polling connection lost: %s", exc)
+
     return None
 
 
@@ -181,16 +195,16 @@ def _build_pair_request(
         ["assistant-sync-version", "0.1"],
     ]
     event_id = _compute_event_id(
-        pubkey=identity.public_key_hex,
+        pubkey=identity.nostr_public_hex,
         created_at=created_at,
         kind=ACE_SYNC_KIND,
         tags=tags,
         content=content,
     )
-    sig = _sign_hex(event_id, identity.private_key_hex)
+    sig = _sign_hex(event_id, identity.nostr_private_hex)
     return {
         "id": event_id,
-        "pubkey": identity.public_key_hex,
+        "pubkey": identity.nostr_public_hex,
         "created_at": created_at,
         "kind": ACE_SYNC_KIND,
         "tags": tags,
@@ -218,16 +232,16 @@ def _build_pair_response(
         ["assistant-sync-version", "0.1"],
     ]
     event_id = _compute_event_id(
-        pubkey=identity.public_key_hex,
+        pubkey=identity.nostr_public_hex,
         created_at=created_at,
         kind=ACE_SYNC_KIND,
         tags=tags,
         content=content,
     )
-    sig = _sign_hex(event_id, identity.private_key_hex)
+    sig = _sign_hex(event_id, identity.nostr_private_hex)
     return {
         "id": event_id,
-        "pubkey": identity.public_key_hex,
+        "pubkey": identity.nostr_public_hex,
         "created_at": created_at,
         "kind": ACE_SYNC_KIND,
         "tags": tags,

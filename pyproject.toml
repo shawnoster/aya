@@ -13,6 +13,7 @@ dependencies = [
     "rich>=13",
     "base58>=2",
     "aiofiles>=24",
+    "coincurve>=21.0.0",
 ]
 
 [project.scripts]

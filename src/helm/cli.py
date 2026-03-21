@@ -28,6 +28,16 @@ app = typer.Typer(
     help="Personal AI assistant toolkit — sync, schedule, bootstrap.",
     no_args_is_help=True,
 )
+
+# ── Schedule sub-app ─────────────────────────────────────────────────────────
+
+schedule_app = typer.Typer(
+    name="schedule",
+    help="Reminders, watches, and recurring jobs.",
+    no_args_is_help=True,
+)
+app.add_typer(schedule_app, name="schedule")
+
 console = Console()
 err = Console(stderr=True)
 
@@ -366,6 +376,102 @@ def pair(
             f"DID:     [dim]{trusted.did}[/dim]",
             title="Helm — pair (complete)",
         ))
+
+
+# ── schedule subcommands ──────────────────────────────────────────────────────
+
+
+@schedule_app.command("remind")
+def schedule_remind(
+    message: str = typer.Option(..., "--message", "-m", help="Reminder message"),
+    due: str = typer.Option(..., "--due", "-d", help="When: 'tomorrow 9am', 'in 2 hours', ISO8601"),
+    tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
+) -> None:
+    """Add a one-shot reminder."""
+    from helm.scheduler import cmd_remind
+    from argparse import Namespace
+    cmd_remind(Namespace(message=message, due=due, tag=tag))
+
+
+@schedule_app.command("watch")
+def schedule_watch(
+    provider: str = typer.Argument(help="Provider: github-pr, jira-query, jira-ticket"),
+    target: str = typer.Argument(help="Target: owner/repo#123, JQL, or TICKET-123"),
+    message: str = typer.Option(..., "--message", "-m", help="Watch description"),
+    tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
+    condition: str = typer.Option("", "--condition", "-c", help="Condition: approved_or_merged, etc."),
+    interval: int = typer.Option(30, "--interval", "-i", help="Poll interval minutes"),
+    remove_when: str = typer.Option("", help="Auto-remove: merged_or_closed"),
+) -> None:
+    """Add a condition-based watch."""
+    from helm.scheduler import cmd_watch
+    from argparse import Namespace
+    cmd_watch(Namespace(provider=provider, target=target, message=message,
+                        tag=tag, condition=condition, interval=interval,
+                        remove_when=remove_when))
+
+
+@schedule_app.command("list")
+def schedule_list(
+    all_items: bool = typer.Option(False, "--all", "-a", help="Include dismissed/delivered"),
+    item_type: str = typer.Option(None, "--type", help="Filter: reminder, watch, recurring, event"),
+) -> None:
+    """List scheduled items."""
+    from helm.scheduler import cmd_list
+    from argparse import Namespace
+    cmd_list(Namespace(all=all_items, type=item_type))
+
+
+@schedule_app.command("check")
+def schedule_check(
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Check for due reminders and alerts."""
+    from helm.scheduler import cmd_check
+    from argparse import Namespace
+    cmd_check(Namespace(json=as_json))
+
+
+@schedule_app.command("dismiss")
+def schedule_dismiss(
+    item_id: str = typer.Argument(help="Item ID (prefix match ok)"),
+) -> None:
+    """Dismiss an item."""
+    from helm.scheduler import cmd_dismiss
+    from argparse import Namespace
+    cmd_dismiss(Namespace(id=item_id))
+
+
+@schedule_app.command("snooze")
+def schedule_snooze(
+    item_id: str = typer.Argument(help="Item ID (prefix match ok)"),
+    until: str = typer.Option(..., "--until", "-u", help="Snooze until: 'in 1 hour', 'tomorrow 9am'"),
+) -> None:
+    """Snooze a reminder."""
+    from helm.scheduler import cmd_snooze
+    from argparse import Namespace
+    cmd_snooze(Namespace(id=item_id, until=until))
+
+
+@schedule_app.command("poll")
+def schedule_poll(
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output on no changes"),
+) -> None:
+    """Run one poll cycle (for daemon/cron)."""
+    from helm.scheduler import cmd_poll
+    from argparse import Namespace
+    cmd_poll(Namespace(quiet=quiet))
+
+
+@schedule_app.command("alerts")
+def schedule_alerts(
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+    mark_seen: bool = typer.Option(False, "--mark-seen", help="Mark all alerts as seen"),
+) -> None:
+    """Show alerts from background watcher."""
+    from helm.scheduler import cmd_alerts
+    from argparse import Namespace
+    cmd_alerts(Namespace(json=as_json, mark_seen=mark_seen))
 
 
 # ── bootstrap ────────────────────────────────────────────────────────────────

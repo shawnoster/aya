@@ -4,24 +4,22 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from assistant_sync.identity import Identity
-from assistant_sync.pair import (
-    PAIR_TTL_SECONDS,
-    WORD_LIST,
+from helm.identity import Identity
+from helm.pair import (
     _TAG_PAIR_REQ,
     _TAG_PAIR_RESP,
+    PAIR_TTL_SECONDS,
+    WORD_LIST,
     _build_pair_request,
     _build_pair_response,
     _find_pair_request,
     generate_code,
     hash_code,
     join_pairing,
-    poll_for_pair_response,
     publish_pair_request,
 )
 
@@ -173,7 +171,7 @@ class TestPairingFlowMocked:
 
     async def test_publish_pair_request_returns_event_id(self, work):
         ws = _make_ws_mock([])
-        with patch("assistant_sync.pair.websockets.connect", return_value=ws):
+        with patch("helm.pair.websockets.connect", return_value=ws):
             event_id = await publish_pair_request(work, "work", "code_hash", "wss://relay.test")
             assert event_id
             assert len(event_id) == 64  # sha256 hex
@@ -187,11 +185,11 @@ class TestPairingFlowMocked:
         # publish goes through a simple mock ws
         with (
             patch(
-                "assistant_sync.pair._find_pair_request",
+                "helm.pair._find_pair_request",
                 return_value=request_event,
             ),
             patch(
-                "assistant_sync.pair.websockets.connect",
+                "helm.pair.websockets.connect",
                 return_value=_make_ws_mock([]),
             ),
         ):
@@ -205,7 +203,7 @@ class TestPairingFlowMocked:
         # Relay returns EOSE immediately — no matching events
         ws = _make_ws_mock([json.dumps(["EOSE", "sub1"])])
 
-        with patch("assistant_sync.pair.websockets.connect", return_value=ws):
+        with patch("helm.pair.websockets.connect", return_value=ws):
             result = await _find_pair_request("wss://relay.test", "nonexistent_hash")
 
         assert result is None

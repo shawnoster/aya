@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 
 import websockets
 
-from assistant_sync.identity import Identity, TrustedKey
-from assistant_sync.relay import (
+from helm.identity import Identity, TrustedKey
+from helm.relay import (
     ACE_SYNC_KIND,
     _compute_event_id,
     _read_until_eose,
@@ -25,7 +25,7 @@ PAIR_TTL_SECONDS = 600  # 10 minutes
 PAIR_POLL_INTERVAL = 3  # seconds
 
 # 256 words — easy to read aloud, no homophones, no offensive terms.
-# 8 bits per word × 2 words + ~13 bits (4-digit number) ≈ 29 bits.
+# 8 bits per word x 2 words + ~13 bits (4-digit number) ≈ 29 bits.
 # Enough entropy for a 10-minute window.
 WORD_LIST: tuple[str, ...] = (
     "AMBER", "ANCHOR", "ARROW", "ATLAS", "BADGE", "BASIN", "BEACH", "BIRCH",
@@ -100,11 +100,11 @@ async def poll_for_pair_response(
     relay_url: str,
     my_pubkey: str,
     request_event_id: str,
-    timeout: int = PAIR_TTL_SECONDS,
+    timeout_seconds: int = PAIR_TTL_SECONDS,
 ) -> TrustedKey | None:
     """Poll relay for a pair-response using a single persistent connection."""
     since_ts = int(datetime.now(UTC).timestamp()) - 5
-    deadline = datetime.now(UTC).timestamp() + timeout
+    deadline = datetime.now(UTC).timestamp() + timeout_seconds
 
     try:
         async with websockets.connect(relay_url) as ws:

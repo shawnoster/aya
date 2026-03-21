@@ -7,12 +7,13 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 from ulid import ULID
 
-from assistant_sync.identity import Identity
+from helm.identity import Identity
 
 PROTOCOL_VERSION = "assistant-sync/0.1"
 
@@ -122,7 +123,6 @@ class Packet(BaseModel):
         """Pack multiple files into a single markdown packet."""
         parts = []
         for path in paths:
-            from pathlib import Path
             p = Path(path)
             parts.append(f"## {p.name}\n\n{p.read_text()}")
         content = "\n\n---\n\n".join(parts)

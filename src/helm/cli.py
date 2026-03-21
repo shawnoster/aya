@@ -1,4 +1,4 @@
-"""CLI entry point — assistant-sync command."""
+"""CLI entry point — helm command."""
 
 from __future__ import annotations
 
@@ -11,14 +11,21 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from assistant_sync.identity import Identity, Profile
-from assistant_sync.packet import ConflictStrategy, ContentType, Packet
-from assistant_sync.pair import PairingError, join_pairing
-from assistant_sync.relay import RelayClient
+from helm.identity import Identity, Profile, TrustedKey
+from helm.packet import ConflictStrategy, ContentType, Packet, _human_age
+from helm.pair import (
+    PairingError,
+    generate_code,
+    hash_code,
+    join_pairing,
+    poll_for_pair_response,
+    publish_pair_request,
+)
+from helm.relay import RelayClient
 
 app = typer.Typer(
-    name="assistant-sync",
-    help="Async knowledge packets between your AI assistant instances.",
+    name="helm",
+    help="Personal AI assistant toolkit — sync, schedule, bootstrap.",
     no_args_is_help=True,
 )
 console = Console()
@@ -31,7 +38,7 @@ def _load_profile(profile_path: Path) -> Profile:
     if not profile_path.exists():
         err.print(
             f"[red]Profile not found at {profile_path}.[/red]\n"
-            "Run [bold]assistant-sync init[/bold] first."
+            "Run [bold]helm init[/bold] first."
         )
         raise typer.Exit(1)
     return Profile.load(profile_path)
@@ -65,7 +72,7 @@ def init(
         f"DID:    [dim]{identity.did}[/dim]\n"
         f"Relay:  [cyan]{relay}[/cyan]\n\n"
         "[dim]Share your DID with other instances you want to trust.[/dim]",
-        title="Assistant Sync — init",
+        title="Helm — init",
     ))
 
 
@@ -76,12 +83,13 @@ def init(
 def trust(
     did: str = typer.Argument(help="DID to trust (did:key:z6Mk…)"),
     label: str = typer.Option(..., help="Human label for this key (home, friend:alice)"),
-    nostr_pubkey: str = typer.Option(None, help="Nostr pubkey hex (required for send/receive; pairing fills this automatically)"),
+    nostr_pubkey: str = typer.Option(
+        None,
+        help="Nostr pubkey hex (required for send/receive; pairing fills this automatically)",
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Add a DID to your trusted keys list."""
-    from assistant_sync.identity import TrustedKey
-
     p = _load_profile(profile)
     p.trusted_keys[label] = TrustedKey(
         did=did,
@@ -91,7 +99,10 @@ def trust(
     p.save(profile)
     console.print(f"[green]✓[/green] Trusted: [cyan]{label}[/cyan]  [dim]{did}[/dim]")
     if not nostr_pubkey:
-        console.print("[dim]Note: No Nostr pubkey provided. Use --nostr-pubkey or pair to enable relay delivery.[/dim]")
+        console.print(
+            "[dim]Note: No Nostr pubkey provided. "
+            "Use --nostr-pubkey or pair to enable relay delivery.[/dim]"
+        )
 
 
 # ── pack ──────────────────────────────────────────────────────────────────────
@@ -116,7 +127,7 @@ def pack(
     p = _load_profile(profile)
     local = p.instances.get(instance)
     if not local:
-        err.print(f"[red]Instance '{instance}' not found. Run assistant-sync init.[/red]")
+        err.print(f"[red]Instance '{instance}' not found. Run helm init.[/red]")
         raise typer.Exit(1)
 
     # Resolve recipient DID
@@ -159,7 +170,7 @@ def pack(
         out.write_text(json_output)
         console.print(f"[green]✓[/green] Packet written to [cyan]{out}[/cyan]")
     else:
-        print(json_output)
+        sys.stdout.write(json_output)
 
 
 # ── send ──────────────────────────────────────────────────────────────────────
@@ -292,7 +303,7 @@ def pair(
     p = _load_profile(profile)
     local = p.instances.get(instance)
     if not local:
-        err.print(f"[red]Instance '{instance}' not found. Run assistant-sync init first.[/red]")
+        err.print(f"[red]Instance '{instance}' not found. Run helm init first.[/red]")
         raise typer.Exit(1)
 
     relay_url = relay or p.default_relay
@@ -311,13 +322,11 @@ def pair(
             f"[bold green]✓ Paired![/bold green]\n\n"
             f"Trusted: [cyan]{trusted.label}[/cyan]\n"
             f"DID:     [dim]{trusted.did}[/dim]",
-            title="Assistant Sync — pair (joined)",
+            title="Helm — pair (joined)",
         ))
 
     else:
         # ── Initiator mode ───────────────────────────────────────────
-        from assistant_sync.pair import generate_code, hash_code, publish_pair_request, poll_for_pair_response
-
         pairing_code = generate_code()
         code_h = hash_code(pairing_code)
 
@@ -331,9 +340,9 @@ def pair(
         console.print(Panel.fit(
             f"[bold]Pairing code:[/bold]  [bold cyan]{pairing_code}[/bold cyan]\n\n"
             "Enter this on your other machine:\n"
-            f"  [dim]assistant-sync pair --code {pairing_code} --label <their-label>[/dim]\n\n"
+            f"  [dim]helm pair --code {pairing_code} --label <their-label>[/dim]\n\n"
             "[dim]Expires in 10 minutes.[/dim]",
-            title="Assistant Sync — pair",
+            title="Helm — pair",
         ))
 
         # Poll for response
@@ -345,7 +354,7 @@ def pair(
         if trusted is None:
             console.print(
                 "[bold yellow]Pairing timed out.[/bold yellow] "
-                "Run [bold]assistant-sync pair[/bold] again for a new code."
+                "Run [bold]helm pair[/bold] again for a new code."
             )
             raise typer.Exit(1)
 
@@ -355,7 +364,7 @@ def pair(
             f"[bold green]✓ Paired![/bold green]\n\n"
             f"Trusted: [cyan]{trusted.label}[/cyan]\n"
             f"DID:     [dim]{trusted.did}[/dim]",
-            title="Assistant Sync — pair (complete)",
+            title="Helm — pair (complete)",
         ))
 
 
@@ -370,7 +379,7 @@ def _resolve_did(to: str, profile: Profile) -> str:
     if not key:
         err.print(
             f"[red]Unknown recipient '{to}'.[/red]\n"
-            "Use a full DID or add with [bold]assistant-sync trust[/bold]."
+            "Use a full DID or add with [bold]helm trust[/bold]."
         )
         raise typer.Exit(1)
     return key.did
@@ -388,7 +397,6 @@ def _show_inbox(packets: list[Packet], profile: Profile) -> None:
     for pkt in packets:
         from_label = _label_for_did(pkt.from_did, profile)
         trusted = "[green]✓[/green]" if profile.is_trusted(pkt.from_did) else "[yellow]?[/yellow]"
-        from assistant_sync.packet import _human_age
         table.add_row(
             pkt.id[:8],
             pkt.intent,

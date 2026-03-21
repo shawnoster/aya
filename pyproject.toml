@@ -1,7 +1,7 @@
 [project]
-name = "assistant-sync"
-version = "0.1.0"
-description = "Async knowledge packets between personal AI assistant instances"
+name = "helm"
+version = "0.2.0"
+description = "Personal AI assistant toolkit — sync, schedule, bootstrap"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -17,14 +17,14 @@ dependencies = [
 ]
 
 [project.scripts]
-assistant-sync = "assistant_sync.cli:app"
+helm = "helm.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/assistant_sync"]
+packages = ["src/helm"]
 
 [dependency-groups]
 dev = [
@@ -77,12 +77,13 @@ select = [
     "ANN",  # flake8-annotations
 ]
 ignore = [
+    "B008",    # Typer/Click intentionally uses function calls in parameter defaults
     "ANN401",  # allow Any when unavoidable in boundary code
     "S101",    # allow assert (especially in tests)
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["assistant_sync"]
+known-first-party = ["helm"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [

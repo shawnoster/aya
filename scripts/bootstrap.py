@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -33,11 +34,19 @@ DIRS = [
     "assistant/notes/ideas",
     "assistant/templates",
     "assistant/rules",
-    "assistant/scripts",
+    "scripts",
     "projects",
     "code",
     ".claude",
     ".claude/commands",
+]
+
+# Scripts bundled in framework/scripts/ that get copied to <root>/scripts/
+FRAMEWORK_SCRIPTS = [
+    "scheduler.py",
+    "status_check.py",
+    "assistant_profile.py",
+    "watcher_daemon.py",
 ]
 
 # ── Framework files ──────────────────────────────────────────────────────────
@@ -404,16 +413,26 @@ def _config_json(root: str) -> str:
 
 def _makefile(root: str) -> str:
     return f"""\
-.PHONY: assistant-status
+.PHONY: assistant-status schedule-list schedule-check schedule-poll schedule-alerts
 
 # ── Assistant ────────────────────────────────────────────────────────────────
 
 assistant-status:
-\t@echo "=== Assistant Status ==="
-\t@echo "Root: {root}"
-\t@echo "Profile: $$(test -f ~/.copilot/assistant_profile.json && echo 'OK' || echo 'MISSING')"
-\t@echo "Scheduler: $$(test -f {root}/assistant/memory/scheduler.json && echo 'OK' || echo 'MISSING')"
-\t@echo "Readiness: ONLINE"
+\t@python3 scripts/status_check.py 2>/dev/null || echo "status_check.py not found — run bootstrap"
+
+# ── Scheduler ────────────────────────────────────────────────────────────────
+
+schedule-list:
+\t@python3 scripts/scheduler.py list
+
+schedule-check:
+\t@python3 scripts/scheduler.py check
+
+schedule-poll:
+\t@python3 scripts/scheduler.py poll
+
+schedule-alerts:
+\t@python3 scripts/scheduler.py alerts
 """
 
 
@@ -457,11 +476,29 @@ def main() -> None:
 
     print(f"Bootstrap assistant workspace at: {root}\n")
 
+    # Locate bundled framework scripts
+    bootstrap_dir = Path(__file__).resolve().parent
+    framework_scripts_dir = bootstrap_dir.parent / "framework" / "scripts"
+
     # Show what will be created
     files = get_files(str(root))
     dirs_to_create = [d for d in DIRS if not (root / d).exists()]
     files_to_create = [(p, c) for p, c in files if not (root / p).exists()]
     files_to_skip = [(p, c) for p, c in files if (root / p).exists()]
+
+    # Check which scripts need copying
+    scripts_to_copy = []
+    scripts_to_skip = []
+    for script_name in FRAMEWORK_SCRIPTS:
+        target = root / "scripts" / script_name
+        source = framework_scripts_dir / script_name
+        if not source.exists():
+            print(f"  ⚠ Bundled script not found: {source}")
+            continue
+        if target.exists():
+            scripts_to_skip.append(script_name)
+        else:
+            scripts_to_copy.append(script_name)
 
     if dirs_to_create:
         print("Directories to create:")
@@ -475,13 +512,21 @@ def main() -> None:
             print(f"  + {p}")
         print()
 
-    if files_to_skip:
-        print("Files that already exist (skipping):")
-        for p, _ in files_to_skip:
-            print(f"  ~ {p}")
+    if scripts_to_copy:
+        print("Scripts to copy:")
+        for s in scripts_to_copy:
+            print(f"  + scripts/{s}")
         print()
 
-    if not dirs_to_create and not files_to_create:
+    if files_to_skip or scripts_to_skip:
+        print("Already exist (skipping):")
+        for p, _ in files_to_skip:
+            print(f"  ~ {p}")
+        for s in scripts_to_skip:
+            print(f"  ~ scripts/{s}")
+        print()
+
+    if not dirs_to_create and not files_to_create and not scripts_to_copy:
         print("Nothing to do — workspace is already set up.")
         return
 
@@ -501,16 +546,23 @@ def main() -> None:
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
 
+    # Copy scripts (skip existing)
+    for script_name in scripts_to_copy:
+        source = framework_scripts_dir / script_name
+        target = root / "scripts" / script_name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
     print(f"\n✓ Workspace bootstrapped at {root}")
     print()
     print("Next steps:")
     print(f"  1. cd {root}")
     print("  2. claude                        # launch Claude Code")
-    print("  3. assistant-sync inbox           # check for packets from work")
+    print("  3. helm inbox           # check for packets from work")
     print()
     print("To sync identity (if not already done):")
-    print("  assistant-sync init --label home")
-    print("  assistant-sync pair --code <CODE> --label home")
+    print("  helm init --label home")
+    print("  helm pair --code <CODE> --label home")
 
 
 if __name__ == "__main__":

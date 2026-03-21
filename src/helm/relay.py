@@ -9,10 +9,12 @@ import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
+import base58 as _base58
 import websockets
+from coincurve import PrivateKey as Secp256k1PrivateKey
 from websockets.asyncio.client import ClientConnection
 
-from assistant_sync.packet import Packet
+from helm.packet import Packet
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +185,6 @@ def _compute_event_id(
 
 def _sign_hex(event_id_hex: str, private_key_hex: str) -> str:
     """Sign a Nostr event ID with secp256k1 Schnorr (BIP-340) and return hex signature."""
-    from coincurve import PrivateKey as Secp256k1PrivateKey
     key = Secp256k1PrivateKey(bytes.fromhex(private_key_hex))
     sig_bytes = key.sign_schnorr(bytes.fromhex(event_id_hex))
     return sig_bytes.hex()
@@ -194,7 +195,6 @@ def _did_to_pubkey(did: str) -> str:
     Extract the raw hex public key from a did:key DID.
     Reverses the multibase/multicodec encoding applied during key generation.
     """
-    import base58 as _base58
     z_encoded = did.removeprefix("did:key:z")
     multicodec = _base58.b58decode(z_encoded)
     # Strip the 2-byte multicodec prefix (0xed 0x01 for ed25519)

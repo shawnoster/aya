@@ -524,6 +524,16 @@ def schedule_alerts(
         console.print(f"\n  Marked {len(unseen)} alert(s) as seen.")
 
 
+# ── status ────────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def status() -> None:
+    """Workspace readiness check — systems, schedule, focus."""
+    from helm.status import run_status
+    run_status()
+
+
 # ── bootstrap ────────────────────────────────────────────────────────────────
 
 

@@ -13,6 +13,7 @@ from rich.table import Table
 
 from assistant_sync.identity import Identity, Profile
 from assistant_sync.packet import ConflictStrategy, ContentType, Packet
+from assistant_sync.pair import PairingError, join_pairing
 from assistant_sync.relay import RelayClient
 
 app = typer.Typer(
@@ -268,6 +269,88 @@ def inbox(
             _show_inbox(packets, p)
 
     asyncio.run(_run())
+
+
+# ── pair ──────────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def pair(
+    code: str = typer.Option(None, help="Pairing code from the other instance (joiner mode)"),
+    label: str = typer.Option(..., help="Label for this instance (work, home, laptop)"),
+    instance: str = typer.Option("default"),
+    relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    profile: Path = typer.Option(DEFAULT_PROFILE),
+) -> None:
+    """Pair two instances with a short-lived code — no manual DID exchange."""
+    p = _load_profile(profile)
+    local = p.instances.get(instance)
+    if not local:
+        err.print(f"[red]Instance '{instance}' not found. Run assistant-sync init first.[/red]")
+        raise typer.Exit(1)
+
+    relay_url = relay or p.default_relay
+
+    if code:
+        # ── Joiner mode ──────────────────────────────────────────────
+        try:
+            trusted = asyncio.run(join_pairing(local, label, code, relay_url))
+        except PairingError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+
+        p.trusted_keys[trusted.label] = trusted
+        p.save(profile)
+        console.print(Panel.fit(
+            f"[bold green]✓ Paired![/bold green]\n\n"
+            f"Trusted: [cyan]{trusted.label}[/cyan]\n"
+            f"DID:     [dim]{trusted.did}[/dim]",
+            title="Assistant Sync — pair (joined)",
+        ))
+
+    else:
+        # ── Initiator mode ───────────────────────────────────────────
+        from assistant_sync.pair import generate_code, hash_code, publish_pair_request, poll_for_pair_response
+
+        pairing_code = generate_code()
+        code_h = hash_code(pairing_code)
+
+        # Publish the request
+        console.print("[dim]Publishing pairing request…[/dim]")
+        request_event_id = asyncio.run(
+            publish_pair_request(local, label, code_h, relay_url)
+        )
+
+        # Show the code — user reads this aloud or types it on the other machine
+        console.print(Panel.fit(
+            f"[bold]Pairing code:[/bold]  [bold cyan]{pairing_code}[/bold cyan]\n\n"
+            "Enter this on your other machine:\n"
+            f"  [dim]assistant-sync pair --code {pairing_code} --label <their-label>[/dim]\n\n"
+            "[dim]Expires in 10 minutes.[/dim]",
+            title="Assistant Sync — pair",
+        ))
+
+        # Poll for response
+        with console.status("[bold cyan]Waiting for the other instance…[/bold cyan]"):
+            trusted = asyncio.run(
+                poll_for_pair_response(relay_url, local.public_key_hex, request_event_id)
+            )
+
+        if trusted is None:
+            console.print(
+                "[bold yellow]Pairing timed out.[/bold yellow] "
+                "Run [bold]assistant-sync pair[/bold] again for a new code."
+            )
+            raise typer.Exit(1)
+
+        p.trusted_keys[trusted.label] = trusted
+        p.save(profile)
+        console.print(Panel.fit(
+            f"[bold green]✓ Paired![/bold green]\n\n"
+            f"Trusted: [cyan]{trusted.label}[/cyan]\n"
+            f"DID:     [dim]{trusted.did}[/dim]",
+            title="Assistant Sync — pair (complete)",
+        ))
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

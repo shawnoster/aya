@@ -86,9 +86,7 @@ def bootstrap_workspace(
         else:
             scripts_to_copy.append(script_name)
 
-    skills_to_install, skills_to_skip = _plan_skills(
-        root, skills_source_dir, SKILL_NAMES
-    )
+    skills_to_install, skills_to_skip = _plan_skills(root, skills_source_dir, SKILL_NAMES)
 
     # Show plan
     if dirs_to_create:
@@ -115,7 +113,11 @@ def bootstrap_workspace(
             con.print(f"  [green]+[/green] .claude/commands/{name}.md  +  skills/{name}/SKILL.md")
         con.print()
 
-    skipped = [*(p for p, _ in files_to_skip), *(f"scripts/{s}" for s in scripts_to_skip), *(f"skills/{s}" for s in skills_to_skip)]
+    skipped = [
+        *(p for p, _ in files_to_skip),
+        *(f"scripts/{s}" for s in scripts_to_skip),
+        *(f"skills/{s}" for s in skills_to_skip),
+    ]
     if skipped:
         con.print("[dim]Already exist (skipping):[/dim]")
         for item in skipped:

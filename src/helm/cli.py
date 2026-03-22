@@ -256,7 +256,8 @@ def receive(
             return
 
         # Update last_checked timestamp
-        from datetime import UTC, datetime as _dt
+        from datetime import UTC
+        from datetime import datetime as _dt
         p.last_checked[relay_url] = _dt.now(UTC).isoformat()
         p.save(profile)
 
@@ -468,7 +469,7 @@ def schedule_list(
     item_type: str = typer.Option(None, "--type", help="Filter: reminder, watch, recurring, event"),
 ) -> None:
     """List scheduled items."""
-    from helm.scheduler import list_items, _display_items
+    from helm.scheduler import _display_items, list_items
     items = list_items(show_all=all_items, item_type=item_type)
     _display_items(items)
 
@@ -567,6 +568,23 @@ def schedule_alerts(
 
     if mark_seen:
         console.print(f"\n  Marked {len(unseen)} alert(s) as seen.")
+
+
+# ── profile ───────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def profile(
+    profile_path: Path = typer.Option(DEFAULT_PROFILE, "--profile", help="Path to assistant_profile.json"),
+) -> None:
+    """Initialize or rotate the persistent assistant profile."""
+    from helm.profile import PROFILE_PATH, ensure_profile
+    path = profile_path if str(profile_path) != str(DEFAULT_PROFILE) else PROFILE_PATH
+    p = ensure_profile(path)
+    console.print(f"[green]✓[/green] Profile: [dim]{path}[/dim]")
+    console.print(f"  Alias:     [cyan]{p.get('alias', 'Assistant')}[/cyan]")
+    console.print(f"  Ship Mind: [cyan]{p.get('ship_mind_name', '')}[/cyan]")
+    console.print(f"  Next eval: [dim]{p.get('name_next_reevaluation_at', 'unknown')}[/dim]")
 
 
 # ── status ────────────────────────────────────────────────────────────────────

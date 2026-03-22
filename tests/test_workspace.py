@@ -171,9 +171,7 @@ class TestDotfileSetup:
 
         # Check that aya receive hook is present
         all_commands = [
-            h.get("hooks", [{}])[0].get("command", "")
-            for h in session_start
-            if h.get("hooks")
+            h.get("hooks", [{}])[0].get("command", "") for h in session_start if h.get("hooks")
         ]
         assert any("aya receive" in cmd for cmd in all_commands)
 
@@ -230,16 +228,12 @@ class TestDotfileSetup:
             bootstrap_workspace(root, interactive=False, console=_silent_console())
 
         settings_path = fake_home / ".claude" / "settings.json"
-        first_run_count = len(
-            json.loads(settings_path.read_text())["hooks"]["SessionStart"]
-        )
+        first_run_count = len(json.loads(settings_path.read_text())["hooks"]["SessionStart"])
 
         with _patch_home(fake_home):
             bootstrap_workspace(root, interactive=False, console=_silent_console())
 
-        second_run_count = len(
-            json.loads(settings_path.read_text())["hooks"]["SessionStart"]
-        )
+        second_run_count = len(json.loads(settings_path.read_text())["hooks"]["SessionStart"])
 
         assert first_run_count == second_run_count
 

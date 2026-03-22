@@ -23,6 +23,7 @@ jobs:
     name: Semantic release
     runs-on: ubuntu-latest
     environment: pypi
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4

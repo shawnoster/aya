@@ -115,9 +115,7 @@ class TestBuildEvent:
         self, client: RelayClient, packet: Packet, recipient: Identity
     ) -> None:
         event = client._build_event(packet, recipient.nostr_public_hex)
-        assert set(event.keys()) == {
-            "id", "pubkey", "created_at", "kind", "tags", "content", "sig"
-        }
+        assert set(event.keys()) == {"id", "pubkey", "created_at", "kind", "tags", "content", "sig"}
 
     def test_kind_is_ace_sync(
         self, client: RelayClient, packet: Packet, recipient: Identity
@@ -187,17 +185,19 @@ class TestBuildEvent:
 
 
 class TestBuildReceipt:
-    def test_receipt_structure(
-        self, client: RelayClient, packet: Packet, sender: Identity
-    ) -> None:
+    def test_receipt_structure(self, client: RelayClient, packet: Packet, sender: Identity) -> None:
         receipt = client._build_receipt(packet, sender.nostr_public_hex)
         assert set(receipt.keys()) == {
-            "id", "pubkey", "created_at", "kind", "tags", "content", "sig"
+            "id",
+            "pubkey",
+            "created_at",
+            "kind",
+            "tags",
+            "content",
+            "sig",
         }
 
-    def test_kind_is_result(
-        self, client: RelayClient, packet: Packet, sender: Identity
-    ) -> None:
+    def test_kind_is_result(self, client: RelayClient, packet: Packet, sender: Identity) -> None:
         receipt = client._build_receipt(packet, sender.nostr_public_hex)
         assert receipt["kind"] == ACE_SYNC_RESULT_KIND
 
@@ -409,9 +409,7 @@ class TestPublish:
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-        mock_ws.recv = AsyncMock(
-            return_value=json.dumps(["OK", "x" * 64, False, "rate-limited"])
-        )
+        mock_ws.recv = AsyncMock(return_value=json.dumps(["OK", "x" * 64, False, "rate-limited"]))
 
         with (
             patch("aya.relay.websockets.connect", return_value=mock_ws),

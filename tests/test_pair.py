@@ -120,17 +120,13 @@ class TestPairResponseEvent:
         assert p_tags[0][1] == "initiator_pubkey_hex"
 
     def test_content_contains_did_and_label(self, home):
-        event = _build_pair_response(
-            home, "home", "init_pub", "req123", "wss://relay.example.com"
-        )
+        event = _build_pair_response(home, "home", "init_pub", "req123", "wss://relay.example.com")
         content = json.loads(event["content"])
         assert content["did"] == home.did
         assert content["label"] == "home"
 
     def test_type_tag_is_pair_response(self, home):
-        event = _build_pair_response(
-            home, "home", "init_pub", "req123", "wss://relay.example.com"
-        )
+        event = _build_pair_response(home, "home", "init_pub", "req123", "wss://relay.example.com")
         t_tags = [t for t in event["tags"] if t[0] == "t"]
         assert t_tags[0][1] == _TAG_PAIR_RESP
 

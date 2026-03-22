@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 
 import pytest
 
 from aya.status import (
-    CheckResult,
     _exists,
     _greeting,
     _parse_block_header,
@@ -19,7 +16,6 @@ from aya.status import (
     _read_json,
     _time_flavor,
 )
-
 
 # ── CheckResult / _exists ────────────────────────────────────────────────────
 
@@ -153,7 +149,7 @@ class TestParseBlockHeader:
         assert end.hour == 17  # defaults to +1 hour
 
     def test_no_time(self):
-        start, end, label = _parse_block_header("No time here")
+        start, end, _label = _parse_block_header("No time here")
         assert start is None
         assert end is None
 

@@ -149,9 +149,7 @@ class RelayClient:
         }
 
 
-async def _read_until_eose(
-    ws: ClientConnection, sub_id: str
-) -> AsyncIterator[dict]:
+async def _read_until_eose(ws: ClientConnection, sub_id: str) -> AsyncIterator[dict]:
     """Yield EVENT payloads until EOSE (end of stored events) from the relay."""
     async for raw_msg in ws:
         msg = json.loads(raw_msg)

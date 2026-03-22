@@ -91,6 +91,51 @@ known-first-party = ["aya"]
     "PLR2004",  # magic values in test assertions
     "S",        # tests may use patterns flagged by security rules
     "T20",      # print useful in debugging tests
+    "DTZ001",   # naive datetimes intentional in time-of-day unit tests
+    "RUF001",   # EN dashes intentional in time-range test data
+    "PLC0415",  # module-level import inside test helper
+]
+# Pre-existing issues — tracked for cleanup in issue #16
+"src/aya/cli.py" = [
+    "PLC0415",  # lazy imports intentional (CLI startup speed, avoid heavy deps until needed)
+]
+"src/aya/packet.py" = [
+    "PLC0415",  # conditional imports inside try block
+]
+"src/aya/workspace.py" = [
+    "PLC0415",  # conditional import (typer only when interactive)
+    "E501",     # long lines in embedded markdown/shell templates — can't wrap
+    "S110",     # try-except-pass intentional (best-effort dotfile writes)
+    "S603",     # subprocess call without shell — intentional (no shell injection risk)
+    "S607",     # partial path — intentional (python3 resolved from PATH)
+    "PLW1510",  # subprocess.run without check — best-effort scaffold step
+    "ARG001",   # unused arg in callback signature required by caller contract
+]
+"src/aya/profile.py" = [
+    "DTZ007",   # strptime without %z — only parsing date portion, tz not applicable
+]
+"src/aya/scheduler.py" = [
+    "PLC0415",  # lazy imports in scheduler functions
+    "DTZ001",   # timezone-aware datetime refactor tracked in issue #16
+    "DTZ005",   # timezone-aware datetime refactor tracked in issue #16
+    "B007",     # unused loop var — pre-existing
+    "S603",     # subprocess call — gh CLI, not untrusted input
+    "S607",     # partial path — gh resolved from PATH
+    "PLW1510",  # subprocess.run without check — errors caught by try/except
+    "ARG001",   # as_json param kept for API consistency
+    "SIM102",   # nested if intentional for readability
+]
+"src/aya/status.py" = [
+    "PLC0415",  # lazy import inside try block to avoid circular dep
+    "DTZ001",   # timezone-aware datetime refactor tracked in issue #16
+    "DTZ005",   # timezone-aware datetime refactor tracked in issue #16
+    "DTZ007",   # timezone-aware datetime refactor tracked in issue #16
+    "RUF001",   # EN dashes intentional in time-range parsing strings
+    "RUF002",   # EN dashes intentional in time-range parsing docstrings
+    "RUF003",   # EN dashes intentional in time-range parsing comments
+    "B007",     # unused loop var — pre-existing
+    "S110",     # try-except-pass intentional
+    "SIM102",   # collapsible-if — pre-existing style
 ]
 
 [tool.ruff.format]

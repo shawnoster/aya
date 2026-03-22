@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from pathlib import Path
-from unittest.mock import patch
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -14,8 +11,8 @@ from helm.scheduler import (
     LOCAL_TZ,
     _find,
     _parse_tags,
-    add_reminder,
     add_recurring,
+    add_reminder,
     add_watch,
     check_due,
     dismiss_item,
@@ -72,6 +69,33 @@ class TestParseDue:
         result = parse_due("2026-03-21T15:30:00")
         assert result.hour == 15
         assert result.minute == 30
+
+    def test_iso_format_with_timezone_offset(self):
+        # Regression: parse_due("2026-03-23T09:00:00-06:00") was silently
+        # returning today at 20:00 because .lower() broke the 'T' separator
+        # and _TIME_RE then matched "20" from the year "2026..."
+        result = parse_due("2026-03-23T09:00:00-06:00")
+        assert result.year == 2026
+        assert result.month == 3
+        assert result.day == 23
+        assert result.hour == 9
+        assert result.minute == 0
+
+    def test_iso_format_with_timezone_offset_z(self):
+        # UTC offset using Z suffix
+        result = parse_due("2026-03-23T15:30:00+00:00")
+        assert result.year == 2026
+        assert result.month == 3
+        assert result.day == 23
+        assert result.hour == 15
+
+    def test_iso_format_preserves_correct_date(self):
+        # Regression: must not silently produce a different date
+        result = parse_due("2026-03-23T09:00:00")
+        assert result.year == 2026
+        assert result.month == 3
+        assert result.day == 23
+        assert result.hour == 9
 
     def test_today_time(self):
         now = datetime(2026, 3, 21, 10, 0, tzinfo=LOCAL_TZ)

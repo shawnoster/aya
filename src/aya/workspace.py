@@ -459,7 +459,9 @@ def _setup_dotfiles(home: Path, con: Console) -> int:
     if not profile_path.exists():
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         profile_path.write_text(_assistant_profile_json())
+        profile_path.chmod(0o600)
         con.print(f"  [green]+[/green] {profile_path}")
+        con.print(f"  [yellow]⚠[/yellow] Keys stored at {profile_path} — keep this file private.")
         changes += 1
     else:
         con.print(f"  [dim]~ {profile_path} (exists, skipping)[/dim]")

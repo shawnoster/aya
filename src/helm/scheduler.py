@@ -95,14 +95,16 @@ def parse_due(text: str, now: datetime | None = None) -> datetime:
     """
     if now is None:
         now = datetime.now(LOCAL_TZ)
-    text = text.strip().lower()
 
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"):
-        try:
-            dt = datetime.strptime(text, fmt)
-            return dt.replace(tzinfo=LOCAL_TZ) if dt.tzinfo is None else dt
-        except ValueError:
-            continue
+    # Try ISO 8601 first (before lowercasing — the 'T' separator is case-sensitive).
+    # fromisoformat() handles timezone offsets like -06:00 correctly in Python 3.7+.
+    try:
+        dt = datetime.fromisoformat(text.strip())
+        return dt.replace(tzinfo=LOCAL_TZ) if dt.tzinfo is None else dt
+    except ValueError:
+        pass
+
+    text = text.strip().lower()
 
     m = _RELATIVE_RE.match(text)
     if m:

@@ -5,11 +5,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import base58
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, Field, model_validator
 from ulid import ULID
 
@@ -107,9 +110,6 @@ class Packet(BaseModel):
         if self.signature is None:
             return False
         try:
-            import base58
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
             z_encoded = self.from_did.removeprefix("did:key:z")
             multicodec = base58.b58decode(z_encoded)
             pub_bytes = multicodec[2:]  # strip ed25519 multicodec prefix
@@ -194,8 +194,6 @@ class Packet(BaseModel):
         if packet.version and "/" in packet.version:
             major = packet.version.split("/")[1].split(".")[0]
             if major != PROTOCOL_VERSION.split("/")[1].split(".", maxsplit=1)[0]:
-                import logging
-
                 logging.getLogger(__name__).warning(
                     "Unknown protocol major version: %s (expected %s)",
                     packet.version,

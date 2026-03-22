@@ -208,6 +208,7 @@ def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list | None:
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
         if result.returncode != 0:
             return None

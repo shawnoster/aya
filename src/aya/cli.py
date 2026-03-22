@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -21,7 +22,25 @@ from aya.pair import (
     poll_for_pair_response,
     publish_pair_request,
 )
+from aya.profile import PROFILE_PATH, ensure_profile
 from aya.relay import RelayClient
+
+# Subcommand modules — imported at top-level; each is only invoked when its
+# subcommand is actually called, so startup cost is acceptable.
+from aya.scheduler import (
+    _display_items,
+    add_reminder,
+    add_watch,
+    check_due,
+    dismiss_item,
+    list_items,
+    parse_due,
+    run_poll,
+    show_alerts,
+    snooze_item,
+)
+from aya.status import run_status
+from aya.workspace import bootstrap_workspace
 
 app = typer.Typer(
     name="aya",
@@ -246,9 +265,7 @@ def receive(
         since = None
         last_ts = p.last_checked.get(relay_url)
         if last_ts:
-            from datetime import datetime as _dt
-
-            since = _dt.fromisoformat(last_ts)
+            since = datetime.fromisoformat(last_ts)
 
         packets: list[Packet] = []
         try:
@@ -260,10 +277,7 @@ def receive(
             return
 
         # Update last_checked timestamp
-        from datetime import UTC
-        from datetime import datetime as _dt
-
-        p.last_checked[relay_url] = _dt.now(UTC).isoformat()
+        p.last_checked[relay_url] = datetime.now(UTC).isoformat()
         p.save(profile)
 
         if not packets:
@@ -443,8 +457,6 @@ def schedule_remind(
     tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
 ) -> None:
     """Add a one-shot reminder."""
-    from aya.scheduler import add_reminder, parse_due
-
     item = add_reminder(message, due, tag)
     due_dt = parse_due(due)
     console.print(
@@ -466,8 +478,6 @@ def schedule_watch(
     remove_when: str = typer.Option("", help="Auto-remove: merged_or_closed"),
 ) -> None:
     """Add a condition-based watch."""
-    from aya.scheduler import add_watch
-
     try:
         item = add_watch(provider, target, message, tag, condition, interval, remove_when)
     except ValueError as exc:
@@ -484,8 +494,6 @@ def schedule_list(
     item_type: str = typer.Option(None, "--type", help="Filter: reminder, watch, recurring, event"),
 ) -> None:
     """List scheduled items."""
-    from aya.scheduler import _display_items, list_items
-
     items = list_items(show_all=all_items, item_type=item_type)
     _display_items(items)
 
@@ -495,8 +503,6 @@ def schedule_check(
     as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Check for due reminders and alerts."""
-    from aya.scheduler import check_due
-
     due_items, unseen = check_due()
 
     if as_json:
@@ -509,8 +515,6 @@ def schedule_check(
     if due_items:
         console.print(f"\n  [bold]⏰ {len(due_items)} reminder(s) due:[/bold]")
         for r in due_items:
-            from datetime import datetime
-
             due_dt = datetime.fromisoformat(r["due_at"])
             console.print(
                 f"    🔴 {r['id'][:8]}  {due_dt.strftime('%I:%M %p')}  {r['message'][:55]}"
@@ -527,8 +531,6 @@ def schedule_dismiss(
     item_id: str = typer.Argument(help="Item ID (prefix match ok)"),
 ) -> None:
     """Dismiss an item."""
-    from aya.scheduler import dismiss_item
-
     try:
         item = dismiss_item(item_id)
     except ValueError as exc:
@@ -545,8 +547,6 @@ def schedule_snooze(
     ),
 ) -> None:
     """Snooze a reminder."""
-    from aya.scheduler import snooze_item
-
     try:
         item, snooze_until = snooze_item(item_id, until)
     except ValueError as exc:
@@ -562,8 +562,6 @@ def schedule_poll(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output on no changes"),
 ) -> None:
     """Run one poll cycle (for daemon/cron)."""
-    from aya.scheduler import run_poll
-
     run_poll(quiet=quiet)
 
 
@@ -573,8 +571,6 @@ def schedule_alerts(
     mark_seen: bool = typer.Option(False, "--mark-seen", help="Mark all alerts as seen"),
 ) -> None:
     """Show alerts from background watcher."""
-    from aya.scheduler import show_alerts
-
     unseen = show_alerts(as_json=as_json, mark_seen=mark_seen)
 
     if as_json:
@@ -586,8 +582,6 @@ def schedule_alerts(
 
     console.print(f"\n  [bold]🔔 {len(unseen)} alert(s):[/bold]")
     for a in unseen:
-        from datetime import datetime
-
         ts = datetime.fromisoformat(a["created_at"]).strftime("%b %d %I:%M %p")
         console.print(f"    📢 {a['source_item_id'][:8]}  {ts}  {a['message'][:55]}")
 
@@ -605,8 +599,6 @@ def profile(
     ),
 ) -> None:
     """Initialize or rotate the persistent assistant profile."""
-    from aya.profile import PROFILE_PATH, ensure_profile
-
     path = profile_path if str(profile_path) != str(DEFAULT_PROFILE) else PROFILE_PATH
     p = ensure_profile(path)
     console.print(f"[green]✓[/green] Profile: [dim]{path}[/dim]")
@@ -621,8 +613,6 @@ def profile(
 @app.command()
 def status() -> None:
     """Workspace readiness check — systems, schedule, focus."""
-    from aya.status import run_status
-
     run_status()
 
 
@@ -637,8 +627,6 @@ def bootstrap(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
 ) -> None:
     """Scaffold a personal assistant workspace."""
-    from aya.workspace import bootstrap_workspace
-
     bootstrap_workspace(root.expanduser().resolve(), interactive=not yes, console=console)
 
 

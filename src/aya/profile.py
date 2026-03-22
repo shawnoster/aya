@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -67,7 +67,7 @@ def _activity_entries_last_days(path: Path, now: datetime, days: int = 3) -> lis
         if line.startswith("## "):
             date_text = line[3:].strip()
             try:
-                section_date = datetime.strptime(date_text, "%Y-%m-%d").date()
+                section_date = date.fromisoformat(date_text)
             except ValueError:
                 active = False
                 continue

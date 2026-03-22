@@ -72,13 +72,16 @@ class RelayClient:
         async with websockets.connect(self.relay_url) as ws:
             await ws.send(json.dumps(["REQ", sub_id, filter_]))
 
-            async for raw in _read_until_eose(ws, sub_id):
-                try:
-                    packet = Packet.from_json(raw["content"])
-                    if not packet.is_expired():
-                        yield packet
-                except Exception as exc:
-                    logger.warning("Skipping malformed event: %s", exc)
+            try:
+                async for raw in _read_until_eose(ws, sub_id):
+                    try:
+                        packet = Packet.from_json(raw["content"])
+                        if not packet.is_expired():
+                            yield packet
+                    except Exception as exc:
+                        logger.warning("Skipping malformed event: %s", exc)
+            except TimeoutError:
+                logger.warning("Relay did not send EOSE within timeout; closing subscription")
 
             await ws.send(json.dumps(["CLOSE", sub_id]))
 
@@ -149,19 +152,28 @@ class RelayClient:
         }
 
 
-async def _read_until_eose(ws: ClientConnection, sub_id: str) -> AsyncIterator[dict]:
-    """Yield EVENT payloads until EOSE (end of stored events) from the relay."""
-    async for raw_msg in ws:
-        msg = json.loads(raw_msg)
-        match msg:
-            case ["EVENT", sid, event] if sid == sub_id:
-                yield event
-            case ["EOSE", sid] if sid == sub_id:
-                return
-            case ["NOTICE", notice]:
-                logger.debug("Relay notice: %s", notice)
-            case _:
-                logger.debug("Unexpected relay message: %s", msg)
+_EOSE_TIMEOUT = 30.0  # seconds to wait for EOSE before giving up
+
+
+async def _read_until_eose(
+    ws: ClientConnection, sub_id: str, eose_timeout: float = _EOSE_TIMEOUT
+) -> AsyncIterator[dict]:
+    """Yield EVENT payloads until EOSE (end of stored events) from the relay.
+
+    Raises `TimeoutError` if EOSE is not received within *eose_timeout* seconds.
+    """
+    async with asyncio.timeout(eose_timeout):
+        async for raw_msg in ws:
+            msg = json.loads(raw_msg)
+            match msg:
+                case ["EVENT", sid, event] if sid == sub_id:
+                    yield event
+                case ["EOSE", sid] if sid == sub_id:
+                    return
+                case ["NOTICE", notice]:
+                    logger.debug("Relay notice: %s", notice)
+                case _:
+                    logger.debug("Unexpected relay message: %s", msg)
 
 
 def _compute_event_id(

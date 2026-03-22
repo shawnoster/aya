@@ -20,6 +20,7 @@ from aya.pair import (
     generate_code,
     hash_code,
     join_pairing,
+    poll_for_pair_response,
     publish_pair_request,
 )
 
@@ -107,9 +108,17 @@ class TestPairResponseEvent:
         event = _build_pair_response(
             home, "home", "initiator_pubkey_hex", "request_event_id_abc", "wss://relay.example.com"
         )
+        req_tags = [t for t in event["tags"] if t[0] == "aya-pair-request-id"]
+        assert len(req_tags) == 1
+        assert req_tags[0][1] == "request_event_id_abc"
+
+    def test_does_not_use_e_tag_for_request_id(self, home):
+        """aya-pair-request-id should be used instead of the Nostr 'e' tag."""
+        event = _build_pair_response(
+            home, "home", "initiator_pubkey_hex", "request_event_id_abc", "wss://relay.example.com"
+        )
         e_tags = [t for t in event["tags"] if t[0] == "e"]
-        assert len(e_tags) == 1
-        assert e_tags[0][1] == "request_event_id_abc"
+        assert e_tags == [], "e tag must not reference aya packet/request IDs"
 
     def test_addresses_initiator(self, home):
         event = _build_pair_response(
@@ -203,3 +212,75 @@ class TestPairingFlowMocked:
             result = await _find_pair_request("wss://relay.test", "nonexistent_hash")
 
         assert result is None
+
+
+class TestPollForPairResponseErrors:
+    """Verify that poll_for_pair_response distinguishes timeout from connection errors."""
+
+    async def test_returns_none_on_eose_timeout(self, work):
+        """EOSE timeout is normal operation — returns None, no exception raised."""
+        with patch(
+            "aya.pair._read_until_eose",
+            side_effect=TimeoutError,
+        ):
+            mock_ws = AsyncMock()
+            mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws.__aexit__ = AsyncMock(return_value=False)
+            mock_ws.send = AsyncMock()
+
+            with patch("aya.pair.websockets.connect", return_value=mock_ws):
+                result = await poll_for_pair_response(
+                    "wss://relay.test", work.nostr_public_hex, "req_event_id", timeout_seconds=1
+                )
+
+        assert result is None
+
+    async def test_returns_none_on_connection_error(self, work):
+        """Connection errors are logged as warnings and return None instead of raising."""
+
+        class FakeConnectionError(Exception):
+            pass
+
+        with patch(
+            "aya.pair.websockets.connect",
+            side_effect=FakeConnectionError("connection refused"),
+        ):
+            result = await poll_for_pair_response(
+                "wss://relay.test", work.nostr_public_hex, "req_event_id", timeout_seconds=1
+            )
+
+        assert result is None
+
+    async def test_uses_aya_pair_request_id_filter(self, work):
+        """poll_for_pair_response must use #aya-pair-request-id, not #e, in filter."""
+        sent_filters = []
+
+        class FilterCapturingWS:
+            async def send(self, data):
+                msg = json.loads(data)
+                if msg[0] == "REQ":
+                    sent_filters.append(msg[2])
+
+            async def recv(self):
+                return json.dumps(["EOSE", "sub"])
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        with patch("aya.pair.websockets.connect", return_value=FilterCapturingWS()):
+            await poll_for_pair_response(
+                "wss://relay.test", work.nostr_public_hex, "req_event_id_abc", timeout_seconds=1
+            )
+
+        assert sent_filters, "Expected at least one REQ to be sent"
+        assert "#aya-pair-request-id" in sent_filters[0]
+        assert "#e" not in sent_filters[0]

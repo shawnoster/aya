@@ -337,24 +337,29 @@ async def poll_for_pair_response(
                     "kinds": [AYA_KIND],
                     "#t": [_TAG_PAIR_RESP],
                     "#p": [my_pubkey],
-                    "#e": [request_event_id],
+                    "#aya-pair-request-id": [request_event_id],
                     "since": since_ts,
                     "limit": 1,
                 }
                 sub_id = f"pair-poll-{datetime.now(UTC).timestamp():.0f}"
                 await ws.send(json.dumps(["REQ", sub_id, filter_]))
-                async for event in _read_until_eose(ws, sub_id):
-                    await ws.send(json.dumps(["CLOSE", sub_id]))
-                    content = json.loads(event["content"])
-                    return TrustedKey(
-                        did=content["did"],
-                        label=content["label"],
-                        nostr_pubkey=event["pubkey"],
-                    )
+                try:
+                    async for event in _read_until_eose(ws, sub_id):
+                        await ws.send(json.dumps(["CLOSE", sub_id]))
+                        content = json.loads(event["content"])
+                        return TrustedKey(
+                            did=content["did"],
+                            label=content["label"],
+                            nostr_pubkey=event["pubkey"],
+                        )
+                except TimeoutError:
+                    logger.debug("EOSE not received within timeout on sub %s; retrying", sub_id)
                 await ws.send(json.dumps(["CLOSE", sub_id]))
                 await asyncio.sleep(PAIR_POLL_INTERVAL)
+    except TimeoutError:
+        logger.debug("Pair polling timed out after %d seconds", timeout_seconds)
     except Exception as exc:
-        logger.warning("Polling connection lost: %s", exc)
+        logger.warning("Pair polling connection error: %s", exc)
 
     return None
 
@@ -449,7 +454,7 @@ def _build_pair_response(
     tags = [
         ["t", _TAG_PAIR_RESP],
         ["p", initiator_pubkey],
-        ["e", request_event_id],
+        ["aya-pair-request-id", request_event_id],
         ["expiration", str(expiration)],
         ["aya-version", "0.2"],
     ]

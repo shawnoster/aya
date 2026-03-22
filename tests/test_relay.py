@@ -117,7 +117,7 @@ class TestBuildEvent:
         event = client._build_event(packet, recipient.nostr_public_hex)
         assert set(event.keys()) == {"id", "pubkey", "created_at", "kind", "tags", "content", "sig"}
 
-    def test_kind_is_ace_sync(
+    def test_kind_is_aya(
         self, client: RelayClient, packet: Packet, recipient: Identity
     ) -> None:
         event = client._build_event(packet, recipient.nostr_public_hex)

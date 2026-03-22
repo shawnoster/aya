@@ -4,13 +4,16 @@ description: >
   Mid-session reset between tasks. Tidy up current work, scan for new signals
   (Slack, PR reviews, ticket comments), log the last activity, and surface the
   top 2-3 things to work on next. Invoke when the user says "what's next",
-  "I'm done with that", "take stock", "check in", "tidy up and suggest
-  something", or any time work on one thing ends and the next isn't obvious.
+  "what should I work on", "I'm done with that", "take stock", "check in",
+  "tidy up and suggest something", or any time work on one thing ends and the
+  next isn't obvious. Works at any point in the day — morning not required.
 ---
 
 # Pivot
 
 Reset between tasks. Close out what you just did, catch any new signals, surface what's next.
+
+Works any time — no prior `/morning` or daily plan required.
 
 Run steps 1–3 concurrently.
 
@@ -34,13 +37,19 @@ Check `git status` in the current working directory.
 - **Open PRs on the current branch**: fetch current state — CI status, review activity since last check
 - **Merged PRs**: note any that merged since the last activity log entry
 
-If the working tree is clean and no PRs need attention, note "nothing to tidy" and move on.
+If no git repo is active or the working tree is clean with no PRs pending, note "nothing to tidy" and move on.
 
 ---
 
 ## 2. Scan signals
 
-Determine the time window: look for the most recent entry in `## Activity Log` in `assistant/notes/daily/{TODAY}.md`. Use that timestamp as the "since" boundary. If no log exists, default to 3 hours ago.
+Determine the time window using the best available anchor, in order of preference:
+
+1. Most recent entry in `## Activity Log` in `assistant/notes/daily/{TODAY}.md`
+2. Most recent entry in `assistant/memory/done-log.md`
+3. Default: 3 hours ago
+
+If no daily file exists, that's fine — skip it and use the fallback. Do not fail or warn about a missing daily plan.
 
 **If a messaging integration is connected:**
 - New direct mentions
@@ -60,20 +69,31 @@ Cluster findings as: **needs-action** / **FYI** — only surface needs-action in
 
 ---
 
-## 3. Refresh priority queue
+## 3. Build priority queue
 
-Read `assistant/notes/daily/{TODAY}.md` — scan the priority stack and activity log.
+Build the priority queue from whatever is available — do not require a daily plan:
 
-Note which planned items have been completed (crossed off or moved), which are still open, and whether any new items appeared.
+1. **If `assistant/notes/daily/{TODAY}.md` exists**: scan the priority stack and activity log; note completed items, open items, and anything new
+2. **If no daily file**: query integrations directly — open tickets assigned to current user (not Done), open PRs needing attention, unread messages
+3. **If no integrations**: scan `projects/*/status.md` for open blockers and next actions
+
+Any of these is sufficient. Pivot works cold.
 
 ---
 
 ## 4. Log activity
 
-Offer to append a one-liner for the just-completed work to the activity log:
+Offer to append a one-liner for the just-completed work to the activity log.
 
-```
-assistant/notes/daily/{TODAY}.md  →  ## Activity Log
+If `assistant/notes/daily/{TODAY}.md` exists, append under `## Activity Log`. If it does not exist, create a minimal file with just the activity log section — do not require or recreate a full morning briefing:
+
+```markdown
+---
+date: "{TODAY}"
+---
+
+## Activity Log
+
 [{HH:MM}] {brief description} — {ticket/PR ref if applicable}
 ```
 
@@ -114,8 +134,9 @@ Ask: "Want to take one of these, or is there something else on your mind?"
 
 ## Notes
 
+- **Works cold** — no prior `/morning`, daily plan, or activity log required
 - Lighter than `/morning` — no calendar, no full project status scan, no briefing structure
-- Run any time between tasks, not just at day start
-- Does not replace `/morning` — morning is still the right entry point for a new day
+- Run any time between tasks, not just mid-day
+- Does not replace `/morning` — morning is still the right way to start a new day with full context
 - Does not replace `/eod` — if the day is ending, use `/eod` to close the record properly
 - If there are no signals and nothing urgent: just say so — "Queue is clear. Anything specific you want to pick up?"

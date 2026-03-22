@@ -35,10 +35,18 @@ FRAMEWORK_SCRIPTS = [
     "watcher_daemon.py",
 ]
 
+# Files that bootstrap creates but are *never* removed on reset — they become
+# user data quickly and wiping them silently would be destructive.
+PRESERVED_ON_RESET: frozenset[str] = frozenset(
+    {
+        "assistant/persona.md",
+        "assistant/memory/scheduler.json",
+    }
+)
+
 # Bootstrap-created config files that are safe to remove on reset.
-# assistant/persona.md and assistant/memory/scheduler.json are intentionally
-# excluded — both start as bootstrap scaffolding but quickly become user data
-# (persona customisations and accumulated reminders/watches respectively).
+# Derived from _get_files() minus PRESERVED_ON_RESET — keep these in sync.
+# A test (test_reset_files_matches_get_files) enforces that invariant.
 RESET_FILES = [
     "CLAUDE.md",
     "AGENTS.md",
@@ -225,7 +233,7 @@ def reset_workspace(
         skill_dir = root / "skills" / name
         if legacy.exists():
             skills_to_remove.append(legacy)
-        if (skill_dir / "SKILL.md").exists():
+        if skill_dir.exists():
             skill_dirs_to_remove.append(skill_dir)
 
     all_files_to_remove = files_to_remove + scripts_to_remove + skills_to_remove

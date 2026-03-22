@@ -8,7 +8,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aya.workspace import DIRS, RESET_FILES, SKILL_NAMES, bootstrap_workspace, reset_workspace
+from aya.workspace import (
+    DIRS,
+    PRESERVED_ON_RESET,
+    RESET_FILES,
+    SKILL_NAMES,
+    bootstrap_workspace,
+    reset_workspace,
+)
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -318,6 +325,10 @@ class TestResetWorkspace:
             if (root / ".claude" / "commands" / f"{name}.md").exists()
             or (root / "skills" / name / "SKILL.md").exists()
         ]
+        assert installed, (
+            "Expected at least one bundled skill to be installed before reset; "
+            "SKILL_NAMES or bootstrap_workspace behavior may be out of sync."
+        )
 
         with _patch_home(fake_home):
             reset_workspace(root, interactive=False, console=_silent_console())
@@ -376,6 +387,22 @@ class TestResetWorkspace:
 
         for f in RESET_FILES:
             assert (root / f).exists(), f"Expected {f} to be recreated after bootstrap"
+
+    def test_reset_files_matches_get_files(self) -> None:
+        """RESET_FILES must stay in sync with _get_files() minus PRESERVED_ON_RESET.
+
+        This test fails when someone adds a file to _get_files() without updating
+        either RESET_FILES or PRESERVED_ON_RESET, preventing silent drift.
+        """
+        from aya.workspace import _get_files
+
+        all_bootstrapped = {path for path, _ in _get_files("")}
+        expected = all_bootstrapped - PRESERVED_ON_RESET
+        assert set(RESET_FILES) == expected, (
+            f"RESET_FILES is out of sync with _get_files().\n"
+            f"  Missing from RESET_FILES: {expected - set(RESET_FILES)}\n"
+            f"  Extra in RESET_FILES:     {set(RESET_FILES) - expected}"
+        )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

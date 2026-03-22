@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from typing import Any
 
 _POLL_INTERVAL = 30
 _MAX_WAIT = 600
@@ -49,10 +50,10 @@ def _poll_checks(
             elapsed += interval
             continue
 
-        checks: list[dict] = json.loads(out) if out else []
+        checks: list[dict[str, str]] = json.loads(out) if out else []
         pending = [c for c in checks if c.get("state") in ("pending", "in_progress", "queued")]
         if not pending:
-            failed = [
+            failed: list[str] = [
                 c["name"]
                 for c in checks
                 if c.get("conclusion") in ("failure", "timed_out", "cancelled")
@@ -66,7 +67,7 @@ def _poll_checks(
 
 
 def watch_pr_checks(
-    hook_payload: dict,
+    hook_payload: dict[str, Any],
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> int:
     """Main watch logic. Intended to be called with the Claude hook JSON payload.

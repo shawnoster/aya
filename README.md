@@ -7,8 +7,11 @@
 ## Install
 
 ```bash
-# From PyPI (once published)
+# From PyPI (after first release)
 uvx aya
+
+# From GitHub — works today, no PyPI required
+uvx --from git+https://github.com/shawnoster/helm aya
 
 # From source
 git clone https://github.com/shawnoster/helm.git

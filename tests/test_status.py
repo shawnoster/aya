@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -61,26 +61,26 @@ class TestReadJson:
 
 class TestGreeting:
     def test_morning(self):
-        now = datetime(2026, 3, 21, 8, 0)
+        now = datetime(2026, 3, 21, 8, 0, tzinfo=UTC)
         result = _greeting(now, "Shawn", "GSV Test Ship")
         assert "Good morning" in result
         assert "Shawn" in result
         assert "GSV Test Ship" in result
 
     def test_afternoon(self):
-        now = datetime(2026, 3, 21, 14, 0)
+        now = datetime(2026, 3, 21, 14, 0, tzinfo=UTC)
         assert "Good afternoon" in _greeting(now, "Shawn", "Ship")
 
     def test_evening(self):
-        now = datetime(2026, 3, 21, 19, 0)
+        now = datetime(2026, 3, 21, 19, 0, tzinfo=UTC)
         assert "Evening" in _greeting(now, "Shawn", "Ship")
 
     def test_late_night(self):
-        now = datetime(2026, 3, 21, 23, 0)
+        now = datetime(2026, 3, 21, 23, 0, tzinfo=UTC)
         assert "Still at it" in _greeting(now, "Shawn", "Ship")
 
     def test_very_early(self):
-        now = datetime(2026, 3, 21, 3, 0)
+        now = datetime(2026, 3, 21, 3, 0, tzinfo=UTC)
         assert "Still running" in _greeting(now, "Shawn", "Ship")
 
 
@@ -89,19 +89,19 @@ class TestGreeting:
 
 class TestTimeFlavor:
     def test_morning_coffee(self):
-        now = datetime(2026, 3, 21, 7, 0)
+        now = datetime(2026, 3, 21, 7, 0, tzinfo=UTC)
         assert "Coffee" in _time_flavor(now)
 
     def test_focus_window(self):
-        now = datetime(2026, 3, 21, 10, 0)
+        now = datetime(2026, 3, 21, 10, 0, tzinfo=UTC)
         assert "focus" in _time_flavor(now).lower()
 
     def test_afternoon(self):
-        now = datetime(2026, 3, 21, 15, 0)
+        now = datetime(2026, 3, 21, 15, 0, tzinfo=UTC)
         assert "Afternoon" in _time_flavor(now)
 
     def test_unconventional(self):
-        now = datetime(2026, 3, 21, 3, 0)
+        now = datetime(2026, 3, 21, 3, 0, tzinfo=UTC)
         assert "Unconventional" in _time_flavor(now)
 
 

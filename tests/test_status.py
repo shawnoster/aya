@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ai_assist.status import (
+from aya.status import (
     CheckResult,
     _exists,
     _greeting,
@@ -166,7 +166,7 @@ class TestParseDailyNotes:
     def _setup_notes_dir(self, tmp_path, monkeypatch):
         self.notes_dir = tmp_path / "assistant" / "notes" / "daily"
         self.notes_dir.mkdir(parents=True)
-        monkeypatch.setattr("ai_assist.status.ASSISTANT", tmp_path / "assistant")
+        monkeypatch.setattr("aya.status.ASSISTANT", tmp_path / "assistant")
 
     def test_no_file(self):
         result = _parse_daily_notes("2026-03-21")

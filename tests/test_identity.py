@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ai_assist.identity import Identity, Profile, TrustedKey
+from aya.identity import Identity, Profile, TrustedKey
 
 
 class TestIdentityGeneration:

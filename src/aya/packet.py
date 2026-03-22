@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field, model_validator
 from ulid import ULID
 
-from ai_assist.identity import Identity
+from aya.identity import Identity
 
 PROTOCOL_VERSION = "assistant-sync/0.1"
 

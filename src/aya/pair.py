@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 
 import websockets
 
-from ai_assist.identity import Identity, TrustedKey
-from ai_assist.relay import (
+from aya.identity import Identity, TrustedKey
+from aya.relay import (
     ACE_SYNC_KIND,
     _compute_event_id,
     _read_until_eose,

@@ -13,7 +13,7 @@ import websockets
 from coincurve import PrivateKey as Secp256k1PrivateKey
 from websockets.asyncio.client import ClientConnection
 
-from ai_assist.packet import Packet
+from aya.packet import Packet
 
 logger = logging.getLogger(__name__)
 

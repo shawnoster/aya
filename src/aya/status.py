@@ -385,7 +385,7 @@ def main() -> None:
                 last = w.get("last_checked_at")
                 datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
     except Exception:
-        pass  # scheduler module not available — skip silently
+        pass  # scheduler runtime error — skip silently
 
     # Active watches (legacy cron-schedules.md — fallback only)
     if not active_watches:

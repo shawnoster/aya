@@ -19,6 +19,7 @@ Usage:
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -39,12 +40,58 @@ def _find_workspace_root() -> Path:
     return cwd  # fallback
 
 
-ROOT = _find_workspace_root()
-SCHEDULER_FILE = ROOT / "assistant" / "memory" / "scheduler.json"
-ALERTS_FILE = ROOT / "assistant" / "memory" / "alerts.json"
-CONFIG_FILE = ROOT / "assistant" / "config.json"
+# ── Lazy module globals ──────────────────────────────────────────────────────
+# ROOT, SCHEDULER_FILE, ALERTS_FILE, CONFIG_FILE, and LOCAL_TZ are resolved on
+# first access (not at import time) via module-level __getattr__.  This avoids
+# filesystem walks and ZoneInfo construction when the module is imported but
+# these names aren't yet needed (e.g. cli.py importing scheduler functions).
+# Internal code uses the _get_*() / _*_file() helpers directly.
 
-LOCAL_TZ = ZoneInfo("America/Denver")
+
+@functools.lru_cache(maxsize=1)
+def _get_root() -> Path:
+    return _find_workspace_root()
+
+
+@functools.lru_cache(maxsize=1)
+def _get_local_tz() -> ZoneInfo:
+    return ZoneInfo("America/Denver")
+
+
+def _scheduler_file() -> Path:
+    # Check globals first so monkeypatch("aya.scheduler.SCHEDULER_FILE", ...) works
+    return globals().get("SCHEDULER_FILE") or (
+        _get_root() / "assistant" / "memory" / "scheduler.json"
+    )
+
+
+def _alerts_file() -> Path:
+    return globals().get("ALERTS_FILE") or (
+        _get_root() / "assistant" / "memory" / "alerts.json"
+    )
+
+
+def _config_file() -> Path:
+    return globals().get("CONFIG_FILE") or (
+        _get_root() / "assistant" / "config.json"
+    )
+
+
+_LAZY_ATTRS: dict[str, Any] = {
+    "ROOT": _get_root,
+    "SCHEDULER_FILE": _scheduler_file,
+    "ALERTS_FILE": _alerts_file,
+    "CONFIG_FILE": _config_file,
+    "LOCAL_TZ": _get_local_tz,
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_ATTRS:
+        value = _LAZY_ATTRS[name]()
+        globals()[name] = value  # cache in module dict for subsequent access
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ── time parsing ─────────────────────────────────────────────────────────────
@@ -106,13 +153,13 @@ def parse_due(text: str, now: datetime | None = None) -> datetime:
     weekday + time, eod/end of day.
     """
     if now is None:
-        now = datetime.now(LOCAL_TZ)
+        now = datetime.now(_get_local_tz())
 
     # Try ISO 8601 first (before lowercasing — the 'T' separator is case-sensitive).
     # fromisoformat() handles timezone offsets like -06:00 correctly in Python 3.7+.
     try:
         dt = datetime.fromisoformat(text.strip())
-        return dt.replace(tzinfo=LOCAL_TZ) if dt.tzinfo is None else dt
+        return dt.replace(tzinfo=_get_local_tz()) if dt.tzinfo is None else dt
     except ValueError:
         pass
 
@@ -157,33 +204,33 @@ def parse_due(text: str, now: datetime | None = None) -> datetime:
 
 
 def load_items() -> list[dict[str, Any]]:
-    if not SCHEDULER_FILE.exists():
+    if not _scheduler_file().exists():
         return []
     try:
-        data = json.loads(SCHEDULER_FILE.read_text())
+        data = json.loads(_scheduler_file().read_text())
     except (json.JSONDecodeError, OSError):
         return []
     return data.get("items", []) if isinstance(data, dict) else []
 
 
 def save_items(items: list[dict[str, Any]]) -> None:
-    SCHEDULER_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SCHEDULER_FILE.write_text(json.dumps({"items": items}, indent=2, default=str) + "\n")
+    _scheduler_file().parent.mkdir(parents=True, exist_ok=True)
+    _scheduler_file().write_text(json.dumps({"items": items}, indent=2, default=str) + "\n")
 
 
 def load_alerts() -> list[dict[str, Any]]:
-    if not ALERTS_FILE.exists():
+    if not _alerts_file().exists():
         return []
     try:
-        data = json.loads(ALERTS_FILE.read_text())
+        data = json.loads(_alerts_file().read_text())
     except (json.JSONDecodeError, OSError):
         return []
     return data.get("alerts", []) if isinstance(data, dict) else []
 
 
 def save_alerts(alerts: list[dict[str, Any]]) -> None:
-    ALERTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ALERTS_FILE.write_text(json.dumps({"alerts": alerts}, indent=2, default=str) + "\n")
+    _alerts_file().parent.mkdir(parents=True, exist_ok=True)
+    _alerts_file().write_text(json.dumps({"alerts": alerts}, indent=2, default=str) + "\n")
 
 
 def _find(items: list[dict[str, Any]], item_id: str) -> dict[str, Any] | None:
@@ -393,7 +440,7 @@ def _evaluate_auto_remove(item: dict[str, Any], state: dict[str, Any]) -> bool:
 
 def add_reminder(message: str, due_text: str, tags: str = "") -> dict[str, Any]:
     """Add a one-shot reminder. Returns the created item."""
-    now = datetime.now(LOCAL_TZ)
+    now = datetime.now(_get_local_tz())
     due = parse_due(due_text, now)
     item = {
         "id": _new_id(),
@@ -423,7 +470,7 @@ def add_watch(
     remove_when: str = "",
 ) -> dict[str, Any]:
     """Add a condition-based watch. Returns the created item."""
-    now = datetime.now(LOCAL_TZ)
+    now = datetime.now(_get_local_tz())
     watch_config: dict[str, Any] = {}
 
     if provider == "github-pr":
@@ -470,7 +517,7 @@ def add_recurring(
     tags: str = "",
 ) -> dict[str, Any]:
     """Add a persistent recurring session job. Returns the created item."""
-    now = datetime.now(LOCAL_TZ)
+    now = datetime.now(_get_local_tz())
     item = {
         "id": _new_id(),
         "type": "recurring",
@@ -504,7 +551,7 @@ def list_items(
 def check_due() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Check for due reminders and unseen alerts. Returns (due_items, unseen_alerts)."""
     items = load_items()
-    now = datetime.now(LOCAL_TZ)
+    now = datetime.now(_get_local_tz())
     modified = False
     due_items = []
 
@@ -537,7 +584,7 @@ def dismiss_item(item_id: str) -> dict[str, Any]:
         raise ValueError(f"Item {item_id} not found.")
     item["status"] = "dismissed"
     if item["type"] == "reminder":
-        item["delivered_at"] = datetime.now(LOCAL_TZ).isoformat()
+        item["delivered_at"] = datetime.now(_get_local_tz()).isoformat()
     save_items(items)
     return item
 
@@ -548,7 +595,7 @@ def snooze_item(item_id: str, until_text: str) -> tuple[dict[str, Any], datetime
     item = _find(items, item_id)
     if not item:
         raise ValueError(f"Item {item_id} not found.")
-    now = datetime.now(LOCAL_TZ)
+    now = datetime.now(_get_local_tz())
     snooze_until = parse_due(until_text, now)
     item["status"] = "snoozed"
     item["snoozed_until"] = snooze_until.isoformat()
@@ -560,7 +607,7 @@ def run_poll(quiet: bool = False) -> None:
     """Run one poll cycle — check all watches and due reminders."""
     items = load_items()
     alerts = load_alerts()
-    now = datetime.now(LOCAL_TZ)
+    now = datetime.now(_get_local_tz())
     items_modified = False
     alerts_modified = False
 
@@ -682,7 +729,7 @@ def get_due_reminders(now: datetime | None = None) -> list[dict[str, Any]]:
     """Return pending reminders that are due. No side effects."""
     items = load_items()
     if now is None:
-        now = datetime.now(LOCAL_TZ)
+        now = datetime.now(_get_local_tz())
     due = []
     for item in items:
         if item["type"] != "reminder" or item["status"] not in ("pending", "snoozed"):
@@ -699,7 +746,7 @@ def get_upcoming_reminders(now: datetime | None = None, hours: int = 24) -> list
     """Return pending reminders due within N hours."""
     items = load_items()
     if now is None:
-        now = datetime.now(LOCAL_TZ)
+        now = datetime.now(_get_local_tz())
     horizon = now + timedelta(hours=hours)
     upcoming = []
     for item in items:
@@ -727,7 +774,7 @@ def _display_items(items: list[dict[str, Any]]) -> None:
     if not items:
         return
 
-    now = datetime.now(LOCAL_TZ)
+    now = datetime.now(_get_local_tz())
 
     for item_type in ("reminder", "watch", "recurring", "event"):
         typed = [i for i in items if i["type"] == item_type]

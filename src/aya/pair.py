@@ -13,7 +13,7 @@ import websockets
 
 from aya.identity import Identity, TrustedKey
 from aya.relay import (
-    ACE_SYNC_KIND,
+    AYA_KIND,
     _compute_event_id,
     _read_until_eose,
     _sign_hex,
@@ -286,8 +286,8 @@ WORD_LIST: tuple[str, ...] = (
     "GARNET",
 )
 
-_TAG_PAIR_REQ = "as-pair-req"
-_TAG_PAIR_RESP = "as-pair-resp"
+_TAG_PAIR_REQ = "aya-pair-req"
+_TAG_PAIR_RESP = "aya-pair-resp"
 
 
 def generate_code() -> str:
@@ -334,7 +334,7 @@ async def poll_for_pair_response(
         async with websockets.connect(relay_url) as ws:
             while datetime.now(UTC).timestamp() < deadline:
                 filter_ = {
-                    "kinds": [ACE_SYNC_KIND],
+                    "kinds": [AYA_KIND],
                     "#t": [_TAG_PAIR_RESP],
                     "#p": [my_pubkey],
                     "#e": [request_event_id],
@@ -414,12 +414,12 @@ def _build_pair_request(
         ["t", _TAG_PAIR_REQ],
         ["d", code_hash],
         ["expiration", str(expiration)],
-        ["assistant-sync-version", "0.1"],
+        ["aya-version", "0.2"],
     ]
     event_id = _compute_event_id(
         pubkey=identity.nostr_public_hex,
         created_at=created_at,
-        kind=ACE_SYNC_KIND,
+        kind=AYA_KIND,
         tags=tags,
         content=content,
     )
@@ -428,7 +428,7 @@ def _build_pair_request(
         "id": event_id,
         "pubkey": identity.nostr_public_hex,
         "created_at": created_at,
-        "kind": ACE_SYNC_KIND,
+        "kind": AYA_KIND,
         "tags": tags,
         "content": content,
         "sig": sig,
@@ -451,12 +451,12 @@ def _build_pair_response(
         ["p", initiator_pubkey],
         ["e", request_event_id],
         ["expiration", str(expiration)],
-        ["assistant-sync-version", "0.1"],
+        ["aya-version", "0.2"],
     ]
     event_id = _compute_event_id(
         pubkey=identity.nostr_public_hex,
         created_at=created_at,
-        kind=ACE_SYNC_KIND,
+        kind=AYA_KIND,
         tags=tags,
         content=content,
     )
@@ -465,7 +465,7 @@ def _build_pair_response(
         "id": event_id,
         "pubkey": identity.nostr_public_hex,
         "created_at": created_at,
-        "kind": ACE_SYNC_KIND,
+        "kind": AYA_KIND,
         "tags": tags,
         "content": content,
         "sig": sig,
@@ -479,7 +479,7 @@ async def _find_pair_request(relay_url: str, code_hash: str) -> dict | None:
     """Find a pair-request on the relay matching the given code hash."""
     since_ts = int(datetime.now(UTC).timestamp()) - PAIR_TTL_SECONDS
     filter_ = {
-        "kinds": [ACE_SYNC_KIND],
+        "kinds": [AYA_KIND],
         "#t": [_TAG_PAIR_REQ],
         "#d": [code_hash],
         "since": since_ts,

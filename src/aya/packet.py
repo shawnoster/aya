@@ -15,12 +15,12 @@ from ulid import ULID
 
 from aya.identity import Identity
 
-PROTOCOL_VERSION = "assistant-sync/0.1"
+PROTOCOL_VERSION = "aya/0.2"
 
 
 class ContentType(StrEnum):
     MARKDOWN = "text/markdown"
-    SEED = "application/ace-seed"  # conversation opener, not raw content
+    SEED = "application/aya-seed"  # conversation opener, not raw content
     JSON = "application/json"
 
 

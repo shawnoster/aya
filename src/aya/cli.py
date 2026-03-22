@@ -708,7 +708,7 @@ def _ingest(packet: Packet) -> None:
     """
     console.print(f"\n[bold]Ingesting:[/bold] {packet.intent}")
 
-    if packet.content_type == "application/ace-seed":
+    if packet.content_type == "application/aya-seed":
         seed = packet.content if isinstance(packet.content, dict) else {}
         console.print(
             Panel(

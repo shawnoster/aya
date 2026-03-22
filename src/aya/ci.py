@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 
@@ -13,7 +14,7 @@ _MAX_WAIT = 600
 
 def _run(cmd: list[str]) -> tuple[int, str]:
     """Run a subprocess command, return (returncode, stdout)."""
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return result.returncode, result.stdout.strip()
 
 
@@ -115,8 +116,8 @@ def watch_pr_checks(
 
 
 def _emit(context: str) -> None:
-    """Print asyncRewake JSON payload to stdout."""
-    print(
+    """Write asyncRewake JSON payload to stdout."""
+    sys.stdout.write(
         json.dumps(
             {
                 "hookSpecificOutput": {
@@ -125,4 +126,5 @@ def _emit(context: str) -> None:
                 }
             }
         )
+        + "\n"
     )

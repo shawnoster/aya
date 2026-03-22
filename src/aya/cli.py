@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from aya.ci import watch_pr_checks
 from aya.identity import Identity, Profile, TrustedKey
 from aya.packet import ConflictStrategy, ContentType, Packet, human_age
 from aya.pair import (
@@ -605,10 +606,6 @@ def schedule_alerts(
 @ci_app.command("watch")
 def ci_watch() -> None:
     """Watch CI checks after git push. Reads Claude hook JSON from stdin."""
-    import sys
-
-    from aya.ci import watch_pr_checks
-
     try:
         payload = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, ValueError):

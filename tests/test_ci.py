@@ -17,9 +17,7 @@ def _noop_sleep(n: float) -> None:
 
 class TestPollChecks:
     def test_all_pass(self):
-        checks = json.dumps(
-            [{"name": "build", "state": "completed", "conclusion": "success"}]
-        )
+        checks = json.dumps([{"name": "build", "state": "completed", "conclusion": "success"}])
         with patch("aya.ci._run", return_value=(0, checks)):
             status, failed = _poll_checks("42", sleep_fn=_noop_sleep)
         assert status == "pass"
@@ -38,13 +36,9 @@ class TestPollChecks:
         assert failed == ["lint"]
 
     def test_timeout(self):
-        checks = json.dumps(
-            [{"name": "build", "state": "in_progress", "conclusion": None}]
-        )
+        checks = json.dumps([{"name": "build", "state": "in_progress", "conclusion": None}])
         with patch("aya.ci._run", return_value=(0, checks)):
-            status, failed = _poll_checks(
-                "42", max_wait=60, interval=30, sleep_fn=_noop_sleep
-            )
+            status, failed = _poll_checks("42", max_wait=60, interval=30, sleep_fn=_noop_sleep)
         assert status == "timeout"
         assert failed == []
 
@@ -63,9 +57,7 @@ class TestPollChecks:
         assert status == "pass"
 
     def test_cancelled_counts_as_failure(self):
-        checks = json.dumps(
-            [{"name": "deploy", "state": "completed", "conclusion": "cancelled"}]
-        )
+        checks = json.dumps([{"name": "deploy", "state": "completed", "conclusion": "cancelled"}])
         with patch("aya.ci._run", return_value=(0, checks)):
             status, failed = _poll_checks("42", sleep_fn=_noop_sleep)
         assert status == "fail"

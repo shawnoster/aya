@@ -342,7 +342,9 @@ async def publish_pair_request(
                     delay = _backoff_delay(attempt)
                     logger.warning(
                         "Error publishing pair request to %s: %s — retry in %.1fs",
-                        url, exc, delay,
+                        url,
+                        exc,
+                        delay,
                     )
                     await asyncio.sleep(delay)
                 else:
@@ -368,9 +370,7 @@ async def poll_for_pair_response(
 
     while datetime.now(UTC).timestamp() < deadline:
         for url in relay_urls:
-            result = await _poll_single_relay(
-                url, my_pubkey, request_event_id, since_ts, deadline
-            )
+            result = await _poll_single_relay(url, my_pubkey, request_event_id, since_ts, deadline)
             if result is not None:
                 return result
         remaining = deadline - datetime.now(UTC).timestamp()

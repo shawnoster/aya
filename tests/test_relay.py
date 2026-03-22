@@ -458,6 +458,7 @@ class TestPublish:
         ):
             await client.publish(packet, recipient.nostr_public_hex)
 
+
 # ── Backoff helpers ───────────────────────────────────────────────────────────
 
 
@@ -548,9 +549,7 @@ class TestMultiRelayPublish:
                     return_value=json.dumps(["OK", "a" * 64, False, "blocked"])
                 )
             else:
-                mock_ws.recv = AsyncMock(
-                    return_value=json.dumps(["OK", "b" * 64, True, ""])
-                )
+                mock_ws.recv = AsyncMock(return_value=json.dumps(["OK", "b" * 64, True, ""]))
             return mock_ws
 
         multi_client = RelayClient(
@@ -577,9 +576,7 @@ class TestMultiRelayPublish:
         mock_ws = AsyncMock()
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws.__aexit__ = AsyncMock(return_value=False)
-        mock_ws.recv = AsyncMock(
-            return_value=json.dumps(["OK", "a" * 64, False, "blocked"])
-        )
+        mock_ws.recv = AsyncMock(return_value=json.dumps(["OK", "a" * 64, False, "blocked"]))
 
         with (
             patch("aya.relay.websockets.connect", return_value=mock_ws),
@@ -596,10 +593,12 @@ class TestMultiRelayPublish:
             nostr_private_hex=sender.nostr_private_hex,
             nostr_public_hex=sender.nostr_public_hex,
         )
-        recv_iter = iter([
-            json.dumps(["OK", "a" * 64, False, "rate-limited: too fast"]),
-            json.dumps(["OK", "a" * 64, True, ""]),
-        ])
+        recv_iter = iter(
+            [
+                json.dumps(["OK", "a" * 64, False, "rate-limited: too fast"]),
+                json.dumps(["OK", "a" * 64, True, ""]),
+            ]
+        )
         mock_ws = AsyncMock()
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws.__aexit__ = AsyncMock(return_value=False)
@@ -651,9 +650,7 @@ class TestMultiRelayFetch:
         assert len(packets) == 1
         assert packets[0].id == p.id
 
-    async def test_single_url_string_backward_compat(
-        self, sender: Identity
-    ) -> None:
+    async def test_single_url_string_backward_compat(self, sender: Identity) -> None:
         """RelayClient still accepts a plain string relay_urls."""
         c = RelayClient(
             relay_urls="wss://relay.example.com",

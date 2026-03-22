@@ -129,9 +129,7 @@ class TestProfileMultiRelay:
     def test_load_legacy_default_relay_string(self, tmp_path: Path) -> None:
         """Profiles with the old scalar default_relay key are migrated transparently."""
         profile_path = tmp_path / "profile.json"
-        profile_path.write_text(
-            json.dumps({"aya": {"default_relay": "wss://legacy.example.com"}})
-        )
+        profile_path.write_text(json.dumps({"aya": {"default_relay": "wss://legacy.example.com"}}))
 
         p = Profile.load(profile_path)
         assert p.default_relays == ["wss://legacy.example.com"]
@@ -168,9 +166,7 @@ class TestProfileMultiRelay:
     def test_legacy_key_dropped_on_save(self, tmp_path: Path) -> None:
         """After loading a legacy profile and saving, default_relay key is removed."""
         profile_path = tmp_path / "profile.json"
-        profile_path.write_text(
-            json.dumps({"aya": {"default_relay": "wss://legacy.example.com"}})
-        )
+        profile_path.write_text(json.dumps({"aya": {"default_relay": "wss://legacy.example.com"}}))
 
         p = Profile.load(profile_path)
         p.save(profile_path)

@@ -23,9 +23,9 @@ AYA_KIND = 5999
 AYA_RESULT_KIND = 6999  # read receipts / replies
 
 # Retry / backoff configuration
-_BACKOFF_BASE = 1.0      # seconds for first retry
-_BACKOFF_CAP = 60.0      # maximum sleep between retries
-_BACKOFF_JITTER = 0.25   # ±25% random jitter
+_BACKOFF_BASE = 1.0  # seconds for first retry
+_BACKOFF_CAP = 60.0  # maximum sleep between retries
+_BACKOFF_JITTER = 0.25  # ±25% random jitter
 _MAX_RETRIES_PUBLISH = 5
 _MAX_RETRIES_FETCH = 3
 
@@ -35,7 +35,7 @@ def _backoff_delay(attempt: int) -> float:
 
     attempt=0 → ~1 s, attempt=1 → ~2 s, attempt=2 → ~4 s, …, capped at 60 s.
     """
-    base = min(_BACKOFF_BASE * (2 ** attempt), _BACKOFF_CAP)
+    base = min(_BACKOFF_BASE * (2**attempt), _BACKOFF_CAP)
     jitter = base * _BACKOFF_JITTER * (2 * random.random() - 1)  # noqa: S311
     return max(0.0, base + jitter)
 
@@ -111,9 +111,7 @@ class RelayClient:
 
         raise RelayError(f"All relays rejected the event: {errors}")
 
-    async def _publish_to_relay(
-        self, event: dict, relay_url: str, packet: Packet
-    ) -> str | None:
+    async def _publish_to_relay(self, event: dict, relay_url: str, packet: Packet) -> str | None:
         """Try to publish *event* to *relay_url* with retries. Returns event ID or None."""
         for attempt in range(_MAX_RETRIES_PUBLISH):
             try:

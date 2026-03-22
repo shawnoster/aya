@@ -106,7 +106,10 @@ class Profile:
 
     @classmethod
     def load(cls, path: Path) -> Profile:
-        """Load from assistant_profile.json. Reads from 'aya' key; migrates 'assistant_sync' if present."""
+        """Load from assistant_profile.json.
+
+        Reads from 'aya' key; migrates 'assistant_sync' if present.
+        """
         data = json.loads(path.read_text())
         # Migrate profiles written by older versions (assistant_sync → aya)
         aya_data = data.get("aya") or data.get("assistant_sync", {})
@@ -120,10 +123,7 @@ class Profile:
                 v["nostr_private_hex"] = nostr_secret.hex()
                 v["nostr_public_hex"] = nostr_pub_xonly.hex()
             instances[k] = Identity(**v)
-        trusted = {
-            k: TrustedKey(**v)
-            for k, v in aya_data.get("trusted_keys", {}).items()
-        }
+        trusted = {k: TrustedKey(**v) for k, v in aya_data.get("trusted_keys", {}).items()}
         return cls(
             alias=data.get("alias", "Ace"),
             ship_mind_name=data.get("ship_mind_name", ""),

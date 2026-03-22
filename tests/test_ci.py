@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import json
-from io import StringIO
 from unittest.mock import patch
 
-import pytest
-
-from aya.ci import _find_pr, _poll_checks, watch_pr_checks
+from aya.ci import _poll_checks, watch_pr_checks
 
 
 def _noop_sleep(n: float) -> None:
@@ -62,7 +59,7 @@ class TestPollChecks:
             return (0, json.dumps([{"name": "x", "state": "completed", "conclusion": "success"}]))
 
         with patch("aya.ci._run", side_effect=fake_run):
-            status, failed = _poll_checks("42", max_wait=90, interval=30, sleep_fn=_noop_sleep)
+            status, _failed = _poll_checks("42", max_wait=90, interval=30, sleep_fn=_noop_sleep)
         assert status == "pass"
 
     def test_cancelled_counts_as_failure(self):

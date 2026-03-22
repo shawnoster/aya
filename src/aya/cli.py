@@ -90,7 +90,9 @@ def _load_profile(profile_path: Path) -> Profile:
 def init(
     label: str = typer.Option("default", help="Label for this instance (work, home, laptop…)"),
     profile: Path = typer.Option(DEFAULT_PROFILE, help="Path to assistant_profile.json"),
-    relay: str = typer.Option("wss://relay.damus.io", help="Default Nostr relay URL"),
+    relay: str = typer.Option(
+        "wss://relay.damus.io", help="Default Nostr relay URL (or first of multiple)"
+    ),
 ) -> None:
     """Generate a keypair for this instance and register it in your profile."""
     identity = Identity.generate(label)
@@ -102,7 +104,7 @@ def init(
         p = Profile(alias="Ace", ship_mind_name="", user_name="")
 
     p.instances[label] = identity
-    p.default_relay = relay
+    p.default_relay = relay  # sets default_relays = [relay]
     p.save(profile)
 
     console.print(
@@ -231,18 +233,20 @@ def send(
         err.print(f"[red]Instance '{instance}' not found.[/red]")
         raise typer.Exit(1)
 
-    relay_url = relay or p.default_relay
+    relay_urls = [relay] if relay else p.default_relays
     packet = Packet.from_json(packet_file.read_text())
-    client = RelayClient(relay_url, local.nostr_private_hex, local.nostr_public_hex)
+    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
     # Resolve recipient's Nostr pubkey
     recipient_nostr_pub = _resolve_nostr_pubkey(packet.to_did, p)
     event_id = asyncio.run(client.publish(packet, recipient_nostr_pub))
+    relay_count = len(relay_urls)
+    relay_display = relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
     console.print(
         f"[green]✓[/green] Sent [cyan]{packet.intent}[/cyan]\n"
         f"  Packet: [dim]{packet.id[:8]}[/dim]  "
         f"Event: [dim]{event_id[:8]}[/dim]  "
-        f"Relay: [dim]{relay_url}[/dim]"
+        f"Relay: [dim]{relay_display}[/dim]"
     )
 
 
@@ -269,12 +273,14 @@ def receive(
                 err.print(f"[red]Instance '{instance}' not found.[/red]")
             raise typer.Exit(1)
 
-        relay_url = relay or p.default_relay
-        client = RelayClient(relay_url, local.nostr_private_hex, local.nostr_public_hex)
+        relay_urls = [relay] if relay else p.default_relays
+        client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
         # Use last_checked to avoid re-fetching old packets
+        # Track by primary relay URL for backward compatibility
+        primary_relay = relay_urls[0]
         since = None
-        last_ts = p.last_checked.get(relay_url)
+        last_ts = p.last_checked.get(primary_relay)
         if last_ts:
             since = datetime.fromisoformat(last_ts)
 
@@ -288,7 +294,7 @@ def receive(
             return
 
         # Update last_checked timestamp
-        p.last_checked[relay_url] = datetime.now(UTC).isoformat()
+        p.last_checked[primary_relay] = datetime.now(UTC).isoformat()
         p.save(profile)
 
         if not packets:
@@ -362,8 +368,8 @@ def inbox(
             err.print(f"[red]Instance '{instance}' not found.[/red]")
             raise typer.Exit(1)
 
-        relay_url = relay or p.default_relay
-        client = RelayClient(relay_url, local.nostr_private_hex, local.nostr_public_hex)
+        relay_urls = [relay] if relay else p.default_relays
+        client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
         packets = [pkt async for pkt in client.fetch_pending()]
         if not packets:
@@ -392,12 +398,12 @@ def pair(
         err.print(f"[red]Instance '{instance}' not found. Run aya init first.[/red]")
         raise typer.Exit(1)
 
-    relay_url = relay or p.default_relay
+    relay_urls = [relay] if relay else p.default_relays
 
     if code:
         # ── Joiner mode ──────────────────────────────────────────────
         try:
-            trusted = asyncio.run(join_pairing(local, label, code, relay_url))
+            trusted = asyncio.run(join_pairing(local, label, code, relay_urls))
         except PairingError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
@@ -420,7 +426,7 @@ def pair(
 
         # Publish the request
         console.print("[dim]Publishing pairing request…[/dim]")
-        request_event_id = asyncio.run(publish_pair_request(local, label, code_h, relay_url))
+        request_event_id = asyncio.run(publish_pair_request(local, label, code_h, relay_urls))
 
         # Show the code — user reads this aloud or types it on the other machine
         console.print(
@@ -436,7 +442,7 @@ def pair(
         # Poll for response
         with console.status("[bold cyan]Waiting for the other instance…[/bold cyan]"):
             trusted = asyncio.run(
-                poll_for_pair_response(relay_url, local.nostr_public_hex, request_event_id)
+                poll_for_pair_response(relay_urls, local.nostr_public_hex, request_event_id)
             )
 
         if trusted is None:

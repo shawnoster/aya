@@ -98,6 +98,30 @@ class TestPacketSigning:
             update={"signature": None}
         ).canonical_bytes()
 
+    def test_verify_from_did(
+        self, basic_packet: Packet, work_identity: Identity
+    ) -> None:
+        signed = basic_packet.sign(work_identity)
+        assert signed.verify_from_did()
+
+    def test_verify_from_did_unsigned(self, basic_packet: Packet) -> None:
+        assert not basic_packet.verify_from_did()
+
+    def test_verify_from_did_tampered(
+        self, basic_packet: Packet, work_identity: Identity
+    ) -> None:
+        signed = basic_packet.sign(work_identity)
+        tampered = signed.model_copy(update={"content": "TAMPERED"})
+        assert not tampered.verify_from_did()
+
+    def test_verify_from_did_wrong_sender(
+        self, basic_packet: Packet, work_identity: Identity, home_identity: Identity
+    ) -> None:
+        # Sign with work key but claim to be from home
+        signed = basic_packet.sign(work_identity)
+        forged = signed.model_copy(update={"from_did": home_identity.did})
+        assert not forged.verify_from_did()
+
 
 class TestPacketSerialisation:
     def test_round_trip_json(self, basic_packet: Packet, work_identity: Identity) -> None:

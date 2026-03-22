@@ -253,9 +253,26 @@ def receive(
                 console.print("[dim]No pending packets.[/dim]")
             return
 
-        _show_inbox(packets, p)
-
+        # Verify signatures — reject tampered or unsigned packets
+        verified: list[Packet] = []
         for packet in packets:
+            if packet.verify_from_did():
+                verified.append(packet)
+            else:
+                if not quiet:
+                    err.print(
+                        f"[red]⚠ Packet {packet.id[:8]} failed signature verification "
+                        f"(from {packet.from_did[:30]}…) — discarded[/red]"
+                    )
+
+        if not verified:
+            if not quiet:
+                console.print("[dim]No valid packets.[/dim]")
+            return
+
+        _show_inbox(verified, p)
+
+        for packet in verified:
             trusted = p.is_trusted(packet.from_did)
             trust_label = "[green]trusted[/green]" if trusted else "[yellow]unknown sender[/yellow]"
 

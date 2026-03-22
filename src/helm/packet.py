@@ -95,6 +95,30 @@ class Packet(BaseModel):
         except Exception:
             return False
 
+    def verify_from_did(self) -> bool:
+        """Verify the packet signature using the sender's DID (no Identity object needed).
+
+        Extracts the ed25519 public key from the from_did field and verifies
+        the signature against it. This is the method used in the receive flow
+        where we don't have the sender's private key.
+        """
+        if self.signature is None:
+            return False
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+            import base58
+            z_encoded = self.from_did.removeprefix("did:key:z")
+            multicodec = base58.b58decode(z_encoded)
+            pub_bytes = multicodec[2:]  # strip ed25519 multicodec prefix
+
+            pub_key = Ed25519PublicKey.from_public_bytes(pub_bytes)
+            sig_bytes = base64.urlsafe_b64decode(self.signature)
+            pub_key.verify(sig_bytes, self.canonical_bytes())
+            return True
+        except Exception:
+            return False
+
     def fingerprint(self) -> str:
         """Short content hash for display — first 8 chars of SHA-256."""
         return hashlib.sha256(self.canonical_bytes()).hexdigest()[:8]

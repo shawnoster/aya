@@ -17,14 +17,14 @@ from aya.packet import Packet
 
 logger = logging.getLogger(__name__)
 
-# Assistant Sync uses kind 5999 — within the NIP-90 Data Vending Machine range
-ACE_SYNC_KIND = 5999
-ACE_SYNC_RESULT_KIND = 6999  # read receipts / replies
+# aya uses kind 5999 — within the NIP-90 Data Vending Machine range
+AYA_KIND = 5999
+AYA_RESULT_KIND = 6999  # read receipts / replies
 
 
 class RelayClient:
     """
-    Minimal Nostr relay client for Assistant Sync packet delivery.
+    Minimal Nostr relay client for aya packet delivery.
 
     Handles:
       - Publishing packets as signed Nostr events (kind 5999)
@@ -60,14 +60,14 @@ class RelayClient:
         Filters by `since` timestamp — use last_checked from profile.
         """
         filter_: dict = {
-            "kinds": [ACE_SYNC_KIND],
+            "kinds": [AYA_KIND],
             "#p": [self.public_key_hex],
             "limit": limit,
         }
         if since:
             filter_["since"] = int(since.timestamp())
 
-        sub_id = f"assistant-sync-{datetime.now(UTC).timestamp():.0f}"
+        sub_id = f"aya-{datetime.now(UTC).timestamp():.0f}"
 
         async with websockets.connect(self.relay_url) as ws:
             await ws.send(json.dumps(["REQ", sub_id, filter_]))
@@ -97,15 +97,15 @@ class RelayClient:
         tags = [
             ["p", recipient_pubkey],
             ["expiration", str(int(datetime.fromisoformat(packet.expires_at).timestamp()))],
-            ["assistant-sync-version", "0.1"],
-            ["assistant-sync-packet-id", packet.id],
+            ["aya-version", "0.2"],
+            ["aya-packet-id", packet.id],
         ]
 
         created_at = int(datetime.now(UTC).timestamp())
         event_id = _compute_event_id(
             pubkey=self.public_key_hex,
             created_at=created_at,
-            kind=ACE_SYNC_KIND,
+            kind=AYA_KIND,
             tags=tags,
             content=content,
         )
@@ -115,7 +115,7 @@ class RelayClient:
             "id": event_id,
             "pubkey": self.public_key_hex,
             "created_at": created_at,
-            "kind": ACE_SYNC_KIND,
+            "kind": AYA_KIND,
             "tags": tags,
             "content": content,
             "sig": sig,
@@ -126,14 +126,14 @@ class RelayClient:
         recipient_pubkey = sender_nostr_pubkey
         tags = [
             ["p", recipient_pubkey],
-            ["e", packet.id],
-            ["assistant-sync-version", "0.1"],
+            ["aya-packet-id", packet.id],
+            ["aya-version", "0.2"],
         ]
         created_at = int(datetime.now(UTC).timestamp())
         event_id = _compute_event_id(
             pubkey=self.public_key_hex,
             created_at=created_at,
-            kind=ACE_SYNC_RESULT_KIND,
+            kind=AYA_RESULT_KIND,
             tags=tags,
             content=content,
         )
@@ -142,7 +142,7 @@ class RelayClient:
             "id": event_id,
             "pubkey": self.public_key_hex,
             "created_at": created_at,
-            "kind": ACE_SYNC_RESULT_KIND,
+            "kind": AYA_RESULT_KIND,
             "tags": tags,
             "content": content,
             "sig": sig,

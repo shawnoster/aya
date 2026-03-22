@@ -12,8 +12,8 @@ import pytest
 from aya.identity import Identity
 from aya.packet import Packet
 from aya.relay import (
-    ACE_SYNC_KIND,
-    ACE_SYNC_RESULT_KIND,
+    AYA_KIND,
+    AYA_RESULT_KIND,
     RelayClient,
     RelayError,
     _compute_event_id,
@@ -121,7 +121,7 @@ class TestBuildEvent:
         self, client: RelayClient, packet: Packet, recipient: Identity
     ) -> None:
         event = client._build_event(packet, recipient.nostr_public_hex)
-        assert event["kind"] == ACE_SYNC_KIND
+        assert event["kind"] == AYA_KIND
 
     def test_pubkey_is_sender(
         self, client: RelayClient, packet: Packet, sender: Identity, recipient: Identity
@@ -157,7 +157,7 @@ class TestBuildEvent:
         self, client: RelayClient, packet: Packet, recipient: Identity
     ) -> None:
         event = client._build_event(packet, recipient.nostr_public_hex)
-        pid_tags = [t for t in event["tags"] if t[0] == "assistant-sync-packet-id"]
+        pid_tags = [t for t in event["tags"] if t[0] == "aya-packet-id"]
         assert len(pid_tags) == 1
         assert pid_tags[0][1] == packet.id
 
@@ -199,7 +199,7 @@ class TestBuildReceipt:
 
     def test_kind_is_result(self, client: RelayClient, packet: Packet, sender: Identity) -> None:
         receipt = client._build_receipt(packet, sender.nostr_public_hex)
-        assert receipt["kind"] == ACE_SYNC_RESULT_KIND
+        assert receipt["kind"] == AYA_RESULT_KIND
 
     def test_content_has_packet_id_and_status(
         self, client: RelayClient, packet: Packet, sender: Identity
@@ -209,13 +209,13 @@ class TestBuildReceipt:
         assert data["packet_id"] == packet.id
         assert data["status"] == "received"
 
-    def test_has_e_tag_with_packet_id(
+    def test_has_aya_packet_id_tag(
         self, client: RelayClient, packet: Packet, sender: Identity
     ) -> None:
         receipt = client._build_receipt(packet, sender.nostr_public_hex)
-        e_tags = [t for t in receipt["tags"] if t[0] == "e"]
-        assert len(e_tags) == 1
-        assert e_tags[0][1] == packet.id
+        pid_tags = [t for t in receipt["tags"] if t[0] == "aya-packet-id"]
+        assert len(pid_tags) == 1
+        assert pid_tags[0][1] == packet.id
 
     def test_has_p_tag_with_sender(
         self, client: RelayClient, packet: Packet, sender: Identity

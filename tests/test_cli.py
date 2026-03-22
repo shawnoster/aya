@@ -56,7 +56,7 @@ class TestInit:
         assert path.exists()
 
         data = json.loads(path.read_text())
-        assert "work" in data["assistant_sync"]["instances"]
+        assert "work" in data["aya"]["instances"]
 
     def test_adds_instance_to_existing_profile(self, profile_with_instance: Path) -> None:
         result = runner.invoke(
@@ -65,8 +65,8 @@ class TestInit:
         assert result.exit_code == 0, result.output
 
         data = json.loads(profile_with_instance.read_text())
-        assert "laptop" in data["assistant_sync"]["instances"]
-        assert "default" in data["assistant_sync"]["instances"]  # original still present
+        assert "laptop" in data["aya"]["instances"]
+        assert "default" in data["aya"]["instances"]  # original still present
 
     def test_shows_did_in_output(self, tmp_path: Path) -> None:
         path = tmp_path / "profile.json"
@@ -74,7 +74,7 @@ class TestInit:
         assert result.exit_code == 0
         # Verify the DID was saved to the profile (Rich may escape the colon)
         data = json.loads(path.read_text())
-        did = data["assistant_sync"]["instances"]["test"]["did"]
+        did = data["aya"]["instances"]["test"]["did"]
         assert did.startswith("did:key:")
 
     def test_saves_relay_url(self, tmp_path: Path) -> None:
@@ -83,7 +83,7 @@ class TestInit:
         result = runner.invoke(app, ["init", "--profile", str(path), "--relay", relay])
         assert result.exit_code == 0
         data = json.loads(path.read_text())
-        assert data["assistant_sync"]["default_relay"] == relay
+        assert data["aya"]["default_relay"] == relay
 
 
 # ── trust ─────────────────────────────────────────────────────────────────────
@@ -106,8 +106,8 @@ class TestTrust:
         assert result.exit_code == 0, result.output
 
         data = json.loads(profile_with_instance.read_text())
-        assert "home" in data["assistant_sync"]["trusted_keys"]
-        assert data["assistant_sync"]["trusted_keys"]["home"]["did"] == home.did
+        assert "home" in data["aya"]["trusted_keys"]
+        assert data["aya"]["trusted_keys"]["home"]["did"] == home.did
 
     def test_trust_requires_profile(self, tmp_path: Path) -> None:
         missing = tmp_path / "no_profile.json"

@@ -106,10 +106,15 @@ class Profile:
 
     @classmethod
     def load(cls, path: Path) -> Profile:
-        """Load from assistant_profile.json, merging assistant-sync fields if present."""
+        """Load from assistant_profile.json.
+
+        Reads from 'aya' key; migrates 'assistant_sync' if present.
+        """
         data = json.loads(path.read_text())
+        # Migrate profiles written by older versions (assistant_sync → aya)
+        aya_data = data.get("aya") or data.get("assistant_sync", {})
         instances = {}
-        for k, v in data.get("assistant_sync", {}).get("instances", {}).items():
+        for k, v in aya_data.get("instances", {}).items():
             # Migrate old profiles missing Nostr keys
             if "nostr_private_hex" not in v:
                 nostr_secret = secrets.token_bytes(32)
@@ -118,28 +123,25 @@ class Profile:
                 v["nostr_private_hex"] = nostr_secret.hex()
                 v["nostr_public_hex"] = nostr_pub_xonly.hex()
             instances[k] = Identity(**v)
-        trusted = {
-            k: TrustedKey(**v)
-            for k, v in data.get("assistant_sync", {}).get("trusted_keys", {}).items()
-        }
+        trusted = {k: TrustedKey(**v) for k, v in aya_data.get("trusted_keys", {}).items()}
         return cls(
             alias=data.get("alias", "Ace"),
             ship_mind_name=data.get("ship_mind_name", ""),
             user_name=data.get("user_name", ""),
             instances=instances,
             trusted_keys=trusted,
-            default_relay=data.get("assistant_sync", {}).get(
-                "default_relay", "wss://relay.damus.io"
-            ),
-            last_checked=data.get("assistant_sync", {}).get("last_checked", {}),
-            ingested_ids=data.get("assistant_sync", {}).get("ingested_ids", []),
+            default_relay=aya_data.get("default_relay", "wss://relay.damus.io"),
+            last_checked=aya_data.get("last_checked", {}),
+            ingested_ids=aya_data.get("ingested_ids", []),
         )
 
     def save(self, path: Path) -> None:
-        """Write assistant-sync fields back into the profile without clobbering other keys."""
+        """Write aya fields back into the profile without clobbering other keys."""
         data = json.loads(path.read_text()) if path.exists() else {}
-        data.setdefault("assistant_sync", {})
-        data["assistant_sync"]["instances"] = {
+        # Drop legacy key on first save with new format
+        data.pop("assistant_sync", None)
+        data.setdefault("aya", {})
+        data["aya"]["instances"] = {
             k: {
                 "did": v.did,
                 "label": v.label,
@@ -150,14 +152,15 @@ class Profile:
             }
             for k, v in self.instances.items()
         }
-        data["assistant_sync"]["trusted_keys"] = {
+        data["aya"]["trusted_keys"] = {
             k: {"did": v.did, "label": v.label, "nostr_pubkey": v.nostr_pubkey}
             for k, v in self.trusted_keys.items()
         }
-        data["assistant_sync"]["default_relay"] = self.default_relay
-        data["assistant_sync"]["last_checked"] = self.last_checked
-        data["assistant_sync"]["ingested_ids"] = self.ingested_ids[-100:]  # keep last 100
+        data["aya"]["default_relay"] = self.default_relay
+        data["aya"]["last_checked"] = self.last_checked
+        data["aya"]["ingested_ids"] = self.ingested_ids[-100:]  # keep last 100
         path.write_text(json.dumps(data, indent=2))
+        path.chmod(0o600)  # private keys live here — owner-read only
 
     def active_instance(self, label: str = "default") -> Identity | None:
         return self.instances.get(label) or next(iter(self.instances.values()), None)

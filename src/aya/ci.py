@@ -11,21 +11,38 @@ from typing import Any
 
 _POLL_INTERVAL = 30
 _MAX_WAIT = 600
+_SUBPROCESS_TIMEOUT = 60
 
 
 def _run(cmd: list[str]) -> tuple[int, str]:
-    """Run a subprocess command, return (returncode, stdout)."""
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    return result.returncode, result.stdout.strip()
+    """Run a subprocess command, return (returncode, stdout).
+
+    Returns (127, "") if the command is not found, (124, "") on timeout.
+    Never raises — callers treat any non-zero code as failure.
+    """
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=_SUBPROCESS_TIMEOUT
+        )
+        return result.returncode, (result.stdout or "").strip()
+    except FileNotFoundError:
+        return 127, ""
+    except subprocess.TimeoutExpired:
+        return 124, ""
 
 
-def _find_pr(branch: str, retries: int = 3, delay: int = 10) -> str | None:
+def _find_pr(
+    branch: str,
+    retries: int = 3,
+    delay: int = 10,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> str | None:
     """Find the PR number for a branch. Returns number as string or None."""
     for _ in range(retries):
         rc, out = _run(["gh", "pr", "view", branch, "--json", "number", "-q", ".number"])
         if rc == 0 and out:
             return out
-        time.sleep(delay)
+        sleep_fn(delay)
     return None
 
 
@@ -92,7 +109,7 @@ def watch_pr_checks(
     # Give GitHub a moment to register the push before looking for a PR.
     sleep_fn(5)
 
-    pr_number = _find_pr(branch)
+    pr_number = _find_pr(branch, sleep_fn=sleep_fn)
     if not pr_number:
         return 0
 

@@ -9,7 +9,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aya.scheduler import _find_workspace_root
+from aya.scheduler import (
+    LOCAL_TZ,
+    _find_workspace_root,
+    get_active_watches,
+    get_due_reminders,
+    get_unseen_alerts,
+    get_upcoming_reminders,
+)
 
 ROOT = _find_workspace_root()
 ASSISTANT = ROOT / "assistant"
@@ -94,7 +101,7 @@ def _parse_time(time_str: str, pm_context: bool = False) -> datetime | None:
     elif not pm_context and hour == 12:
         hour = 0
     try:
-        return datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return datetime.now(LOCAL_TZ).replace(hour=hour, minute=minute, second=0, microsecond=0)
     except ValueError:
         return None
 
@@ -154,7 +161,7 @@ def _parse_daily_notes(today: str) -> dict[str, Any]:
 
     result["found"] = True
     content = notes_path.read_text()
-    now = datetime.now()
+    now = datetime.now(LOCAL_TZ)
 
     # Priority stack — numbered lines inside ``` block
     # Skip completed (✅) and struck-through (~~) lines
@@ -278,7 +285,7 @@ def _perspective() -> str:
 
 
 def main() -> None:
-    now_local = datetime.now()
+    now_local = datetime.now(LOCAL_TZ)
     today = now_local.strftime("%Y-%m-%d")
 
     # Profile
@@ -344,17 +351,9 @@ def main() -> None:
             pass
 
     # Reminders and alerts
+    active_watches: list[dict[str, Any]] = []
     try:
-        from aya.scheduler import (
-            LOCAL_TZ,
-            get_active_watches,
-            get_due_reminders,
-            get_unseen_alerts,
-            get_upcoming_reminders,
-        )
-
-        local_tz = LOCAL_TZ
-        now_tz = datetime.now(local_tz)
+        now_tz = datetime.now(LOCAL_TZ)
 
         # Unseen alerts from daemon
         unseen = get_unseen_alerts()
@@ -386,10 +385,10 @@ def main() -> None:
                 last = w.get("last_checked_at")
                 datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
     except Exception:
-        pass  # scheduler module not available — skip silently
+        pass  # scheduler runtime error — skip silently
 
     # Active watches (legacy cron-schedules.md — fallback only)
-    if "active_watches" not in dir() or not active_watches:
+    if not active_watches:
         watches = _cron_watches()
         if watches:
             for w in watches:

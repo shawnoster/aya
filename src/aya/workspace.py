@@ -6,6 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
+import typer
 from rich.console import Console
 
 # ── Directory skeleton ───────────────────────────────────────────────────────
@@ -125,12 +126,9 @@ def bootstrap_workspace(
         con.print("[green]Nothing to do — workspace is already set up.[/green]")
         return
 
-    if interactive:
-        import typer
-
-        if not typer.confirm("Proceed?", default=True):
-            con.print("Aborted.")
-            return
+    if interactive and not typer.confirm("Proceed?", default=True):
+        con.print("Aborted.")
+        return
 
     # Create directories
     for d in dirs_to_create:

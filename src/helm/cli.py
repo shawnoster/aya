@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from helm.identity import Identity, Profile, TrustedKey
-from helm.packet import ConflictStrategy, ContentType, Packet, _human_age
+from helm.packet import ConflictStrategy, ContentType, Packet, human_age
 from helm.pair import (
     PairingError,
     generate_code,
@@ -628,7 +628,7 @@ def _show_inbox(packets: list[Packet], profile: Profile) -> None:
             pkt.id[:8],
             pkt.intent,
             from_label,
-            _human_age(pkt.sent_at),
+            human_age(pkt.sent_at),
             pkt.content_type,
             trusted,
         )

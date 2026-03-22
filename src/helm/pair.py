@@ -253,31 +253,6 @@ def _build_pair_response(
 # ── Relay queries ────────────────────────────────────────────────────────────
 
 
-async def _poll_for_response(
-    relay_url: str,
-    my_pubkey: str,
-    request_event_id: str,
-    since_ts: int,
-) -> dict | None:
-    """Query relay for a pair-response referencing our request event."""
-    filter_ = {
-        "kinds": [ACE_SYNC_KIND],
-        "#t": [_TAG_PAIR_RESP],
-        "#p": [my_pubkey],
-        "#e": [request_event_id],
-        "since": since_ts,
-        "limit": 1,
-    }
-    sub_id = f"pair-poll-{datetime.now(UTC).timestamp():.0f}"
-    async with websockets.connect(relay_url) as ws:
-        await ws.send(json.dumps(["REQ", sub_id, filter_]))
-        async for event in _read_until_eose(ws, sub_id):
-            await ws.send(json.dumps(["CLOSE", sub_id]))
-            return event
-        await ws.send(json.dumps(["CLOSE", sub_id]))
-    return None
-
-
 async def _find_pair_request(relay_url: str, code_hash: str) -> dict | None:
     """Find a pair-request on the relay matching the given code hash."""
     since_ts = int(datetime.now(UTC).timestamp()) - PAIR_TTL_SECONDS

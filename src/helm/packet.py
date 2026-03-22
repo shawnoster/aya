@@ -125,7 +125,7 @@ class Packet(BaseModel):
 
     def summary(self) -> str:
         """One-line display for inbox listing."""
-        age = _human_age(self.sent_at)
+        age = human_age(self.sent_at)
         expiry = "⏰ expiring soon" if self._expiring_soon() else ""
         return f"[{self.id[:8]}] {self.intent}  ·  {age} {expiry}".strip()
 
@@ -200,7 +200,7 @@ class Packet(BaseModel):
         return packet
 
 
-def _human_age(iso: str) -> str:
+def human_age(iso: str) -> str:
     delta = datetime.now(UTC) - datetime.fromisoformat(iso)
     if delta.total_seconds() < 60:
         return "just now"

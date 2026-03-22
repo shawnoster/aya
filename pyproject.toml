@@ -12,7 +12,6 @@ dependencies = [
     "pydantic>=2",
     "rich>=14",
     "base58>=2",
-    "aiofiles>=25",
     "coincurve>=21.0.0",
 ]
 

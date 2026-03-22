@@ -62,6 +62,36 @@ class TestPacketCreation:
         assert basic_packet.fingerprint() == basic_packet.fingerprint()
         assert len(basic_packet.fingerprint()) == 8
 
+    def test_encrypted_defaults_to_false(self, basic_packet: Packet) -> None:
+        assert basic_packet.encrypted is False
+
+    def test_encrypted_can_be_set_true(
+        self, work_identity: Identity, home_identity: Identity
+    ) -> None:
+        packet = Packet(
+            **{"from": work_identity.did, "to": home_identity.did},
+            intent="Encrypted transfer",
+            content="ciphertext",
+            encrypted=True,
+        )
+        assert packet.encrypted is True
+
+    def test_encrypted_survives_round_trip(self, basic_packet: Packet) -> None:
+        restored = Packet.from_json(basic_packet.to_json())
+        assert restored.encrypted is False
+
+    def test_encrypted_true_survives_round_trip(
+        self, work_identity: Identity, home_identity: Identity
+    ) -> None:
+        packet = Packet(
+            **{"from": work_identity.did, "to": home_identity.did},
+            intent="Encrypted",
+            content="ciphertext",
+            encrypted=True,
+        )
+        restored = Packet.from_json(packet.to_json())
+        assert restored.encrypted is True
+
 
 class TestPacketSigning:
     def test_sign_and_verify(self, basic_packet: Packet, work_identity: Identity) -> None:

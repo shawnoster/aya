@@ -61,6 +61,7 @@ class Packet(BaseModel):
     reply_to: str | None = None
     conflict_strategy: ConflictStrategy = ConflictStrategy.LAST_WRITE_WINS
     tags: list[str] = Field(default_factory=list)
+    encrypted: bool = False
     signature: str | None = None
 
     model_config = {"populate_by_name": True}

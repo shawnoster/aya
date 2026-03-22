@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
@@ -309,6 +310,22 @@ class TestReadUntilEose:
 
         assert collected == []
 
+    async def test_raises_timeout_if_eose_never_arrives(self) -> None:
+        """_read_until_eose raises TimeoutError when EOSE is not received in time."""
+        sub_id = "hang-sub"
+
+        async def _aiter_infinite():
+            while True:
+                await asyncio.sleep(10)  # never yields a message
+                yield ""  # pragma: no cover
+
+        mock_ws = MagicMock()
+        mock_ws.__aiter__ = lambda self: _aiter_infinite()
+
+        with pytest.raises(TimeoutError):
+            async for _ in _read_until_eose(mock_ws, sub_id, eose_timeout=0.05):
+                pass  # pragma: no cover
+
 
 # ── fetch_pending ─────────────────────────────────────────────────────────────
 
@@ -380,6 +397,32 @@ class TestFetchPending:
                 packets = [pkt async for pkt in client.fetch_pending()]
 
         assert packets == []
+
+    async def test_handles_eose_timeout_gracefully(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """fetch_pending should return whatever packets arrived before EOSE timeout."""
+        p = Packet(
+            **{"from": sender.did, "to": recipient.did},
+            intent="Partial fetch",
+            content="Some data.",
+        )
+        raw_event = {"id": "evt-partial", "content": p.to_json()}
+
+        async def fake_read_timeout(ws, sub_id):
+            yield raw_event
+            raise TimeoutError
+
+        with patch("aya.relay._read_until_eose", side_effect=fake_read_timeout):
+            mock_ws = AsyncMock()
+            mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("aya.relay.websockets.connect", return_value=mock_ws):
+                packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert len(packets) == 1
+        assert packets[0].id == p.id
 
 
 # ── publish ───────────────────────────────────────────────────────────────────

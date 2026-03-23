@@ -19,12 +19,16 @@ Usage:
 
 from __future__ import annotations
 
+import fcntl
 import functools
 import json
 import os
 import re
 import subprocess
+import tempfile
 import uuid
+from collections.abc import Generator
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -196,37 +200,187 @@ def parse_due(text: str, now: datetime | None = None) -> datetime:
     raise ValueError(f"Cannot parse due time: {text!r}")
 
 
+# ── file safety (fcntl lock + atomic write) ──────────────────────────────────
+
+
+def _lock_file() -> Path:
+    """Return the advisory lock file path, co-located with scheduler.json."""
+    return _scheduler_file().parent / ".scheduler.lock"
+
+
+@contextmanager
+def _file_lock(*, shared: bool = False) -> Generator[int]:
+    """Acquire an advisory lock on the scheduler lock file.
+
+    Args:
+        shared: If True, acquire a shared (read) lock (LOCK_SH).
+                If False (default), acquire an exclusive (write) lock (LOCK_EX).
+
+    Yields the lock file descriptor.
+    """
+    lock_path = _lock_file()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+        yield fd
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _atomic_write(path: Path, data: dict[str, Any]) -> None:
+    """Write JSON atomically: tmp file → fsync → rename.
+
+    Caller must already hold an exclusive _file_lock().
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(data, indent=2, default=str) + "\n"
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        os.write(fd, content.encode())
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        Path(tmp).rename(path)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        with suppress(OSError):
+            Path(tmp).unlink()
+        raise
+
+
+def _locked_read(path: Path) -> dict[str, Any] | None:
+    """Read a JSON file under a shared lock. Returns None if missing or corrupt."""
+    if not path.exists():
+        return None
+    with _file_lock(shared=True):
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return None
+        return data if isinstance(data, dict) else None
+
+
+# ── harness detection + instance identity ────────────────────────────────────
+
+
+def _detect_harness() -> str:
+    """Detect which AI harness is running this process.
+
+    Checks environment variables to identify the caller:
+    - CLAUDE_CODE or CLAUDE_* → "claude"
+    - GITHUB_COPILOT or COPILOT_* → "copilot"
+    - Otherwise → "unknown"
+    """
+    env = os.environ
+    if any(k.startswith("CLAUDE") for k in env):
+        return "claude"
+    if any(k.startswith(("COPILOT", "GITHUB_COPILOT")) for k in env):
+        return "copilot"
+    return "unknown"
+
+
+def get_instance_id() -> str:
+    """Return a unique instance identifier: {harness}-{pid}."""
+    return f"{_detect_harness()}-{os.getpid()}"
+
+
+# ── claim files (alert delivery dedup) ───────────────────────────────────────
+
+_CLAIM_TTL_SECONDS = 300  # 5 minutes — if a session crashes, claim expires
+
+
+def _claims_dir() -> Path:
+    """Return the claims directory, co-located with scheduler.json."""
+    return _scheduler_file().parent / "claims"
+
+
+def claim_alert(alert_id: str, instance_id: str | None = None) -> bool:
+    """Attempt to claim an alert for delivery. Returns True if claim succeeded.
+
+    Uses O_CREAT|O_EXCL for atomic file creation — first writer wins.
+    Stale claims (past TTL) are removed and re-claimable.
+    """
+    claims = _claims_dir()
+    claims.mkdir(parents=True, exist_ok=True)
+    claim_path = claims / f"{alert_id}.claimed"
+
+    # Check for stale claim
+    if claim_path.exists():
+        try:
+            data = json.loads(claim_path.read_text())
+            claimed_at = datetime.fromisoformat(data["claimed_at"])
+            ttl = data.get("ttl_seconds", _CLAIM_TTL_SECONDS)
+            if datetime.now(_get_local_tz()) - claimed_at < timedelta(seconds=ttl):
+                return False  # Valid claim exists
+            # Stale — remove and re-claim
+            claim_path.unlink(missing_ok=True)
+        except (json.JSONDecodeError, KeyError, OSError):
+            claim_path.unlink(missing_ok=True)
+
+    # Attempt atomic create
+    instance_id = instance_id or get_instance_id()
+    content = json.dumps(
+        {
+            "instance": instance_id,
+            "claimed_at": datetime.now(_get_local_tz()).isoformat(),
+            "ttl_seconds": _CLAIM_TTL_SECONDS,
+        }
+    )
+    try:
+        fd = os.open(str(claim_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        try:
+            os.write(fd, content.encode())
+        finally:
+            os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+
+
+def sweep_stale_claims(max_age_seconds: int = 86400) -> int:
+    """Remove claim files older than max_age_seconds. Returns count removed."""
+    claims = _claims_dir()
+    if not claims.exists():
+        return 0
+    removed = 0
+    now = datetime.now(_get_local_tz())
+    for claim_file in claims.glob("*.claimed"):
+        try:
+            data = json.loads(claim_file.read_text())
+            claimed_at = datetime.fromisoformat(data["claimed_at"])
+            if (now - claimed_at).total_seconds() > max_age_seconds:
+                claim_file.unlink()
+                removed += 1
+        except (json.JSONDecodeError, KeyError, OSError):
+            claim_file.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 # ── storage ──────────────────────────────────────────────────────────────────
 
 
 def load_items() -> list[dict[str, Any]]:
-    if not _scheduler_file().exists():
-        return []
-    try:
-        data = json.loads(_scheduler_file().read_text())
-    except (json.JSONDecodeError, OSError):
-        return []
-    return data.get("items", []) if isinstance(data, dict) else []
+    data = _locked_read(_scheduler_file())
+    return data.get("items", []) if data else []
 
 
 def save_items(items: list[dict[str, Any]]) -> None:
-    _scheduler_file().parent.mkdir(parents=True, exist_ok=True)
-    _scheduler_file().write_text(json.dumps({"items": items}, indent=2, default=str) + "\n")
+    with _file_lock():
+        _atomic_write(_scheduler_file(), {"items": items})
 
 
 def load_alerts() -> list[dict[str, Any]]:
-    if not _alerts_file().exists():
-        return []
-    try:
-        data = json.loads(_alerts_file().read_text())
-    except (json.JSONDecodeError, OSError):
-        return []
-    return data.get("alerts", []) if isinstance(data, dict) else []
+    data = _locked_read(_alerts_file())
+    return data.get("alerts", []) if data else []
 
 
 def save_alerts(alerts: list[dict[str, Any]]) -> None:
-    _alerts_file().parent.mkdir(parents=True, exist_ok=True)
-    _alerts_file().write_text(json.dumps({"alerts": alerts}, indent=2, default=str) + "\n")
+    with _file_lock():
+        _atomic_write(_alerts_file(), {"alerts": alerts})
 
 
 def _find(items: list[dict[str, Any]], item_id: str) -> dict[str, Any] | None:
@@ -450,9 +604,10 @@ def add_reminder(message: str, due_text: str, tags: str = "") -> dict[str, Any]:
         "delivered_at": None,
         "snoozed_until": None,
     }
-    items = load_items()
-    items.append(item)
-    save_items(items)
+    with _file_lock():
+        items = _load_items_unlocked()
+        items.append(item)
+        _atomic_write(_scheduler_file(), {"items": items})
     return item
 
 
@@ -502,9 +657,10 @@ def add_watch(
         "last_state": None,
         "remove_when": remove_when,
     }
-    items = load_items()
-    items.append(item)
-    save_items(items)
+    with _file_lock():
+        items = _load_items_unlocked()
+        items.append(item)
+        _atomic_write(_scheduler_file(), {"items": items})
     return item
 
 
@@ -527,9 +683,10 @@ def add_recurring(
         "cron": cron,
         "prompt": prompt,
     }
-    items = load_items()
-    items.append(item)
-    save_items(items)
+    with _file_lock():
+        items = _load_items_unlocked()
+        items.append(item)
+        _atomic_write(_scheduler_file(), {"items": items})
     return item
 
 
@@ -547,149 +704,183 @@ def list_items(
 
 
 def check_due() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Check for due reminders and unseen alerts. Returns (due_items, unseen_alerts)."""
-    items = load_items()
-    now = datetime.now(_get_local_tz())
-    modified = False
-    due_items = []
+    """Check for due reminders and unseen alerts. Returns (due_items, unseen_alerts).
 
-    for item in items:
-        if item["type"] != "reminder" or item["status"] not in ("pending", "snoozed"):
-            continue
-        if item["status"] == "snoozed" and item.get("snoozed_until"):
-            snooze_end = datetime.fromisoformat(item["snoozed_until"])
-            if snooze_end > now:
+    Holds exclusive lock when snooze→pending transitions require a write.
+    """
+    with _file_lock():
+        items = _load_items_unlocked()
+        now = datetime.now(_get_local_tz())
+        modified = False
+        due_items = []
+
+        for item in items:
+            if item["type"] != "reminder" or item["status"] not in ("pending", "snoozed"):
                 continue
-            item["status"] = "pending"
-            item["snoozed_until"] = None
-            modified = True
-        due = datetime.fromisoformat(item["due_at"])
-        if due <= now:
-            due_items.append(item)
+            if item["status"] == "snoozed" and item.get("snoozed_until"):
+                snooze_end = datetime.fromisoformat(item["snoozed_until"])
+                if snooze_end > now:
+                    continue
+                item["status"] = "pending"
+                item["snoozed_until"] = None
+                modified = True
+            due = datetime.fromisoformat(item["due_at"])
+            if due <= now:
+                due_items.append(item)
 
-    if modified:
-        save_items(items)
+        if modified:
+            _atomic_write(_scheduler_file(), {"items": items})
 
-    unseen = [a for a in load_alerts() if not a.get("seen")]
+        unseen = [a for a in _load_alerts_unlocked() if not a.get("seen")]
     return due_items, unseen
 
 
 def dismiss_item(item_id: str) -> dict[str, Any]:
     """Dismiss an item by ID (prefix match). Returns the dismissed item."""
-    items = load_items()
-    item = _find(items, item_id)
-    if not item:
-        raise ValueError(f"Item {item_id} not found.")
-    item["status"] = "dismissed"
-    if item["type"] == "reminder":
-        item["delivered_at"] = datetime.now(_get_local_tz()).isoformat()
-    save_items(items)
+    with _file_lock():
+        items = _load_items_unlocked()
+        item = _find(items, item_id)
+        if not item:
+            raise ValueError(f"Item {item_id} not found.")
+        item["status"] = "dismissed"
+        if item["type"] == "reminder":
+            item["delivered_at"] = datetime.now(_get_local_tz()).isoformat()
+        _atomic_write(_scheduler_file(), {"items": items})
     return item
 
 
 def snooze_item(item_id: str, until_text: str) -> tuple[dict[str, Any], datetime]:
     """Snooze a reminder. Returns (item, snooze_until_datetime)."""
-    items = load_items()
-    item = _find(items, item_id)
-    if not item:
-        raise ValueError(f"Item {item_id} not found.")
-    now = datetime.now(_get_local_tz())
-    snooze_until = parse_due(until_text, now)
-    item["status"] = "snoozed"
-    item["snoozed_until"] = snooze_until.isoformat()
-    save_items(items)
+    with _file_lock():
+        items = _load_items_unlocked()
+        item = _find(items, item_id)
+        if not item:
+            raise ValueError(f"Item {item_id} not found.")
+        now = datetime.now(_get_local_tz())
+        snooze_until = parse_due(until_text, now)
+        item["status"] = "snoozed"
+        item["snoozed_until"] = snooze_until.isoformat()
+        _atomic_write(_scheduler_file(), {"items": items})
     return item, snooze_until
 
 
+def _load_items_unlocked() -> list[dict[str, Any]]:
+    """Read scheduler items without acquiring a lock (caller holds lock)."""
+    path = _scheduler_file()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+    return data.get("items", []) if isinstance(data, dict) else []
+
+
+def _load_alerts_unlocked() -> list[dict[str, Any]]:
+    """Read alerts without acquiring a lock (caller holds lock)."""
+    path = _alerts_file()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+    return data.get("alerts", []) if isinstance(data, dict) else []
+
+
 def run_poll(quiet: bool = False) -> None:
-    """Run one poll cycle — check all watches and due reminders."""
-    items = load_items()
-    alerts = load_alerts()
-    now = datetime.now(_get_local_tz())
-    items_modified = False
-    alerts_modified = False
+    """Run one poll cycle — check all watches and due reminders.
 
-    for item in items:
-        if (
-            item["type"] == "watch"
-            and item["status"] == "active"
-            and not item.get("session_required")
-        ):
-            last = item.get("last_checked_at")
-            interval = item.get("poll_interval_minutes", 30)
-            if last:
-                next_check = datetime.fromisoformat(last) + timedelta(minutes=interval)
-                if now < next_check:
-                    continue
+    Holds a single exclusive lock for the entire load→poll→save cycle
+    to prevent interleaving with other CLI commands or sessions.
+    """
+    with _file_lock():
+        items = _load_items_unlocked()
+        alerts = _load_alerts_unlocked()
+        now = datetime.now(_get_local_tz())
+        items_modified = False
+        alerts_modified = False
 
-            new_state, changed = poll_watch(item)
-            if new_state is not None:
-                item["last_checked_at"] = now.isoformat()
-                item["last_state"] = new_state
-                items_modified = True
+        for item in items:
+            if (
+                item["type"] == "watch"
+                and item["status"] == "active"
+                and not item.get("session_required")
+            ):
+                last = item.get("last_checked_at")
+                interval = item.get("poll_interval_minutes", 30)
+                if last:
+                    next_check = datetime.fromisoformat(last) + timedelta(minutes=interval)
+                    if now < next_check:
+                        continue
 
-                if changed:
-                    alert = {
-                        "id": _new_id(),
-                        "source_item_id": item["id"],
-                        "created_at": now.isoformat(),
-                        "message": _format_watch_alert(item, new_state),
-                        "details": new_state,
-                        "seen": False,
-                    }
-                    alerts.append(alert)
-                    alerts_modified = True
-                    if not quiet:
-                        pass
-
-                if _evaluate_auto_remove(item, new_state):
-                    item["status"] = "dismissed"
+                new_state, changed = poll_watch(item)
+                if new_state is not None:
+                    item["last_checked_at"] = now.isoformat()
+                    item["last_state"] = new_state
                     items_modified = True
-                    if not quiet:
-                        pass
 
-            elif not quiet:
-                pass
+                    if changed:
+                        alert = {
+                            "id": _new_id(),
+                            "source_item_id": item["id"],
+                            "created_at": now.isoformat(),
+                            "message": _format_watch_alert(item, new_state),
+                            "details": new_state,
+                            "seen": False,
+                        }
+                        alerts.append(alert)
+                        alerts_modified = True
+                        if not quiet:
+                            pass
 
-        elif item["type"] == "reminder" and item["status"] == "pending":
-            due = datetime.fromisoformat(item["due_at"])
-            if due <= now:
-                existing_sources = {a["source_item_id"] for a in alerts if not a.get("seen")}
-                if item["id"] not in existing_sources:
-                    alert = {
-                        "id": _new_id(),
-                        "source_item_id": item["id"],
-                        "created_at": now.isoformat(),
-                        "message": f"Reminder due: {item['message']}",
-                        "details": {"due_at": item["due_at"]},
-                        "seen": False,
-                    }
-                    alerts.append(alert)
-                    alerts_modified = True
-                    if not quiet:
-                        pass
+                    if _evaluate_auto_remove(item, new_state):
+                        item["status"] = "dismissed"
+                        items_modified = True
+                        if not quiet:
+                            pass
 
-    if items_modified:
-        save_items(items)
-    if alerts_modified:
-        save_alerts(alerts)
+                elif not quiet:
+                    pass
 
-    if not quiet:
-        sum(1 for i in items if i["type"] == "watch" and i["status"] == "active")
-        sum(1 for i in items if i["type"] == "reminder" and i["status"] == "pending")
+            elif item["type"] == "reminder" and item["status"] == "pending":
+                due = datetime.fromisoformat(item["due_at"])
+                if due <= now:
+                    existing_sources = {a["source_item_id"] for a in alerts if not a.get("seen")}
+                    if item["id"] not in existing_sources:
+                        alert = {
+                            "id": _new_id(),
+                            "source_item_id": item["id"],
+                            "created_at": now.isoformat(),
+                            "message": f"Reminder due: {item['message']}",
+                            "details": {"due_at": item["due_at"]},
+                            "seen": False,
+                        }
+                        alerts.append(alert)
+                        alerts_modified = True
+                        if not quiet:
+                            pass
+
+        if items_modified:
+            _atomic_write(_scheduler_file(), {"items": items})
+        if alerts_modified:
+            _atomic_write(_alerts_file(), {"alerts": alerts})
 
 
 def show_alerts(as_json: bool = False, mark_seen: bool = False) -> list[dict[str, Any]]:
     """Show and optionally clear alerts. Returns unseen alerts."""
+    if mark_seen:
+        with _file_lock():
+            alerts = _load_alerts_unlocked()
+            unseen = [a for a in alerts if not a.get("seen")]
+            if unseen:
+                for a in alerts:
+                    a["seen"] = True
+                _atomic_write(_alerts_file(), {"alerts": alerts})
+        return unseen
+
     alerts = load_alerts()
-    unseen = [a for a in alerts if not a.get("seen")]
-
-    if mark_seen and unseen:
-        for a in alerts:
-            a["seen"] = True
-        save_alerts(alerts)
-
-    return unseen
+    return [a for a in alerts if not a.get("seen")]
 
 
 def _parse_tags(tags: str) -> list[str]:
@@ -765,6 +956,97 @@ def get_unseen_alerts() -> list[dict[str, Any]]:
 def get_active_watches() -> list[dict[str, Any]]:
     """Return all active watches."""
     return [i for i in load_items() if i["type"] == "watch" and i["status"] == "active"]
+
+
+# ── tick + pending (Phase 5B) ────────────────────────────────────────────────
+
+
+def run_tick(quiet: bool = False) -> dict[str, int]:
+    """Run one scheduler tick — poll watches, check reminders, sweep stale claims.
+
+    This is the canonical entry point for system cron:
+        */5 * * * * aya scheduler tick --quiet
+
+    Returns a summary dict: {"watches_checked": N, "alerts_generated": N, "claims_swept": N}
+    """
+    run_poll(quiet=quiet)
+    swept = sweep_stale_claims()
+    return {"claims_swept": swept}
+
+
+def get_pending(instance_id: str | None = None) -> dict[str, Any]:
+    """Get pending items for a session — alerts to deliver + session crons to register.
+
+    This is the SessionStart hook entry point:
+        aya scheduler pending --format text
+
+    Claims each alert it returns so other sessions don't re-deliver.
+
+    Returns:
+        {
+            "alerts": [list of unclaimed alert dicts],
+            "session_crons": [list of session-required recurring items],
+            "instance_id": str,
+        }
+    """
+    instance_id = instance_id or get_instance_id()
+    unseen = get_unseen_alerts()
+
+    # Claim and collect deliverable alerts
+    deliverable = []
+    for alert in unseen:
+        if claim_alert(alert["id"], instance_id):
+            deliverable.append(alert)
+
+    # Collect session-required recurring items
+    items = load_items()
+    session_crons = [
+        i
+        for i in items
+        if i.get("type") == "recurring"
+        and i.get("status", "active") == "active"
+        and i.get("session_required")
+    ]
+
+    return {
+        "alerts": deliverable,
+        "session_crons": session_crons,
+        "instance_id": instance_id,
+    }
+
+
+def format_pending(pending: dict[str, Any]) -> str:
+    """Format pending items as human-readable text for session injection."""
+    lines: list[str] = []
+    alerts = pending.get("alerts", [])
+    crons = pending.get("session_crons", [])
+
+    if alerts:
+        lines.append(f"📋 {len(alerts)} pending alert(s):")
+        now = datetime.now(_get_local_tz())
+        for a in alerts:
+            created = datetime.fromisoformat(a["created_at"])
+            delta = now - created
+            if delta.total_seconds() < 3600:
+                ago = f"{int(delta.total_seconds() / 60)} min ago"
+            elif delta.total_seconds() < 86400:
+                ago = f"{int(delta.total_seconds() / 3600)}h ago"
+            else:
+                ago = f"{int(delta.total_seconds() / 86400)}d ago"
+            lines.append(f"  • {a['message'][:70]} ({ago})")
+
+    if crons:
+        lines.append(f"\n⏰ {len(crons)} session cron(s) to register:")
+        for c in crons:
+            cron_id = c["id"][:12]
+            cron_expr = c["cron"]
+            cron_msg = c.get("message", c.get("prompt", ""))[:50]
+            lines.append(f'  • {cron_id}: "{cron_expr}" — {cron_msg}')
+
+    if not alerts and not crons:
+        lines.append("No pending items.")
+
+    return "\n".join(lines)
 
 
 def _display_items(items: list[dict[str, Any]]) -> None:

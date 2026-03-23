@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -394,3 +395,150 @@ class TestBootstrap:
         result = runner.invoke(app, ["bootstrap", "--root", str(root), "--yes"])
         # Should not prompt and should succeed
         assert result.exit_code == 0
+
+
+# ── dispatch ──────────────────────────────────────────────────────────────────
+
+
+class TestDispatch:
+    def test_dispatch_sends_stdin_content(
+        self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_publish = AsyncMock(return_value="a" * 64)
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "End of day notes",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+                input="Today I worked on useAlgolia error handling.\n",
+            )
+        assert result.exit_code == 0, result.output
+        assert "Dispatched" in result.output
+        assert "End of day notes" in result.output
+        mock_publish.assert_awaited_once()
+
+    def test_dispatch_seed(
+        self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_publish = AsyncMock(return_value="b" * 64)
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "Pick up dinner party thread",
+                    "--seed",
+                    "--opener",
+                    "Ask about the guest count decision",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        assert "Dispatched" in result.output
+        mock_publish.assert_awaited_once()
+
+    def test_dispatch_seed_requires_opener(self, profile_with_trusted: Path) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "dispatch",
+                "--to",
+                "home",
+                "--intent",
+                "seed without opener",
+                "--seed",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+        )
+        assert result.exit_code != 0
+
+    def test_dispatch_unknown_recipient_fails(self, profile_with_instance: Path) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "dispatch",
+                "--to",
+                "nobody",
+                "--intent",
+                "fail",
+                "--profile",
+                str(profile_with_instance),
+            ],
+            input="data\n",
+        )
+        assert result.exit_code != 0
+
+    def test_dispatch_missing_instance_fails(self, profile_with_trusted: Path) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "dispatch",
+                "--to",
+                "home",
+                "--intent",
+                "fail",
+                "--instance",
+                "nonexistent",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+            input="data\n",
+        )
+        assert result.exit_code != 0
+
+    def test_dispatch_missing_nostr_pubkey_fails(self, profile_with_instance: Path) -> None:
+        """Trusted key without a Nostr pubkey should exit with a clear message."""
+        p = Profile.load(profile_with_instance)
+        home = Identity.generate("home")
+        p.trusted_keys["home"] = TrustedKey(did=home.did, label="home", nostr_pubkey=None)
+        p.save(profile_with_instance)
+
+        result = runner.invoke(
+            app,
+            [
+                "dispatch",
+                "--to",
+                "home",
+                "--intent",
+                "no pubkey",
+                "--profile",
+                str(profile_with_instance),
+            ],
+            input="data\n",
+        )
+        assert result.exit_code != 0
+        assert "Nostr pubkey" in result.output
+
+    def test_dispatch_relay_error_exits_cleanly(self, profile_with_trusted: Path) -> None:
+        """Relay connection failure should print a friendly message, not a traceback."""
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = AsyncMock(side_effect=Exception("conn refused"))
+            result = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "relay down",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+                input="data\n",
+            )
+        assert result.exit_code != 0
+        assert "Could not reach relay" in result.output

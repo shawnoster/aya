@@ -70,6 +70,7 @@ SKILL_NAMES = [
     "implement",
     "architecture",
     "meeting",
+    "pack-for-home",
 ]
 
 

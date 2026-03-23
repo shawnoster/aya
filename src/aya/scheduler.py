@@ -977,7 +977,27 @@ def run_tick(quiet: bool = False) -> dict[str, int]:
     """
     run_poll(quiet=quiet)
     swept = sweep_stale_claims()
-    return {"claims_swept": swept}
+    expired = expire_old_alerts()
+    return {"claims_swept": swept, "alerts_expired": expired}
+
+
+_ALERT_MAX_AGE_DAYS = 7
+
+
+def expire_old_alerts(max_age_days: int = _ALERT_MAX_AGE_DAYS) -> int:
+    """Remove alerts older than max_age_days. Returns count removed."""
+    with _file_lock():
+        alerts = _load_alerts_unlocked()
+        if not alerts:
+            return 0
+        now = datetime.now(_get_local_tz())
+        cutoff = now - timedelta(days=max_age_days)
+        original_count = len(alerts)
+        alerts = [a for a in alerts if datetime.fromisoformat(a["created_at"]) > cutoff]
+        removed = original_count - len(alerts)
+        if removed > 0:
+            _atomic_write(_alerts_file(), {"alerts": alerts})
+        return removed
 
 
 def get_pending(instance_id: str | None = None) -> dict[str, Any]:
@@ -1000,9 +1020,22 @@ def get_pending(instance_id: str | None = None) -> dict[str, Any]:
 
     # Claim and collect deliverable alerts
     deliverable = []
+    claimed_ids: set[str] = set()
     for alert in unseen:
         if claim_alert(alert["id"], instance_id):
             deliverable.append(alert)
+            claimed_ids.add(alert["id"])
+
+    # Stamp delivery receipts on claimed alerts
+    if claimed_ids:
+        now = datetime.now(_get_local_tz())
+        with _file_lock():
+            alerts = _load_alerts_unlocked()
+            for a in alerts:
+                if a["id"] in claimed_ids:
+                    a["delivered_at"] = now.isoformat()
+                    a["delivered_by"] = instance_id
+            _atomic_write(_alerts_file(), {"alerts": alerts})
 
     # Collect session-required recurring items
     items = load_items()
@@ -1069,18 +1102,25 @@ def get_scheduler_status() -> dict[str, Any]:
 
     active_watches = [i for i in items if i.get("type") == "watch" and i.get("status") == "active"]
     pending_reminders = [
-        i for i in items if i.get("type") == "reminder" and i.get("status") in ("pending", "snoozed")
+        i
+        for i in items
+        if i.get("type") == "reminder" and i.get("status") in ("pending", "snoozed")
     ]
     session_crons = [
         i
         for i in items
-        if i.get("type") == "recurring" and i.get("status", "active") == "active" and i.get("session_required")
+        if (
+            i.get("type") == "recurring"
+            and i.get("status", "active") == "active"
+            and i.get("session_required")
+        )
     ]
     unseen_alerts = [a for a in alerts if not a.get("seen")]
     recent_deliveries = [
         a
         for a in alerts
-        if a.get("delivered_at") and (now - datetime.fromisoformat(a["delivered_at"])).total_seconds() < 86400
+        if a.get("delivered_at")
+        and (now - datetime.fromisoformat(a["delivered_at"])).total_seconds() < 86400
     ]
 
     return {
@@ -1124,13 +1164,15 @@ def format_scheduler_status(status: dict[str, Any]) -> str:
         for r in reminders:
             due = datetime.fromisoformat(r["due_at"])
             overdue = " ⚠️ OVERDUE" if due <= now else ""
-            lines.append(f"  • {r['message'][:50]} — due {due.strftime('%a %b %d %I:%M %p')}{overdue}")
+            due_str = due.strftime("%a %b %d %I:%M %p")
+            lines.append(f"  • {r['message'][:50]} — due {due_str}{overdue}")
 
     crons = status["session_crons"]
     if crons:
         lines.append(f"\n🔄 {len(crons)} session cron(s):")
         for c in crons:
-            lines.append(f"  • \"{c.get('cron', '?')}\" — {c.get('message', c.get('prompt', '?'))[:50]}")
+            cron_msg = c.get("message", c.get("prompt", "?"))[:50]
+            lines.append(f'  • "{c.get("cron", "?")}" — {cron_msg}')
 
     unseen = status["unseen_alerts"]
     if unseen:

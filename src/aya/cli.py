@@ -716,7 +716,7 @@ def schedule_pending(
     """
     pending = get_pending()
     if format_ == "json":
-        print(json.dumps(pending, indent=2, default=str))
+        console.print(json.dumps(pending, indent=2, default=str), markup=False, highlight=False)
     else:
         console.print(format_pending(pending))
 
@@ -728,7 +728,7 @@ def schedule_status(
     """Show scheduler overview — watches, reminders, crons, deliveries."""
     status = get_scheduler_status()
     if as_json:
-        print(json.dumps(status, indent=2, default=str))
+        console.print(json.dumps(status, indent=2, default=str), markup=False, highlight=False)
     else:
         console.print(format_scheduler_status(status))
 

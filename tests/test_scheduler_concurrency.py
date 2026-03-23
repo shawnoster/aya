@@ -21,8 +21,6 @@ from aya.scheduler import (
     _atomic_write,
     _file_lock,
     _locked_read,
-    load_items,
-    save_items,
 )
 
 
@@ -178,7 +176,9 @@ def _worker_add_items(scheduler_file_str: str, alerts_file_str: str, worker_id: 
     for i in range(count):
         with _file_lock():
             items = _load_items_unlocked()
-            items.append({"id": f"worker-{worker_id}-item-{i}", "type": "reminder", "status": "pending"})
+            items.append(
+                {"id": f"worker-{worker_id}-item-{i}", "type": "reminder", "status": "pending"}
+            )
             _atomic_write(_scheduler_file(), {"items": items})
 
 

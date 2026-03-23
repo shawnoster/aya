@@ -641,6 +641,9 @@ def _install_skills(
     """Copy each skill to both .claude/commands/ (legacy) and skills/ (SKILL.md format)."""
     for name in skill_names:
         source = skills_source_dir / name / "SKILL.md"
+        if not source.exists():
+            con.print(f"  [yellow]⚠[/yellow] skill: {name} (source not found, skipping)")
+            continue
         content = source.read_text()
 
         # Legacy flat format — Claude Code .claude/commands/
@@ -722,6 +725,26 @@ def _setup_dotfiles(home: Path, con: Console) -> int:
         )
         changes += 1
 
+    # Add aya schedule pending hook if not present
+    pending_hook_exists = any(
+        "aya schedule pending"
+        in (h.get("hooks", [{}])[0].get("command", "") if h.get("hooks") else "")
+        for h in session_start
+    )
+    if not pending_hook_exists:
+        session_start.append(
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "aya schedule pending --format text 2>/dev/null || true",
+                        "statusMessage": "Loading scheduler...",
+                    }
+                ]
+            }
+        )
+        changes += 1
+
     # Add aya ci watch PostToolUse hook if not present
     post_tool_use = hooks.setdefault("PostToolUse", [])
     ci_watch_exists = any(
@@ -766,14 +789,14 @@ def _setup_dotfiles(home: Path, con: Console) -> int:
     return changes
 
 
-def _assistant_profile_json() -> str:
+def _assistant_profile_json(user_name: str = "") -> str:
     """Default assistant profile — persona, alias, movement reminders."""
     return json.dumps(
         {
             "alias": "Ace",
             "ship_mind_name": "",
             "persona": "Culture Ship Mind: sharp snark, genuine care, human-preserving bias.",
-            "user_name": "Shawn",
+            "user_name": user_name,
             "movement_reminders": {
                 "micro_stretch_every_minutes": 30,
                 "stand_up_every_minutes": 60,

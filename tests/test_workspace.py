@@ -13,6 +13,7 @@ from aya.workspace import (
     PRESERVED_ON_RESET,
     RESET_FILES,
     SKILL_NAMES,
+    _install_skills,
     bootstrap_workspace,
     reset_workspace,
 )
@@ -141,6 +142,45 @@ class TestBootstrapIdempotency:
         # All expected files still exist
         assert (root / "CLAUDE.md").exists()
         assert (root / "assistant/memory/scheduler.json").exists()
+
+
+# ── Skills installation ───────────────────────────────────────────────────────
+
+
+class TestSkillsInstallation:
+    def test_missing_source_skips_gracefully(self, tmp_path: Path) -> None:
+        """Skills with missing source SKILL.md are skipped, not crashed."""
+        root = tmp_path / "workspace"
+        root.mkdir()
+        empty_skills_dir = tmp_path / "empty_skills"
+        empty_skills_dir.mkdir()
+
+        con = MagicMock()
+        # Should not raise — missing sources are skipped
+        _install_skills(root, empty_skills_dir, ["nonexistent-skill"], con)
+
+        # Verify neither target location was created
+        assert not (root / ".claude" / "commands" / "nonexistent-skill.md").exists()
+        assert not (root / "skills" / "nonexistent-skill" / "SKILL.md").exists()
+
+        # Verify warning was printed
+        con.print.assert_called_once()
+        assert "skipping" in con.print.call_args[0][0].lower()
+
+    def test_partial_source_installs_what_exists(self, tmp_path: Path) -> None:
+        """Only skills with source files are installed; missing ones are skipped."""
+        root = tmp_path / "workspace"
+        root.mkdir()
+        skills_dir = tmp_path / "skills_src"
+        (skills_dir / "real-skill").mkdir(parents=True)
+        (skills_dir / "real-skill" / "SKILL.md").write_text("# Real skill")
+
+        con = MagicMock()
+        _install_skills(root, skills_dir, ["real-skill", "missing-skill"], con)
+
+        assert (root / ".claude" / "commands" / "real-skill.md").exists()
+        assert (root / "skills" / "real-skill" / "SKILL.md").exists()
+        assert not (root / "skills" / "missing-skill").exists()
 
 
 # ── Dotfile setup ─────────────────────────────────────────────────────────────

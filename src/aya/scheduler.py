@@ -19,12 +19,16 @@ Usage:
 
 from __future__ import annotations
 
+import fcntl
 import functools
 import json
 import os
 import re
 import subprocess
+import tempfile
 import uuid
+from collections.abc import Generator
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -198,11 +202,6 @@ def parse_due(text: str, now: datetime | None = None) -> datetime:
 
 # ── file safety (fcntl lock + atomic write) ──────────────────────────────────
 
-import fcntl
-import tempfile
-from collections.abc import Generator
-from contextlib import contextmanager
-
 
 def _lock_file() -> Path:
     """Return the advisory lock file path, co-located with scheduler.json."""
@@ -243,14 +242,12 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
         os.fsync(fd)
         os.close(fd)
         fd = -1
-        os.rename(tmp, str(path))
+        Path(tmp).rename(path)
     except BaseException:
         if fd >= 0:
             os.close(fd)
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+        with suppress(OSError):
+            Path(tmp).unlink()
         raise
 
 
@@ -264,6 +261,103 @@ def _locked_read(path: Path) -> dict[str, Any] | None:
         except (json.JSONDecodeError, OSError):
             return None
         return data if isinstance(data, dict) else None
+
+
+# ── harness detection + instance identity ────────────────────────────────────
+
+
+def _detect_harness() -> str:
+    """Detect which AI harness is running this process.
+
+    Checks environment variables to identify the caller:
+    - CLAUDE_CODE or CLAUDE_* → "claude"
+    - GITHUB_COPILOT or COPILOT_* → "copilot"
+    - Otherwise → "unknown"
+    """
+    env = os.environ
+    if any(k.startswith("CLAUDE") for k in env):
+        return "claude"
+    if any(k.startswith(("COPILOT", "GITHUB_COPILOT")) for k in env):
+        return "copilot"
+    return "unknown"
+
+
+def get_instance_id() -> str:
+    """Return a unique instance identifier: {harness}-{pid}."""
+    return f"{_detect_harness()}-{os.getpid()}"
+
+
+# ── claim files (alert delivery dedup) ───────────────────────────────────────
+
+_CLAIM_TTL_SECONDS = 300  # 5 minutes — if a session crashes, claim expires
+
+
+def _claims_dir() -> Path:
+    """Return the claims directory, co-located with scheduler.json."""
+    return _scheduler_file().parent / "claims"
+
+
+def claim_alert(alert_id: str, instance_id: str | None = None) -> bool:
+    """Attempt to claim an alert for delivery. Returns True if claim succeeded.
+
+    Uses O_CREAT|O_EXCL for atomic file creation — first writer wins.
+    Stale claims (past TTL) are removed and re-claimable.
+    """
+    claims = _claims_dir()
+    claims.mkdir(parents=True, exist_ok=True)
+    claim_path = claims / f"{alert_id}.claimed"
+
+    # Check for stale claim
+    if claim_path.exists():
+        try:
+            data = json.loads(claim_path.read_text())
+            claimed_at = datetime.fromisoformat(data["claimed_at"])
+            ttl = data.get("ttl_seconds", _CLAIM_TTL_SECONDS)
+            if datetime.now(_get_local_tz()) - claimed_at < timedelta(seconds=ttl):
+                return False  # Valid claim exists
+            # Stale — remove and re-claim
+            claim_path.unlink(missing_ok=True)
+        except (json.JSONDecodeError, KeyError, OSError):
+            claim_path.unlink(missing_ok=True)
+
+    # Attempt atomic create
+    instance_id = instance_id or get_instance_id()
+    content = json.dumps(
+        {
+            "instance": instance_id,
+            "claimed_at": datetime.now(_get_local_tz()).isoformat(),
+            "ttl_seconds": _CLAIM_TTL_SECONDS,
+        }
+    )
+    try:
+        fd = os.open(str(claim_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        try:
+            os.write(fd, content.encode())
+        finally:
+            os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+
+
+def sweep_stale_claims(max_age_seconds: int = 86400) -> int:
+    """Remove claim files older than max_age_seconds. Returns count removed."""
+    claims = _claims_dir()
+    if not claims.exists():
+        return 0
+    removed = 0
+    now = datetime.now(_get_local_tz())
+    for claim_file in claims.glob("*.claimed"):
+        try:
+            data = json.loads(claim_file.read_text())
+            claimed_at = datetime.fromisoformat(data["claimed_at"])
+            if (now - claimed_at).total_seconds() > max_age_seconds:
+                claim_file.unlink()
+                removed += 1
+        except (json.JSONDecodeError, KeyError, OSError):
+            claim_file.unlink(missing_ok=True)
+            removed += 1
+    return removed
 
 
 # ── storage ──────────────────────────────────────────────────────────────────
@@ -862,6 +956,97 @@ def get_unseen_alerts() -> list[dict[str, Any]]:
 def get_active_watches() -> list[dict[str, Any]]:
     """Return all active watches."""
     return [i for i in load_items() if i["type"] == "watch" and i["status"] == "active"]
+
+
+# ── tick + pending (Phase 5B) ────────────────────────────────────────────────
+
+
+def run_tick(quiet: bool = False) -> dict[str, int]:
+    """Run one scheduler tick — poll watches, check reminders, sweep stale claims.
+
+    This is the canonical entry point for system cron:
+        */5 * * * * aya scheduler tick --quiet
+
+    Returns a summary dict: {"watches_checked": N, "alerts_generated": N, "claims_swept": N}
+    """
+    run_poll(quiet=quiet)
+    swept = sweep_stale_claims()
+    return {"claims_swept": swept}
+
+
+def get_pending(instance_id: str | None = None) -> dict[str, Any]:
+    """Get pending items for a session — alerts to deliver + session crons to register.
+
+    This is the SessionStart hook entry point:
+        aya scheduler pending --format text
+
+    Claims each alert it returns so other sessions don't re-deliver.
+
+    Returns:
+        {
+            "alerts": [list of unclaimed alert dicts],
+            "session_crons": [list of session-required recurring items],
+            "instance_id": str,
+        }
+    """
+    instance_id = instance_id or get_instance_id()
+    unseen = get_unseen_alerts()
+
+    # Claim and collect deliverable alerts
+    deliverable = []
+    for alert in unseen:
+        if claim_alert(alert["id"], instance_id):
+            deliverable.append(alert)
+
+    # Collect session-required recurring items
+    items = load_items()
+    session_crons = [
+        i
+        for i in items
+        if i.get("type") == "recurring"
+        and i.get("status", "active") == "active"
+        and i.get("session_required")
+    ]
+
+    return {
+        "alerts": deliverable,
+        "session_crons": session_crons,
+        "instance_id": instance_id,
+    }
+
+
+def format_pending(pending: dict[str, Any]) -> str:
+    """Format pending items as human-readable text for session injection."""
+    lines: list[str] = []
+    alerts = pending.get("alerts", [])
+    crons = pending.get("session_crons", [])
+
+    if alerts:
+        lines.append(f"📋 {len(alerts)} pending alert(s):")
+        now = datetime.now(_get_local_tz())
+        for a in alerts:
+            created = datetime.fromisoformat(a["created_at"])
+            delta = now - created
+            if delta.total_seconds() < 3600:
+                ago = f"{int(delta.total_seconds() / 60)} min ago"
+            elif delta.total_seconds() < 86400:
+                ago = f"{int(delta.total_seconds() / 3600)}h ago"
+            else:
+                ago = f"{int(delta.total_seconds() / 86400)}d ago"
+            lines.append(f"  • {a['message'][:70]} ({ago})")
+
+    if crons:
+        lines.append(f"\n⏰ {len(crons)} session cron(s) to register:")
+        for c in crons:
+            cron_id = c["id"][:12]
+            cron_expr = c["cron"]
+            cron_msg = c.get("message", c.get("prompt", ""))[:50]
+            lines.append(f'  • {cron_id}: "{cron_expr}" — {cron_msg}')
+
+    if not alerts and not crons:
+        lines.append("No pending items.")
+
+    return "\n".join(lines)
 
 
 def _display_items(items: list[dict[str, Any]]) -> None:

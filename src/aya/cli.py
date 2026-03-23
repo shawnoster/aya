@@ -35,9 +35,12 @@ from aya.scheduler import (
     add_watch,
     check_due,
     dismiss_item,
+    format_pending,
+    get_pending,
     list_items,
     parse_due,
     run_poll,
+    run_tick,
     show_alerts,
     snooze_item,
 )
@@ -682,8 +685,38 @@ def schedule_snooze(
 def schedule_poll(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output on no changes"),
 ) -> None:
-    """Run one poll cycle (for daemon/cron)."""
+    """Run one poll cycle (legacy — use 'tick' instead)."""
     run_poll(quiet=quiet)
+
+
+@schedule_app.command("tick")
+def schedule_tick(
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output"),
+) -> None:
+    """Run one scheduler tick — poll watches, check reminders, sweep stale claims.
+
+    Canonical entry point for system cron:
+        */5 * * * * aya scheduler tick --quiet
+    """
+    result = run_tick(quiet=quiet)
+    if not quiet:
+        console.print(f"[dim]Tick complete. Claims swept: {result['claims_swept']}[/dim]")
+
+
+@schedule_app.command("pending")
+def schedule_pending(
+    format_: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
+) -> None:
+    """Show pending items for this session — alerts to deliver + session crons.
+
+    SessionStart hook entry point:
+        aya scheduler pending --format text
+    """
+    pending = get_pending()
+    if format_ == "json":
+        console.print(json.dumps(pending, indent=2, default=str))
+    else:
+        console.print(format_pending(pending))
 
 
 @schedule_app.command("alerts")

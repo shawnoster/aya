@@ -14,6 +14,7 @@ from aya.workspace import (
     RESET_FILES,
     SKILL_NAMES,
     _install_skills,
+    _plan_skills,
     bootstrap_workspace,
     reset_workspace,
 )
@@ -181,6 +182,31 @@ class TestSkillsInstallation:
         assert (root / ".claude" / "commands" / "real-skill.md").exists()
         assert (root / "skills" / "real-skill" / "SKILL.md").exists()
         assert not (root / "skills" / "missing-skill").exists()
+
+    def test_plan_skills_reports_missing(self, tmp_path: Path) -> None:
+        """_plan_skills returns missing skills separately for warning output."""
+        root = tmp_path / "workspace"
+        root.mkdir()
+        skills_dir = tmp_path / "skills_src"
+        (skills_dir / "present").mkdir(parents=True)
+        (skills_dir / "present" / "SKILL.md").write_text("# Present")
+
+        to_install, to_skip, missing = _plan_skills(root, skills_dir, ["present", "absent"])
+        assert to_install == ["present"]
+        assert missing == ["absent"]
+        assert to_skip == []
+
+    def test_plan_skills_empty_source_dir(self, tmp_path: Path) -> None:
+        """When skills source dir has no skills, all are reported missing."""
+        root = tmp_path / "workspace"
+        root.mkdir()
+        empty_dir = tmp_path / "no_skills"
+        empty_dir.mkdir()
+
+        to_install, to_skip, missing = _plan_skills(root, empty_dir, ["a", "b", "c"])
+        assert to_install == []
+        assert to_skip == []
+        assert missing == ["a", "b", "c"]
 
 
 # ── Dotfile setup ─────────────────────────────────────────────────────────────

@@ -111,7 +111,9 @@ def bootstrap_workspace(
         else:
             scripts_to_copy.append(script_name)
 
-    skills_to_install, skills_to_skip = _plan_skills(root, skills_source_dir, SKILL_NAMES)
+    skills_to_install, skills_to_skip, skills_missing = _plan_skills(
+        root, skills_source_dir, SKILL_NAMES
+    )
 
     # Show plan
     if dirs_to_create:
@@ -136,6 +138,12 @@ def bootstrap_workspace(
         con.print("[bold]Skills to install:[/bold]")
         for name in skills_to_install:
             con.print(f"  [green]+[/green] .claude/commands/{name}.md  +  skills/{name}/SKILL.md")
+        con.print()
+
+    if skills_missing:
+        con.print("[yellow]Skills not bundled (source not found):[/yellow]")
+        for name in skills_missing:
+            con.print(f"  [yellow]⚠[/yellow] {name}")
         con.print()
 
     skipped = [
@@ -616,20 +624,21 @@ def _plan_skills(
     root: Path,
     skills_source_dir: Path,
     skill_names: list[str],
-) -> tuple[list[str], list[str]]:
-    """Return (to_install, to_skip) skill name lists."""
-    to_install, to_skip = [], []
+) -> tuple[list[str], list[str], list[str]]:
+    """Return (to_install, to_skip, missing) skill name lists."""
+    to_install, to_skip, missing = [], [], []
     for name in skill_names:
         source = skills_source_dir / name / "SKILL.md"
         if not source.exists():
-            continue  # skill not bundled — skip silently
+            missing.append(name)
+            continue
         legacy_target = root / ".claude" / "commands" / f"{name}.md"
         skill_target = root / "skills" / name / "SKILL.md"
         if legacy_target.exists() or skill_target.exists():
             to_skip.append(name)
         else:
             to_install.append(name)
-    return to_install, to_skip
+    return to_install, to_skip, missing
 
 
 def _install_skills(

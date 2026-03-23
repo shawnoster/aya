@@ -405,8 +405,8 @@ class TestDispatch:
         self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mock_publish = AsyncMock(return_value="a" * 64)
-        with patch("aya.cli.RelayClient") as MockClient:
-            MockClient.return_value.publish = mock_publish
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
                 [
@@ -429,8 +429,8 @@ class TestDispatch:
         self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mock_publish = AsyncMock(return_value="b" * 64)
-        with patch("aya.cli.RelayClient") as MockClient:
-            MockClient.return_value.publish = mock_publish
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
                 [

@@ -319,7 +319,9 @@ def dispatch(
         event_id = await client.publish(signed, recipient_nostr_pub)
 
         relay_count = len(relay_urls)
-        relay_display = relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
+        relay_display = (
+            relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
+        )
         console.print(
             Panel.fit(
                 f"[bold green]✓ Dispatched[/bold green]\n\n"

@@ -252,6 +252,89 @@ def send(
     )
 
 
+# ── dispatch ──────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def dispatch(
+    to: str = typer.Option(..., help="Recipient label (home) or DID"),
+    intent: str = typer.Option(..., help="What is this packet and why"),
+    files: list[Path] = typer.Option([], help="Files to include"),
+    context: str = typer.Option(None, help="Annotation for the receiving assistant"),
+    seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
+    opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
+    instance: str = typer.Option("default", help="Which local instance to send from"),
+    relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    conflict: ConflictStrategy = typer.Option(
+        ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
+    ),
+    profile: Path = typer.Option(DEFAULT_PROFILE),
+) -> None:
+    """Pack and send in one step — the natural 'pack for home' flow."""
+
+    async def _run() -> None:
+        p = _load_profile(profile)
+        local = p.instances.get(instance)
+        if not local:
+            err.print(f"[red]Instance '{instance}' not found. Run aya init.[/red]")
+            raise typer.Exit(1)
+
+        to_did = _resolve_did(to, p)
+
+        if seed:
+            if not opener:
+                err.print("[red]--opener required for seed packets.[/red]")
+                raise typer.Exit(1)
+            packet = Packet.as_seed(
+                from_did=local.did,
+                to_did=to_did,
+                intent=intent,
+                opener=opener,
+                context_summary=context or "",
+            )
+        elif files:
+            packet = Packet.from_files(
+                paths=[str(f) for f in files],
+                from_did=local.did,
+                to_did=to_did,
+                intent=intent,
+                context=context,
+            )
+        else:
+            content = sys.stdin.read()
+            packet = Packet(
+                **{"from": local.did, "to": to_did},
+                intent=intent,
+                context=context,
+                content_type=ContentType.MARKDOWN,
+                content=content,
+                conflict_strategy=conflict,
+            )
+
+        signed = packet.sign(local)
+
+        relay_urls = [relay] if relay else p.default_relays
+        recipient_nostr_pub = _resolve_nostr_pubkey(signed.to_did, p)
+        client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
+        event_id = await client.publish(signed, recipient_nostr_pub)
+
+        relay_count = len(relay_urls)
+        relay_display = relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
+        console.print(
+            Panel.fit(
+                f"[bold green]✓ Dispatched[/bold green]\n\n"
+                f"Intent:  [cyan]{signed.intent}[/cyan]\n"
+                f"Packet:  [dim]{signed.id[:8]}[/dim]\n"
+                f"Event:   [dim]{event_id[:8]}[/dim]\n"
+                f"Relay:   [dim]{relay_display}[/dim]\n"
+                f"To:      [dim]{to}[/dim]",
+                title="aya — dispatch",
+            )
+        )
+
+    asyncio.run(_run())
+
+
 # ── receive ───────────────────────────────────────────────────────────────────
 
 

@@ -400,7 +400,13 @@ class TestMissingFields:
         from aya.scheduler import get_pending, save_items
 
         save_items([
-            {"id": "no-status-cron", "type": "recurring", "session_required": True, "cron": "*/30 * * * *", "prompt": "test"},
+            {
+                "id": "no-status-cron",
+                "type": "recurring",
+                "session_required": True,
+                "cron": "*/30 * * * *",
+                "prompt": "test",
+            },
         ])
         pending = get_pending("test-instance")
         assert len(pending["session_crons"]) == 1
@@ -410,8 +416,13 @@ class TestMissingFields:
         from aya.scheduler import check_due, save_items
 
         save_items([
-            {"id": "bare-reminder", "type": "reminder", "due_at": "2020-01-01T00:00:00-07:00", "message": "old"},
+            {
+                "id": "bare-reminder",
+                "type": "reminder",
+                "due_at": "2020-01-01T00:00:00-07:00",
+                "message": "old",
+            },
         ])
         # Should not raise — item is skipped because status not in ("pending", "snoozed")
-        due, unseen = check_due()
+        due, _unseen = check_due()
         assert isinstance(due, list)

@@ -559,12 +559,13 @@ def _isolate_scheduler(tmp_path, monkeypatch):
     monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
 
 
+@pytest.mark.usefixtures("_isolate_scheduler")
 class TestScheduleStatusCLI:
-    def test_status_exits_zero(self, _isolate_scheduler):
+    def test_status_exits_zero(self):
         result = runner.invoke(app, ["schedule", "status"])
         assert result.exit_code == 0
 
-    def test_status_json_is_valid(self, _isolate_scheduler):
+    def test_status_json_is_valid(self):
         result = runner.invoke(app, ["schedule", "status", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -572,22 +573,22 @@ class TestScheduleStatusCLI:
         assert "pending_reminders" in data
         assert "total_items" in data
 
-    def test_status_text_has_summary(self, _isolate_scheduler):
+    def test_status_text_has_summary(self):
         result = runner.invoke(app, ["schedule", "status"])
         assert result.exit_code == 0
         assert "items" in result.output
 
-    def test_pending_exits_zero(self, _isolate_scheduler):
+    def test_pending_exits_zero(self):
         result = runner.invoke(app, ["schedule", "pending"])
         assert result.exit_code == 0
 
-    def test_pending_json_is_valid(self, _isolate_scheduler):
+    def test_pending_json_is_valid(self):
         result = runner.invoke(app, ["schedule", "pending", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "alerts" in data
         assert "session_crons" in data
 
-    def test_tick_exits_zero(self, _isolate_scheduler):
+    def test_tick_exits_zero(self):
         result = runner.invoke(app, ["schedule", "tick", "--quiet"])
         assert result.exit_code == 0

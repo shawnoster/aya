@@ -388,9 +388,11 @@ class TestMissingFields:
         """list_items should handle items that lack a status field."""
         from aya.scheduler import save_items
 
-        save_items([
-            {"id": "bare", "type": "recurring", "session_required": True, "cron": "0 * * * *"},
-        ])
+        save_items(
+            [
+                {"id": "bare", "type": "recurring", "session_required": True, "cron": "0 * * * *"},
+            ]
+        )
         # list_items filters on status — missing status should not crash
         result = list_items(show_all=True)
         assert len(result) == 1
@@ -399,15 +401,17 @@ class TestMissingFields:
         """get_pending should treat missing status as 'active' for recurring items."""
         from aya.scheduler import get_pending, save_items
 
-        save_items([
-            {
-                "id": "no-status-cron",
-                "type": "recurring",
-                "session_required": True,
-                "cron": "*/30 * * * *",
-                "prompt": "test",
-            },
-        ])
+        save_items(
+            [
+                {
+                    "id": "no-status-cron",
+                    "type": "recurring",
+                    "session_required": True,
+                    "cron": "*/30 * * * *",
+                    "prompt": "test",
+                },
+            ]
+        )
         pending = get_pending("test-instance")
         assert len(pending["session_crons"]) == 1
 
@@ -415,14 +419,16 @@ class TestMissingFields:
         """check_due should not crash on items missing status."""
         from aya.scheduler import check_due, save_items
 
-        save_items([
-            {
-                "id": "bare-reminder",
-                "type": "reminder",
-                "due_at": "2020-01-01T00:00:00-07:00",
-                "message": "old",
-            },
-        ])
+        save_items(
+            [
+                {
+                    "id": "bare-reminder",
+                    "type": "reminder",
+                    "due_at": "2020-01-01T00:00:00-07:00",
+                    "message": "old",
+                },
+            ]
+        )
         # Should not raise — item is skipped because status not in ("pending", "snoozed")
         due, _unseen = check_due()
         assert isinstance(due, list)

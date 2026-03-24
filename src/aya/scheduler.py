@@ -395,6 +395,7 @@ def add_seed_alert(
     context_summary: str,
     open_questions: list[str],
     from_label: str,
+    packet_id: str = "",
 ) -> dict[str, Any]:
     """Persist a seed packet as an unseen alert so it surfaces via pending on next session start."""
     now = datetime.now(_get_local_tz())
@@ -406,6 +407,9 @@ def add_seed_alert(
         detail_lines.extend(f"  • {q}" for q in open_questions)
     alert = {
         "id": _new_id(),
+        # source_item_id is required by run_poll/tick for existing_sources dedup;
+        # use the originating packet ID so the alert can be traced back to its source.
+        "source_item_id": packet_id or _new_id(),
         "created_at": now.isoformat(),
         "message": f"Seed from {from_label}: {intent}",
         "details": {

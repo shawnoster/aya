@@ -956,6 +956,7 @@ def _ingest(packet: Packet) -> None:
             context_summary=seed.get("context_summary", ""),
             open_questions=seed.get("open_questions", []),
             from_label=from_label,
+            packet_id=packet.id,
         )
     else:
         console.print(

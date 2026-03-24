@@ -306,7 +306,11 @@ def main(console: Console | None = None) -> None:
         _exists(ASSISTANT / "persona.md", "Ship persona prompt"),
         _exists(MEMORY / "README.md", "memory::README.md"),
         _exists(MEMORY / "preferences.md", "memory::preferences.md"),
-        _exists(MEMORY / "cron-schedules.md", "memory::cron-schedules.md"),
+        CheckResult(
+            name="memory::cron-schedules.md",
+            ok=(MEMORY / "cron-schedules.md").exists() or bool(get_active_watches()),
+            detail=str(MEMORY / "cron-schedules.md"),
+        ),
         _exists(MEMORY / "activity-tracker.md", "memory::activity-tracker.md"),
         _exists(MEMORY / "done-log.md", "memory::done-log.md"),
         CheckResult("Assistant profile", profile is not None, str(PROFILE)),

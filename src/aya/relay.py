@@ -168,8 +168,9 @@ class RelayClient:
         """
         Yield packets addressed to this instance's pubkey, querying all relays.
 
-        Results are deduplicated by packet ID.  Filters by *since* timestamp —
-        use *last_checked* from the profile.
+        Results are deduplicated by packet ID across relays.  Callers that want
+        a time-bounded fetch can pass *since*; omitting it fetches the most
+        recent matching events up to *limit* from each relay.
         """
         seen_ids: set[str] = set()
         for relay_url in self._relay_urls:

@@ -420,12 +420,14 @@ def receive(
         # Update last_checked now that we've successfully fetched from all relays.
         # This is intentionally done before ingestion so the window advances even
         # if the user declines a packet — the 60s buffer above covers re-delivery.
+        # Persisted immediately so the fetch window advances even if ingestion
+        # fails or is interrupted partway through.
         now_iso = datetime.now(UTC).isoformat()
         for url in relay_urls:
             p.last_checked[url] = now_iso
+        p.save(profile)
 
         if not packets:
-            p.save(profile)
             if not quiet:
                 console.print("[dim]No pending packets.[/dim]")
             return
@@ -446,7 +448,6 @@ def receive(
                     )
 
         if not verified:
-            p.save(profile)
             if not quiet:
                 console.print("[dim]No valid packets.[/dim]")
             return

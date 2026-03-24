@@ -82,6 +82,14 @@ def bootstrap_workspace(
 
     # Determine what to create
     files = _get_files(root_str)
+
+    # If a legacy profile exists as a real file, skip writing the default
+    # profile.json so _setup_dotfiles can migrate the legacy content instead.
+    legacy_profile = Path.home() / ".copilot" / "assistant_profile.json"
+    has_legacy_profile = legacy_profile.exists() and not legacy_profile.is_symlink()
+    if has_legacy_profile:
+        files = [(p, c) for p, c in files if p != "assistant/profile.json"]
+
     dirs_to_create = [d for d in DIRS if not (root / d).exists()]
     files_to_create = [(p, c) for p, c in files if not (root / p).exists()]
     files_to_skip = [(p, c) for p, c in files if (root / p).exists()]
@@ -127,30 +135,29 @@ def bootstrap_workspace(
 
     if not dirs_to_create and not files_to_create and not skills_to_install:
         con.print("[green]Nothing to do — workspace is already set up.[/green]")
-        return
+    else:
+        if interactive and not typer.confirm("Proceed?", default=True):
+            con.print("Aborted.")
+            return
 
-    if interactive and not typer.confirm("Proceed?", default=True):
-        con.print("Aborted.")
-        return
+        # Create directories
+        for d in dirs_to_create:
+            (root / d).mkdir(parents=True, exist_ok=True)
 
-    # Create directories
-    for d in dirs_to_create:
-        (root / d).mkdir(parents=True, exist_ok=True)
+        # Write files
+        for path, content in files_to_create:
+            full_path = root / path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content)
 
-    # Write files
-    for path, content in files_to_create:
-        full_path = root / path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_text(content)
+        # Install skills
+        _install_skills(root, skills_source_dir, skills_to_install, con)
 
-    # Install skills
-    _install_skills(root, skills_source_dir, skills_to_install, con)
+        con.print(f"\n[bold green]✓ Workspace bootstrapped at {root}[/bold green]")
 
-    # ── Dotfiles (user home) ─────────────────────────────────────────────
+    # ── Dotfiles (user home) — always run, even if workspace is fully set up ──
     home = Path.home()
     dotfile_changes = _setup_dotfiles(home, root, con)
-
-    con.print(f"\n[bold green]✓ Workspace bootstrapped at {root}[/bold green]")
     if dotfile_changes:
         con.print(f"[green]✓ {dotfile_changes} dotfile(s) created/updated[/green]")
     con.print()
@@ -216,7 +223,9 @@ def reset_workspace(
         con.print(f"  [red]-[/red] {d.relative_to(root)}/")
     con.print()
     con.print(
-        "[dim]Preserved: assistant/persona.md · assistant/profile.json · assistant/memory/ · projects/[/dim]"
+        "[dim]Preserved: assistant/persona.md · assistant/profile.json · "
+        "assistant/memory/scheduler.json · assistant/memory/alerts.json · "
+        "assistant/memory/done-log.md · projects/[/dim]"
     )
     con.print()
 
@@ -702,7 +711,7 @@ def _setup_dotfiles(home: Path, root: Path, con: Console) -> int:
             legacy_profile.unlink()
         else:
             canonical_profile.parent.mkdir(parents=True, exist_ok=True)
-            legacy_profile.rename(canonical_profile)
+            shutil.move(str(legacy_profile), str(canonical_profile))
         legacy_profile.symlink_to(canonical_profile)
         con.print(f"  [green]+[/green] {legacy_profile} → assistant/profile.json (migrated)")
         changes += 1

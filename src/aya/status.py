@@ -19,6 +19,7 @@ from aya.scheduler import (
     get_due_reminders,
     get_unseen_alerts,
     get_upcoming_reminders,
+    load_items,
 )
 
 ROOT = _find_workspace_root()
@@ -287,6 +288,11 @@ def _perspective() -> str:
 # ── main ──────────────────────────────────────────────────────────────────────
 
 
+def _active_scheduler_items() -> list[dict[str, Any]]:
+    """Return all active scheduler items (watches, recurring, reminders)."""
+    return [i for i in load_items() if i.get("status") == "active"]
+
+
 def main(console: Console | None = None) -> None:
     console = console or Console()
     now_local = datetime.now(LOCAL_TZ)
@@ -308,7 +314,7 @@ def main(console: Console | None = None) -> None:
         _exists(MEMORY / "preferences.md", "memory::preferences.md"),
         CheckResult(
             name="memory::cron-schedules.md",
-            ok=(MEMORY / "cron-schedules.md").exists() or bool(get_active_watches()),
+            ok=(MEMORY / "cron-schedules.md").exists() or bool(_active_scheduler_items()),
             detail=str(MEMORY / "cron-schedules.md"),
         ),
         _exists(MEMORY / "activity-tracker.md", "memory::activity-tracker.md"),

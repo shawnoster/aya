@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -393,40 +393,16 @@ def receive(
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
-        # Use last_checked as a fetch window hint, with a 60s lookback buffer to
-        # handle relay propagation delay and clock skew.  ingested_ids is the
-        # authoritative dedup mechanism — last_checked is only a performance
-        # optimisation to avoid re-fetching the entire relay history.
-        # Only apply the filter when every configured relay has been checked at
-        # least once, so a newly-added relay always does a full fetch first.
-        checked_timestamps = [
-            datetime.fromisoformat(p.last_checked[url])
-            for url in relay_urls
-            if url in p.last_checked
-        ]
-        if len(checked_timestamps) == len(relay_urls):
-            since = min(checked_timestamps) - timedelta(seconds=60)
-        else:
-            since = None
-
+        # Fetch all packets addressed to this instance — ingested_ids is the
+        # authoritative dedup mechanism and filters already-seen packets below.
         packets: list[Packet] = []
         try:
-            async for packet in client.fetch_pending(since=since):
+            async for packet in client.fetch_pending():
                 packets.append(packet)
         except Exception:
             if not quiet:
                 err.print("[yellow]Could not reach relay — skipping inbox check.[/yellow]")
             return
-
-        # Update last_checked now that we've successfully fetched from all relays.
-        # This is intentionally done before ingestion so the window advances even
-        # if the user declines a packet — the 60s buffer above covers re-delivery.
-        # Persisted immediately so the fetch window advances even if ingestion
-        # fails or is interrupted partway through.
-        now_iso = datetime.now(UTC).isoformat()
-        for url in relay_urls:
-            p.last_checked[url] = now_iso
-        p.save(profile)
 
         if not packets:
             if not quiet:
@@ -475,7 +451,7 @@ def receive(
                 if sender_nostr_pub:
                     await client.send_receipt(packet, sender_nostr_pub)
 
-        # Save updated ingested_ids and last_checked
+        # Persist updated ingested_ids.
         p.save(profile)
 
     asyncio.run(_run())

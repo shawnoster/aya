@@ -17,6 +17,18 @@ from aya.scheduler import add_reminder
 runner = CliRunner()
 
 
+# ── TestVersion ───────────────────────────────────────────────────────────────
+
+
+class TestVersion:
+    def test_outputs_version(self) -> None:
+        import aya
+
+        result = runner.invoke(app, ["version"])
+        assert result.exit_code == 0, result.output
+        assert f"aya {aya.__version__}" in result.output
+
+
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 

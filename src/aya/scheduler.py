@@ -251,10 +251,13 @@ def parse_work_hours(text: str) -> tuple[tuple[int, int], tuple[int, int]]:
         raise ValueError(f"Cannot parse work hours: {text!r}  (expected HH:MM-HH:MM)")
     sh, sm, eh, em = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
     if not (0 <= sh <= 23 and 0 <= eh <= 23 and 0 <= sm <= 59 and 0 <= em <= 59):
-        raise ValueError(f"Invalid time in work hours: {text!r}  (hours must be 0-23, minutes 0-59)")
+        raise ValueError(
+            f"Invalid time in work hours: {text!r}  (hours must be 0-23, minutes 0-59)"
+        )
     if sh * 60 + sm >= eh * 60 + em:
         raise ValueError(
-            f"Invalid work hours window: {text!r}  (start time must be before end time on the same day)"
+            f"Invalid work hours window: {text!r}"
+            "  (start time must be before end time on the same day)"
         )
     return (sh, sm), (eh, em)
 

@@ -229,7 +229,10 @@ def parse_duration(text: str) -> timedelta:
     if m and (m.group(1) or m.group(2)):
         hours = int(m.group(1) or 0)
         minutes = int(m.group(2) or 0)
-        delta = timedelta(hours=hours, minutes=minutes)
+        try:
+            delta = timedelta(hours=hours, minutes=minutes)
+        except (OverflowError, TypeError) as exc:
+            raise ValueError(f"Duration too large to represent: {text!r}") from exc
         if delta.total_seconds() <= 0:
             raise ValueError(f"Duration must be positive: {text!r}")
         return delta
@@ -241,12 +244,18 @@ def parse_work_hours(text: str) -> tuple[tuple[int, int], tuple[int, int]]:
 
     Accepts "HH:MM-HH:MM", e.g. "08:00-18:00" → ((8, 0), (18, 0)).
 
-    Raises ValueError if the string cannot be parsed.
+    Raises ValueError if the string cannot be parsed or represents an invalid window.
     """
     m = _WORK_HOURS_RE.match(text.strip())
     if not m:
         raise ValueError(f"Cannot parse work hours: {text!r}  (expected HH:MM-HH:MM)")
     sh, sm, eh, em = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+    if not (0 <= sh <= 23 and 0 <= eh <= 23 and 0 <= sm <= 59 and 0 <= em <= 59):
+        raise ValueError(f"Invalid time in work hours: {text!r}  (hours must be 0-23, minutes 0-59)")
+    if sh * 60 + sm >= eh * 60 + em:
+        raise ValueError(
+            f"Invalid work hours window: {text!r}  (start time must be before end time on the same day)"
+        )
     return (sh, sm), (eh, em)
 
 
@@ -290,9 +299,12 @@ def get_last_activity() -> datetime | None:
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw)
+        dt = datetime.fromisoformat(raw)
     except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_get_local_tz())
+    return dt
 
 
 def is_idle(threshold_str: str, now: datetime | None = None) -> bool:
@@ -1203,7 +1215,9 @@ def get_pending(instance_id: str | None = None) -> dict[str, Any]:
     Returns:
         {
             "alerts": [list of unclaimed alert dicts],
-            "session_crons": [list of session-required recurring items],
+            "session_crons": [list of session-required recurring items that are active],
+            "suppressed_crons": [list of {"item": ..., "reason": str} for crons skipped
+                                 due to idle back-off or outside work hours],
             "instance_id": str,
         }
     """

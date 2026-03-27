@@ -66,7 +66,7 @@ class TestParseDuration:
             parse_duration("gibberish")
 
     def test_zero_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Duration must be positive"):
             parse_duration("0m")
 
 
@@ -210,11 +210,11 @@ class TestAddRecurringIdleFields:
         assert items[0]["only_during"] == "09:00-17:00"
 
     def test_invalid_idle_back_off_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Cannot parse duration"):
             add_recurring("Bad", "27 * * * *", idle_back_off="bad-format")
 
     def test_invalid_only_during_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Cannot parse work hours"):
             add_recurring("Bad", "27 * * * *", only_during="9am-5pm")
 
 

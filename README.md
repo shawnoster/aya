@@ -110,6 +110,24 @@ CCR minimum interval is 1 hour. aya can fire at any cron interval.
 
 ---
 
+## One-prompt setup
+
+Already have aya installed on another machine? Give Claude Code this prompt on the new machine and it will handle everything:
+
+> Install aya (`uv tool install aya-ai-assist`), initialize identity with `aya init --label <LABEL>` (use "home" or "work"), then pair with my other instance — run `aya pair --label <LABEL> --instance <LABEL>` and give me the pairing code (or use `--code <CODE>` if I already have one). After pairing, set up Claude Code hooks by adding the aya SessionStart and PostToolUse hooks to `~/.claude/settings.json` (see the "Agent integration" section of the aya README for the exact JSON). Finally, register a relay poll cron: `aya schedule recurring -m "relay-poll" -c "*/10 * * * *" -p "Run: aya receive --instance <LABEL> --auto-ingest --quiet. If any packets were ingested, surface their content to the user." --idle-back-off 30m`. Verify everything works with `aya status`.
+
+Replace `<LABEL>` with this machine's role (`home` or `work`) and `<CODE>` with a pairing code from the other machine if you have one.
+
+### What that prompt does
+
+1. **Installs aya** globally via uv
+2. **Creates identity** — generates ed25519 + secp256k1 keypairs
+3. **Pairs instances** — exchanges trust via short-lived relay code
+4. **Wires Claude Code hooks** — session start receives packets, registers crons, surfaces alerts; post-tool-use watches CI
+5. **Registers relay polling** — checks for incoming packets every 10 minutes during active sessions
+
+---
+
 ## Agent integration (Claude Code)
 
 aya is designed to surface alerts and reminders *into* your agent session, not just on the terminal. Here's how to wire it up.

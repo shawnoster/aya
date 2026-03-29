@@ -52,6 +52,9 @@ aya inbox --instance home
 # Receive and ingest trusted packets
 aya receive --instance home --auto-ingest --quiet
 
+# Fully non-interactive receive — ingest everything without prompting (trusted or not)
+aya receive --instance home --auto-ingest --yes --quiet
+
 # Set up recurring relay poll (persists across sessions)
 aya schedule recurring -m "relay-poll" -c "*/10 * * * *" \
   -p "Run: aya receive --instance home --auto-ingest --quiet. If any packets were ingested, surface their content to the user."
@@ -73,6 +76,10 @@ aya pair --code WORD-WORD-1234 --label work --instance work
 # Check status
 aya status
 ```
+
+> **`--instance` vs `--label`** — these look similar but mean different things:
+> - `--instance` is your **local identity** (which keypair to act as). It matches the label you used with `aya init --label <name>`. If you only have one instance it is selected automatically — even if the name you pass doesn't match — so you can omit `--instance` entirely after a fresh `aya init`.
+> - `--label` is a **name you assign to a remote peer** — either the name you broadcast when pairing (`aya pair` initiator) or the name you give to the peer you're pairing with (`aya pair` joiner).
 
 ## How Session Crons Work
 

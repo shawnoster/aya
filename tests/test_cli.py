@@ -60,6 +60,34 @@ def profile_with_trusted(profile_with_instance: Path) -> Path:
     return profile_with_instance
 
 
+@pytest.fixture
+def profile_with_named_instance(profile_path: Path) -> Path:
+    """Profile with a single 'work' instance — no 'default' instance."""
+    identity = Identity.generate("work")
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.instances["work"] = identity
+    profile.save(profile_path)
+    return profile_path
+
+
+@pytest.fixture
+def profile_with_multiple_instances(profile_path: Path) -> Path:
+    """Profile with 'work' and 'laptop' instances — no 'default' instance."""
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.instances["work"] = Identity.generate("work")
+    profile.instances["laptop"] = Identity.generate("laptop")
+    profile.save(profile_path)
+    return profile_path
+
+
+@pytest.fixture
+def profile_with_no_instances(profile_path: Path) -> Path:
+    """Profile with no instances registered — simulates pre-init state."""
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.save(profile_path)
+    return profile_path
+
+
 # ── init ─────────────────────────────────────────────────────────────────────
 
 
@@ -279,6 +307,87 @@ class TestPack:
         )
         assert result.exit_code != 0
 
+    def test_pack_smart_default_single_named_instance(
+        self, profile_with_named_instance: Path, tmp_path: Path
+    ) -> None:
+        """When only one instance exists and its name differs from --instance, use it anyway."""
+        p = Profile.load(profile_with_named_instance)
+        # Add a trusted key so the pack can resolve a recipient
+        remote = Identity.generate("remote")
+        p.trusted_keys["remote"] = TrustedKey(
+            did=remote.did, label="remote", nostr_pubkey=remote.nostr_public_hex
+        )
+        p.save(profile_with_named_instance)
+
+        out_file = tmp_path / "packet.json"
+        result = runner.invoke(
+            app,
+            [
+                "pack",
+                "--to",
+                "remote",
+                "--intent",
+                "smart default test",
+                "--out",
+                str(out_file),
+                "--instance",
+                "default",  # no 'default' instance — only 'work' exists
+                "--profile",
+                str(profile_with_named_instance),
+            ],
+            input="hello\n",
+        )
+        assert result.exit_code == 0, result.output
+        assert out_file.exists()
+
+    def test_pack_multiple_instances_shows_available_names(
+        self, profile_with_multiple_instances: Path, tmp_path: Path
+    ) -> None:
+        """When multiple instances exist and requested one is absent, error lists them."""
+        result = runner.invoke(
+            app,
+            [
+                "pack",
+                "--to",
+                "did:key:z6Mkfake",
+                "--intent",
+                "fail",
+                "--instance",
+                "default",
+                "--profile",
+                str(profile_with_multiple_instances),
+            ],
+            input="data\n",
+        )
+        assert result.exit_code != 0
+        # Error should mention all available instance names
+        combined = result.stdout + (result.stderr or "")
+        assert "work" in combined
+        assert "laptop" in combined
+
+    def test_pack_no_instances_prompts_init(
+        self, profile_with_no_instances: Path, tmp_path: Path
+    ) -> None:
+        """When no instances exist, error tells user to run aya init."""
+        result = runner.invoke(
+            app,
+            [
+                "pack",
+                "--to",
+                "did:key:z6Mkfake",
+                "--intent",
+                "fail",
+                "--instance",
+                "default",
+                "--profile",
+                str(profile_with_no_instances),
+            ],
+            input="data\n",
+        )
+        assert result.exit_code != 0
+        combined = result.stdout + (result.stderr or "")
+        assert "aya init" in combined
+
 
 # ── schedule remind ──────────────────────────────────────────────────────────
 
@@ -454,7 +563,19 @@ class TestDispatch:
         )
         assert result.exit_code != 0
 
-    def test_dispatch_missing_instance_fails(self, profile_with_trusted: Path) -> None:
+    def test_dispatch_missing_instance_fails(self, profile_with_multiple_instances: Path) -> None:
+        """When multiple instances exist and requested one is absent, dispatch must fail.
+
+        Uses a multi-instance profile so the smart single-instance fallback doesn't
+        silently succeed — the non-existent name must produce a non-zero exit.
+        """
+        p = Profile.load(profile_with_multiple_instances)
+        home = Identity.generate("home")
+        p.trusted_keys["home"] = TrustedKey(
+            did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
+        )
+        p.save(profile_with_multiple_instances)
+
         result = runner.invoke(
             app,
             [
@@ -466,7 +587,7 @@ class TestDispatch:
                 "--instance",
                 "nonexistent",
                 "--profile",
-                str(profile_with_trusted),
+                str(profile_with_multiple_instances),
             ],
             input="data\n",
         )

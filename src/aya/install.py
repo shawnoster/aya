@@ -212,7 +212,8 @@ def _load_claude_settings(path: Path | None = None) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        data: dict[str, Any] = json.loads(path.read_text())
+        return data
     except (json.JSONDecodeError, OSError):
         return {}
 
@@ -309,10 +310,12 @@ def install_scheduler(dry_run: bool = False, settings_path: Path | None = None) 
 
     # Hooks
     try:
-        installed, already, updated = _install_hooks(dry_run=dry_run, settings_path=settings_path)
-        result.hooks_installed = installed
-        result.hooks_already_present = already
-        result.hooks_updated = updated
+        h_installed, h_already, h_updated = _install_hooks(
+            dry_run=dry_run, settings_path=settings_path
+        )
+        result.hooks_installed = h_installed
+        result.hooks_already_present = h_already
+        result.hooks_updated = h_updated
     except (OSError, json.JSONDecodeError) as exc:
         result.errors.append(f"settings.json failed: {exc}")
 

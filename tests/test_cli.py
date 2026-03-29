@@ -735,7 +735,7 @@ class TestScheduleStatusCLI:
         assert result.exit_code == 0
 
     def test_status_json_is_valid(self):
-        result = runner.invoke(app, ["schedule", "status", "--json"])
+        result = runner.invoke(app, ["schedule", "status", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "active_watches" in data

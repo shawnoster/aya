@@ -810,22 +810,31 @@ class TestReceive:
         saved = Profile.load(profile_with_instance)
         assert packet.id in saved.ingested_ids
 
-    def test_yes_short_flag_works(self, profile_with_sender: Path, sender: Identity) -> None:
-        """-y must behave identically to --yes."""
-        p = Profile.load(profile_with_sender)
-        packet = self._signed_packet(sender, p.instances["default"].did, intent="Short flag")
+    def test_yes_short_flag_works(self, profile_with_instance: Path) -> None:
+        """-y must behave identically to --yes for untrusted senders and skip prompts."""
+        # Use an unknown sender so the packet is treated as untrusted.
+        unknown_sender = Identity.generate("unknown")
+        p = Profile.load(profile_with_instance)
+        packet = self._signed_packet(
+            unknown_sender, p.instances["default"].did, intent="Short flag"
+        )
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
-            mock_cls.return_value.fetch_pending = mock_fetch
-            mock_cls.return_value.send_receipt = AsyncMock()
-            result = runner.invoke(
-                app,
-                ["receive", "-y", "--profile", str(profile_with_sender)],
+        # If -y is wired correctly, typer.confirm must not be called.
+        with patch("typer.confirm") as mock_confirm:
+            mock_confirm.side_effect = AssertionError(
+                "typer.confirm should not be called when -y is used"
             )
+            with patch("aya.cli.RelayClient") as mock_cls:
+                mock_cls.return_value.fetch_pending = mock_fetch
+                mock_cls.return_value.send_receipt = AsyncMock()
+                result = runner.invoke(
+                    app,
+                    ["receive", "-y", "--profile", str(profile_with_instance)],
+                )
 
         assert result.exit_code == 0, result.output
-        saved = Profile.load(profile_with_sender)
+        saved = Profile.load(profile_with_instance)
         assert packet.id in saved.ingested_ids

@@ -137,7 +137,7 @@ Add these three hooks to `~/.claude/settings.json` under `"hooks": { "SessionSta
 | Hook | What it does |
 | ---- | ---- |
 | `health_crons.sh` | Reads pending session crons, injects `CronCreate` instructions into session context |
-| `aya receive --quiet --auto-ingest` | Ingests trusted Nostr packets in the background |
+| `aya receive --quiet --auto-ingest` | Ingests packets from trusted senders in the background. Packets from unknown senders are skipped silently in non-interactive contexts. |
 | `aya schedule pending --format text` | Prints due reminders and alerts directly into the session |
 
 ### The session cron mechanism
@@ -155,7 +155,7 @@ The agent reads those instructions and **must call `CronCreate` for each cron be
 ```bash
 # Watch a PR — fires every 15 min, Mon–Fri
 aya schedule recurring \
-  --id "pr123-merge-watch" \
+  --message "pr123-merge-watch" \
   --cron "*/15 * * * 1-5" \
   --prompt "Check PR #123. If merged, watch staging deploy and notify."
 ```

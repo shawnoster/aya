@@ -125,38 +125,26 @@ All aya data lives under `~/.aya/`:
 
 ## Claude Code Integration
 
-### Required hooks in `~/.claude/settings.json`:
+### Quick setup
 
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [{ "type": "command", "command": "aya hook crons", "statusMessage": "Registering crons..." }]
-      },
-      {
-        "hooks": [{ "type": "command", "command": "aya receive --quiet --auto-ingest 2>/dev/null || true", "statusMessage": "Checking packets...", "async": true }]
-      },
-      {
-        "hooks": [{ "type": "command", "command": "aya schedule pending --format text 2>/dev/null || true", "statusMessage": "Loading scheduler..." }]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "aya ci watch 2>/dev/null || true", "statusMessage": "Watching CI...", "asyncRewake": true }]
-      }
-    ]
-  }
-}
+```bash
+aya schedule install        # installs crontab + Claude Code hooks
+aya schedule install --dry-run  # preview without changing anything
 ```
 
-| Hook | Purpose |
-|------|---------|
-| `aya hook crons` | Converts aya's recurring schedules into Claude Code CronCreate calls |
-| `aya receive` | Ingests packets from trusted senders in background |
-| `aya schedule pending` | Surfaces due reminders and alerts into session context |
-| `aya ci watch` | After `git push`, monitors CI and wakes agent if checks fail |
+This installs the system crontab entry for background polling and all required
+Claude Code hooks in `~/.claude/settings.json`. Run it once per machine.
+To remove everything: `aya schedule uninstall`.
+
+### Hooks installed
+
+| Hook | Event | Purpose |
+|------|-------|---------|
+| `aya schedule activity` | SessionStart, PreToolUse | Resets idle back-off timer on session start and each tool call |
+| `aya hook crons` | SessionStart | Converts aya's recurring schedules into Claude Code CronCreate calls |
+| `aya receive` | SessionStart | Ingests packets from trusted senders in background |
+| `aya schedule pending` | SessionStart | Surfaces due reminders and alerts into session context |
+| `aya ci watch` | PostToolUse (Bash) | After `git push`, monitors CI and wakes agent if checks fail |
 
 ## Common Patterns
 
@@ -186,6 +174,6 @@ aya schedule status
 
 - All `--format json` output uses `console.out()` to avoid Rich wrapping — safe to pipe.
 - Item IDs support prefix matching: `aya schedule dismiss 5dc6` works if unambiguous.
-- `aya schedule tick --quiet` is the system cron entry point (`*/5 * * * *`).
+- `aya schedule tick --quiet` is the system cron entry point (`*/5 * * * *`), installed via `aya schedule install`.
 - Packets expire after 7 days by default.
 - Trust is explicit — only paired/trusted DIDs are accepted.

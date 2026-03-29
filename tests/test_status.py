@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 
 from rich.console import Console
 
@@ -164,6 +165,47 @@ class TestRenderRich:
         assert "Name re-eval due" in console.export_text()
 
 
+def _sample_alerts():
+    return [
+        {
+            "id": "alert-1",
+            "source_item_id": "watch-abcd1234",
+            "created_at": "2026-03-29T10:00:00-07:00",
+            "message": "PR 85 merged",
+            "seen": False,
+        }
+    ]
+
+
+def _sample_due(now, **kw):
+    return [
+        {
+            "id": "rem-due-1234",
+            "due_at": now.isoformat(),
+            "message": "Review PR feedback",
+        }
+    ]
+
+
+def _sample_upcoming(now, **kw):
+    return [
+        {
+            "due_at": (now + timedelta(hours=2)).isoformat(),
+            "message": "Team standup",
+        }
+    ]
+
+
+def _sample_watches():
+    return [
+        {
+            "id": "watch-5678abcd",
+            "message": "PR 90 approved",
+            "last_checked_at": "2026-03-29T14:00:00-07:00",
+        }
+    ]
+
+
 class TestRenderPlain:
     def test_renders_compact(self, monkeypatch):
         monkeypatch.setattr("aya.status.get_unseen_alerts", list)
@@ -174,6 +216,43 @@ class TestRenderPlain:
         output = _render_plain(_gather_status())
         assert "Systems" in output
         assert "\n\n" not in output  # no blank lines
+
+    def test_renders_populated_data(self, monkeypatch):
+        monkeypatch.setattr("aya.status.get_unseen_alerts", _sample_alerts)
+        monkeypatch.setattr("aya.status.get_due_reminders", _sample_due)
+        monkeypatch.setattr("aya.status.get_upcoming_reminders", _sample_upcoming)
+        monkeypatch.setattr("aya.status.get_active_watches", _sample_watches)
+
+        output = _render_plain(_gather_status())
+        assert "alert:" in output
+        assert "PR 85 merged" in output
+        assert "due:" in output
+        assert "Review PR feedback" in output
+        assert "upcoming:" in output
+        assert "Team standup" in output
+        assert "watch:" in output
+        assert "PR 90 approved" in output
+
+    def test_renders_next_eval_when_due(self, monkeypatch, tmp_path):
+        profile_path = tmp_path / "profile.json"
+        yesterday = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+        profile_path.write_text(
+            json.dumps(
+                {
+                    "ship_mind_name": "GSV Test",
+                    "user_name": "Test",
+                    "name_next_reevaluation_at": yesterday,
+                }
+            )
+        )
+        monkeypatch.setattr("aya.status.PROFILE", profile_path)
+        monkeypatch.setattr("aya.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.status.get_active_watches", list)
+
+        output = _render_plain(_gather_status())
+        assert "Name re-eval due" in output
 
 
 class TestRenderJson:
@@ -189,4 +268,21 @@ class TestRenderJson:
         parsed = json_mod.loads(raw)
         assert "systems" in parsed
         assert "greeting" in parsed
+        assert "next_eval" in parsed
         assert parsed["systems"]["ok"] is True or parsed["systems"]["ok"] is False
+
+    def test_json_with_populated_data(self, monkeypatch):
+        import json as json_mod
+
+        monkeypatch.setattr("aya.status.get_unseen_alerts", _sample_alerts)
+        monkeypatch.setattr("aya.status.get_due_reminders", _sample_due)
+        monkeypatch.setattr("aya.status.get_upcoming_reminders", _sample_upcoming)
+        monkeypatch.setattr("aya.status.get_active_watches", _sample_watches)
+
+        raw = _render_json(_gather_status())
+        parsed = json_mod.loads(raw)
+        assert len(parsed["alerts"]) == 1
+        assert parsed["alerts"][0]["message"] == "PR 85 merged"
+        assert len(parsed["due"]) == 1
+        assert len(parsed["upcoming"]) == 1
+        assert len(parsed["watches"]) == 1

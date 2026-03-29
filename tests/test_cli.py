@@ -752,6 +752,42 @@ class TestHookCrons:
 
         assert ids == {"cron-health", "cron-relay"}, f"Missing cron IDs: {ids}"
 
+    def test_escapes_double_quotes_in_prompt(self, tmp_path, monkeypatch):
+        """Prompts with double quotes must be escaped to avoid malformed output."""
+        scheduler_file = tmp_path / "sched" / "scheduler.json"
+        alerts_file = tmp_path / "sched" / "alerts.json"
+        scheduler_file.parent.mkdir(parents=True)
+        scheduler_file.write_text(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "cron-quotes",
+                            "type": "recurring",
+                            "status": "active",
+                            "created_at": "2026-01-01T00:00:00-07:00",
+                            "message": "test",
+                            "session_required": True,
+                            "cron": "*/5 * * * *",
+                            "prompt": 'Say "hello" to the user.',
+                        }
+                    ]
+                }
+            )
+        )
+        alerts_file.write_text(json.dumps({"alerts": []}))
+        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+
+        result = runner.invoke(app, ["hook", "crons"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        ctx = data["hookSpecificOutput"]["additionalContext"]
+        # Quotes in the prompt must be escaped
+        assert r"\"hello\"" in ctx
+        # Must not contain unescaped quotes that would break parsing
+        assert 'prompt="Say \\"hello\\" to the user."' in ctx
+
     def test_does_not_claim_alerts(self, tmp_path, monkeypatch):
         """hook crons must not consume alerts — they belong to schedule pending."""
         scheduler_file = tmp_path / "sched" / "scheduler.json"
@@ -794,7 +830,7 @@ class TestScheduleStatusCLI:
         assert result.exit_code == 0
 
     def test_status_json_is_valid(self):
-        result = runner.invoke(app, ["schedule", "status", "--json"])
+        result = runner.invoke(app, ["schedule", "status", "--format", "json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert "active_watches" in data

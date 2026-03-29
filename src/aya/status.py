@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -183,6 +184,16 @@ def _render_plain(data: dict[str, Any]) -> str:
     for w in data["active_watches"][:4]:
         lines.append(f"  watch: {w['id'][:8]}  {w['message'][:50]}")
 
+    next_eval = data["next_eval"]
+    if isinstance(next_eval, str) and len(next_eval) >= 10:
+        try:
+            eval_dt = datetime.fromisoformat(next_eval.replace("Z", "+00:00"))
+            days_until = (eval_dt.date() - data["now_local"].date()).days
+            if days_until <= 1:
+                lines.append(f"  Name re-eval due: {next_eval[:10]}")
+        except ValueError:
+            pass
+
     lines.append(_perspective())
     return "\n".join(lines)
 
@@ -210,6 +221,7 @@ def _render_json(data: dict[str, Any]) -> str:
         ],
         "upcoming": [{"due_at": r["due_at"], "message": r["message"]} for r in data["upcoming"]],
         "watches": [{"id": w["id"][:8], "message": w["message"]} for w in data["active_watches"]],
+        "next_eval": data["next_eval"],
         "perspective": _perspective(),
     }
     return json.dumps(payload, indent=2, default=str)
@@ -291,12 +303,15 @@ def _render_rich(data: dict[str, Any], console: Console) -> None:
     console.print()
 
 
-def run_status(*, as_json: bool = False, rich: bool = False) -> None:
+def run_status(format_: str = "text") -> None:
     """Entry point for aya status subcommand."""
     data = _gather_status()
-    if as_json:
+    if format_ == "json":
         print(_render_json(data))  # noqa: T201 — raw stdout for JSON
-    elif rich:
+    elif format_ == "rich":
         _render_rich(data, Console())
-    else:
+    elif format_ == "text":
         print(_render_plain(data))  # noqa: T201 — raw stdout for plain text
+    else:
+        sys.stderr.write(f"aya status: unknown format '{format_}'\n")
+        raise SystemExit(2)

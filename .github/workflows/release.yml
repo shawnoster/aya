@@ -3,8 +3,6 @@ name: Release
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "pyproject.toml"  # skip re-trigger from PSR's version bump commit
   schedule:
     - cron: "0 10 * * 1"  # Every Monday at 10:00 UTC
   workflow_dispatch:
@@ -27,7 +25,7 @@ jobs:
     name: Semantic release
     runs-on: ubuntu-latest
     environment: pypi
-    if: github.ref == 'refs/heads/main'
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
 
     steps:
       - uses: actions/checkout@v6

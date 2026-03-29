@@ -10,7 +10,7 @@ aya is a CLI tool that AI agents call to schedule reminders, sync context betwee
 # One-shot reminder
 aya schedule remind -m "Check the PR" --due "in 1 hour"
 
-# Watch a GitHub PR (polls every 15 min)
+# Watch a GitHub PR (default polls every 5 min for PRs)
 aya schedule watch github-pr owner/repo#123 -m "PR approved" --remove-when merged_or_closed
 
 # Watch a Jira ticket
@@ -62,7 +62,7 @@ aya init --label home
 # Pair with another machine (initiator)
 aya pair --label home --instance home
 # On the other machine (joiner)
-aya pair --code WORD-WORD-1234 --label work
+aya pair --code WORD-WORD-1234 --label work --instance work
 
 # Check status
 aya status

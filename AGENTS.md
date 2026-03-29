@@ -52,6 +52,9 @@ aya inbox --instance home
 # Receive and ingest trusted packets
 aya receive --instance home --auto-ingest --quiet
 
+# Fully non-interactive receive — ingest everything without prompting (trusted or not)
+aya receive --instance home --auto-ingest --yes --quiet
+
 # Set up recurring relay poll (persists across sessions)
 aya schedule recurring -m "relay-poll" -c "*/10 * * * *" \
   -p "Run: aya receive --instance home --auto-ingest --quiet. If any packets were ingested, surface their content to the user."

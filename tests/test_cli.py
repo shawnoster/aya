@@ -80,6 +80,14 @@ def profile_with_multiple_instances(profile_path: Path) -> Path:
     return profile_path
 
 
+@pytest.fixture
+def profile_with_no_instances(profile_path: Path) -> Path:
+    """Profile with no instances registered — simulates pre-init state."""
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.save(profile_path)
+    return profile_path
+
+
 # ── init ─────────────────────────────────────────────────────────────────────
 
 
@@ -352,9 +360,33 @@ class TestPack:
             input="data\n",
         )
         assert result.exit_code != 0
-        # Error should mention available instance names
+        # Error should mention all available instance names
         combined = result.stdout + (result.stderr or "")
-        assert "work" in combined and "laptop" in combined
+        assert "work" in combined
+        assert "laptop" in combined
+
+    def test_pack_no_instances_prompts_init(
+        self, profile_with_no_instances: Path, tmp_path: Path
+    ) -> None:
+        """When no instances exist, error tells user to run aya init."""
+        result = runner.invoke(
+            app,
+            [
+                "pack",
+                "--to",
+                "did:key:z6Mkfake",
+                "--intent",
+                "fail",
+                "--instance",
+                "default",
+                "--profile",
+                str(profile_with_no_instances),
+            ],
+            input="data\n",
+        )
+        assert result.exit_code != 0
+        combined = result.stdout + (result.stderr or "")
+        assert "aya init" in combined
 
 
 # ── schedule remind ──────────────────────────────────────────────────────────

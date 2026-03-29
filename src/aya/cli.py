@@ -845,9 +845,7 @@ def ci_watch() -> None:
 
 @app.command()
 def profile(
-    profile_path: Path = typer.Option(
-        DEFAULT_PROFILE, "--profile", help="Path to profile.json (default: ~/.aya/profile.json)"
-    ),
+    profile_path: Path = typer.Option(DEFAULT_PROFILE, "--profile", help="Path to profile.json"),
 ) -> None:
     """Initialize or rotate the persistent assistant profile."""
     path = profile_path if str(profile_path) != str(DEFAULT_PROFILE) else PROFILE_PATH

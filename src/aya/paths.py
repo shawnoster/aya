@@ -27,5 +27,5 @@ ACTIVITY_FILE = MEMORY_DIR / "activity.json"
 LOCK_FILE = MEMORY_DIR / ".scheduler.lock"
 CLAIMS_DIR = MEMORY_DIR / "claims"
 
-# ── markdown data ───────────────────────────────────────────────────────────
+# ── legacy markdown (kept for migration, may be removed) ───────────────────
 CRON_SCHEDULES_PATH = MEMORY_DIR / "cron-schedules.md"

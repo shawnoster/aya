@@ -65,12 +65,12 @@ def _get_local_tz() -> ZoneInfo:
 
 # Lazy module attrs — lets tests monkeypatch these names via setattr.
 _LAZY_ATTRS: dict[str, Any] = {
-    "SCHEDULER_FILE": lambda: _paths.SCHEDULER_FILE,
-    "ALERTS_FILE": lambda: _paths.ALERTS_FILE,
-    "CONFIG_FILE": lambda: _paths.CONFIG_PATH,
-    "ACTIVITY_FILE": lambda: _paths.ACTIVITY_FILE,
-    "LOCK_FILE": lambda: _lock_file(),  # noqa: PLW0108
-    "CLAIMS_DIR": lambda: _claims_dir(),  # noqa: PLW0108
+    "SCHEDULER_FILE": _scheduler_file,
+    "ALERTS_FILE": _alerts_file,
+    "CONFIG_FILE": _config_file,
+    "ACTIVITY_FILE": _activity_file,
+    "LOCK_FILE": lambda: _lock_file(),  # noqa: PLW0108 — forward ref
+    "CLAIMS_DIR": lambda: _claims_dir(),  # noqa: PLW0108 — forward ref
     "LOCAL_TZ": _get_local_tz,
 }
 

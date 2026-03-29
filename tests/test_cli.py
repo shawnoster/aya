@@ -563,9 +563,7 @@ class TestDispatch:
         )
         assert result.exit_code != 0
 
-    def test_dispatch_missing_instance_fails(
-        self, profile_with_multiple_instances: Path
-    ) -> None:
+    def test_dispatch_missing_instance_fails(self, profile_with_multiple_instances: Path) -> None:
         """When multiple instances exist and requested one is absent, dispatch must fail.
 
         Uses a multi-instance profile so the smart single-instance fallback doesn't

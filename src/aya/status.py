@@ -23,7 +23,6 @@ from aya.scheduler import (
 
 # ── aya data paths (from ~/.aya) ────────────────────────────────────────────
 PROFILE = _paths.PROFILE_PATH
-CONFIG = _paths.CONFIG_PATH
 
 
 # ── data ──────────────────────────────────────────────────────────────────────
@@ -111,39 +110,125 @@ def _active_scheduler_items() -> list[dict[str, Any]]:
     return [i for i in load_items() if i.get("status") == "active"]
 
 
-def main(console: Console | None = None) -> None:
-    console = console or Console()
+def _gather_status() -> dict[str, Any]:
+    """Collect all status data into a plain dict."""
     now_local = datetime.now(LOCAL_TZ)
 
-    # Profile
     profile = _read_json(PROFILE)
     ship = profile.get("ship_mind_name", "GSV Unknown Vessel") if profile else "GSV Unknown Vessel"
     user = profile.get("user_name", "Shawn") if profile else "Shawn"
     next_eval = profile.get("name_next_reevaluation_at", "unknown") if profile else "unknown"
 
-    # System checks — aya data only
     checks: list[CheckResult] = [
         CheckResult("profile", profile is not None, str(PROFILE)),
-        CheckResult("workflow config", _read_json(CONFIG) is not None, str(CONFIG)),
         CheckResult(
             name="scheduler",
             ok=_paths.SCHEDULER_FILE.exists(),
             detail=str(_paths.SCHEDULER_FILE),
         ),
     ]
+
+    unseen: list[dict[str, Any]] = []
+    due: list[dict[str, Any]] = []
+    upcoming: list[dict[str, Any]] = []
+    active_watches: list[dict[str, Any]] = []
+    try:
+        unseen = get_unseen_alerts()
+        due = get_due_reminders(now_local)
+        upcoming = get_upcoming_reminders(now_local, hours=12)
+        active_watches = get_active_watches()
+    except Exception:
+        pass
+
+    return {
+        "now_local": now_local,
+        "ship": ship,
+        "user": user,
+        "next_eval": next_eval,
+        "checks": checks,
+        "unseen": unseen,
+        "due": due,
+        "upcoming": upcoming,
+        "active_watches": active_watches,
+    }
+
+
+def _render_plain(data: dict[str, Any]) -> str:
+    """Compact plain-text status — no Rich markup, minimal lines."""
+    checks = data["checks"]
+    ok = sum(1 for c in checks if c.ok)
+    total = len(checks)
+
+    lines: list[str] = []
+    lines.append(_greeting(data["now_local"], data["user"], data["ship"]))
+    lines.append(_time_flavor(data["now_local"]))
+
+    if ok == total:
+        lines.append(f"Systems {ok}/{total} OK")
+    else:
+        failed = [c for c in checks if not c.ok]
+        lines.append(f"Systems {ok}/{total} — failed: {', '.join(c.name for c in failed)}")
+
+    for a in data["unseen"][:4]:
+        lines.append(f"  alert: {a['source_item_id'][:8]}  {a['message'][:60]}")
+
+    for r in data["due"][:4]:
+        due_dt = datetime.fromisoformat(r["due_at"])
+        lines.append(f"  due: {r['id'][:8]}  {due_dt.strftime('%I:%M %p')}  {r['message'][:55]}")
+
+    for r in data["upcoming"][:3]:
+        rd = datetime.fromisoformat(r["due_at"])
+        lines.append(f"  upcoming: {rd.strftime('%I:%M %p')}  {r['message'][:55]}")
+
+    for w in data["active_watches"][:4]:
+        lines.append(f"  watch: {w['id'][:8]}  {w['message'][:50]}")
+
+    lines.append(_perspective())
+    return "\n".join(lines)
+
+
+def _render_json(data: dict[str, Any]) -> str:
+    """Machine-readable JSON status."""
+    checks = data["checks"]
+    ok = sum(1 for c in checks if c.ok)
+    total = len(checks)
+
+    payload: dict[str, Any] = {
+        "greeting": _greeting(data["now_local"], data["user"], data["ship"]),
+        "time_flavor": _time_flavor(data["now_local"]),
+        "systems": {
+            "ok": ok == total,
+            "passed": ok,
+            "total": total,
+            "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in checks],
+        },
+        "alerts": [
+            {"id": a["source_item_id"][:8], "message": a["message"]} for a in data["unseen"]
+        ],
+        "due": [
+            {"id": r["id"][:8], "due_at": r["due_at"], "message": r["message"]} for r in data["due"]
+        ],
+        "upcoming": [{"due_at": r["due_at"], "message": r["message"]} for r in data["upcoming"]],
+        "watches": [{"id": w["id"][:8], "message": w["message"]} for w in data["active_watches"]],
+        "perspective": _perspective(),
+    }
+    return json.dumps(payload, indent=2, default=str)
+
+
+def _render_rich(data: dict[str, Any], console: Console) -> None:
+    """Full Rich-formatted status for interactive terminal use."""
+    now_local = data["now_local"]
+    checks = data["checks"]
     ok = sum(1 for c in checks if c.ok)
     total = len(checks)
     all_ok = ok == total
+    next_eval = data["next_eval"]
 
-    # ── Output ──────────────────────────────────────────────────────────────
-
-    # Greeting
     console.print()
-    console.print(f"[bold]{_greeting(now_local, user, ship)}[/bold]")
+    console.print(f"[bold]{_greeting(now_local, data['user'], data['ship'])}[/bold]")
     console.print(f"[dim]{_time_flavor(now_local)}[/dim]")
     console.print()
 
-    # Systems — compact when green, verbose on failure
     if all_ok:
         console.print(f"[green]✓[/green] Systems  [dim]{ok}/{total} checks passed[/dim]")
     else:
@@ -163,58 +248,42 @@ def main(console: Console | None = None) -> None:
 
     console.print()
 
-    # Reminders and alerts
-    try:
-        now_tz = datetime.now(LOCAL_TZ)
+    unseen = data["unseen"]
+    if unseen:
+        console.print(f"[bold red]🔔 {len(unseen)} alert(s):[/bold red]")
+        for a in unseen[:4]:
+            console.print(f"  📢 {a['source_item_id'][:8]}  {a['message'][:60]}")
+        if len(unseen) > 4:
+            console.print(f"  [dim]… and {len(unseen) - 4} more[/dim]")
+        console.print()
 
-        # Unseen alerts from daemon
-        unseen = get_unseen_alerts()
-        if unseen:
-            console.print(f"[bold red]🔔 {len(unseen)} alert(s):[/bold red]")
-            for a in unseen[:4]:
-                console.print(f"  📢 {a['source_item_id'][:8]}  {a['message'][:60]}")
-            if len(unseen) > 4:
-                console.print(f"  [dim]… and {len(unseen) - 4} more[/dim]")
-            console.print()
+    due = data["due"]
+    if due:
+        console.print(f"[bold yellow]⏰ {len(due)} reminder(s) due:[/bold yellow]")
+        for r in due[:4]:
+            due_dt = datetime.fromisoformat(r["due_at"])
+            console.print(f"  🔴 {r['id'][:8]}  {due_dt.strftime('%I:%M %p')}  {r['message'][:55]}")
+        if len(due) > 4:
+            console.print(f"  [dim]… and {len(due) - 4} more[/dim]")
+        console.print()
 
-        # Due reminders
-        due = get_due_reminders(now_tz)
-        if due:
-            console.print(f"[bold yellow]⏰ {len(due)} reminder(s) due:[/bold yellow]")
-            for r in due[:4]:
-                due_dt = datetime.fromisoformat(r["due_at"])
-                console.print(
-                    f"  🔴 {r['id'][:8]}  {due_dt.strftime('%I:%M %p')}  {r['message'][:55]}"
-                )
-            if len(due) > 4:
-                console.print(f"  [dim]… and {len(due) - 4} more[/dim]")
-            console.print()
+    upcoming = data["upcoming"]
+    if upcoming:
+        console.print("[bold]Upcoming (12h):[/bold]")
+        for r in upcoming[:3]:
+            rd = datetime.fromisoformat(r["due_at"])
+            console.print(f"  ⏳ {rd.strftime('%I:%M %p')}  {r['message'][:55]}")
+        console.print()
 
-        # Upcoming reminders
-        upcoming = get_upcoming_reminders(now_tz, hours=12)
-        if upcoming:
-            console.print("[bold]Upcoming (12h):[/bold]")
-            for r in upcoming[:3]:
-                rd = datetime.fromisoformat(r["due_at"])
-                console.print(f"  ⏳ {rd.strftime('%I:%M %p')}  {r['message'][:55]}")
-            console.print()
+    active_watches = data["active_watches"]
+    if active_watches:
+        console.print(f"[bold]Watches ({len(active_watches)} active):[/bold]")
+        for w in active_watches[:4]:
+            last = w.get("last_checked_at")
+            last_str = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
+            console.print(f"  👁  {w['id'][:8]}  {w['message'][:50]}  [dim]checked {last_str}[/dim]")
+        console.print()
 
-        # Active watches
-        active_watches = get_active_watches()
-        if active_watches:
-            console.print(f"[bold]Watches ({len(active_watches)} active):[/bold]")
-            for w in active_watches[:4]:
-                last = w.get("last_checked_at")
-                last_str = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
-                console.print(
-                    f"  👁  {w['id'][:8]}  {w['message'][:50]}  [dim]checked {last_str}[/dim]"
-                )
-            console.print()
-
-    except Exception:
-        pass  # scheduler runtime error — skip silently
-
-    # Perspective + sign-off
     console.print(Rule(style="dim"))
     console.print(f"[dim italic]{_perspective()}[/dim italic]")
     if not all_ok:
@@ -222,6 +291,12 @@ def main(console: Console | None = None) -> None:
     console.print()
 
 
-def run_status() -> None:
+def run_status(*, as_json: bool = False, rich: bool = False) -> None:
     """Entry point for aya status subcommand."""
-    main()
+    data = _gather_status()
+    if as_json:
+        print(_render_json(data))  # noqa: T201 — raw stdout for JSON
+    elif rich:
+        _render_rich(data, Console())
+    else:
+        print(_render_plain(data))  # noqa: T201 — raw stdout for plain text

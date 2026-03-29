@@ -946,31 +946,28 @@ def hook_crons() -> None:
     if not crons:
         return
 
-    lines = [
-        (
-            "REQUIRED ACTION \u2014 Call CronCreate for each session cron "
-            "below before responding to the user. Do not skip this step."
-        ),
-        "",
-    ]
+    # Emit one hookSpecificOutput per cron so each gets its own system
+    # reminder and can't be truncated when multiple crons are bundled.
     for c in crons:
         cid = c.get("id", "")
         schedule = c.get("cron", "")
         prompt = c.get("prompt") or c.get("message") or c.get("description") or ""
         prompt = prompt.replace("\n", " ").strip()
-        lines.append(f'REGISTER via CronCreate: id="{cid}" schedule="{schedule}" prompt="{prompt}"')
-
-    context = "\n".join(lines)
-    console.out(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "SessionStart",
-                    "additionalContext": context,
-                }
-            }
+        context = (
+            "REQUIRED ACTION \u2014 Call CronCreate for each session cron "
+            "below before responding to the user. Do not skip this step.\n\n"
+            f'REGISTER via CronCreate: id="{cid}" schedule="{schedule}" prompt="{prompt}"'
         )
-    )
+        print(  # noqa: T201 — raw stdout for hook JSON
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": context,
+                    }
+                }
+            )
+        )
 
 
 # ── ci ────────────────────────────────────────────────────────────────────────
@@ -1007,9 +1004,12 @@ def profile(
 
 
 @app.command()
-def status() -> None:
+def status(
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable JSON output"),
+    rich: bool = typer.Option(False, "--rich", help="Full Rich-formatted output for terminals"),
+) -> None:
     """Workspace readiness check — systems, schedule, focus."""
-    run_status()
+    run_status(as_json=as_json, rich=rich)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

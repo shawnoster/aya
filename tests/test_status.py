@@ -8,11 +8,14 @@ from rich.console import Console
 
 from aya.status import (
     _exists,
+    _gather_status,
     _greeting,
     _perspective,
     _read_json,
+    _render_json,
+    _render_plain,
+    _render_rich,
     _time_flavor,
-    main,
 )
 
 # ── CheckResult / _exists ────────────────────────────────────────────────────
@@ -119,17 +122,17 @@ class TestPerspective:
 # ── main() rendering ─────────────────────────────────────────────────────────
 
 
-class TestMain:
+class TestRenderRich:
     def test_renders_output(self, monkeypatch):
-        """main() must produce output — regression guard for the 'prints nothing' bug."""
+        """_render_rich must produce output — regression guard for the 'prints nothing' bug."""
         console = Console(record=True)
-        # Patch scheduler helpers so they don't hit the filesystem
         monkeypatch.setattr("aya.status.get_unseen_alerts", list)
         monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
         monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
         monkeypatch.setattr("aya.status.get_active_watches", list)
 
-        main(console=console)
+        data = _gather_status()
+        _render_rich(data, console)
 
         output = console.export_text()
         assert "Systems" in output
@@ -144,7 +147,6 @@ class TestMain:
                 {
                     "ship_mind_name": "GSV Test",
                     "user_name": "Test",
-                    # yesterday — will trigger the "due" branch
                     "name_next_reevaluation_at": "2026-03-22T00:00:00Z",
                 }
             )
@@ -156,6 +158,35 @@ class TestMain:
         monkeypatch.setattr("aya.status.get_active_watches", list)
 
         console = Console(record=True)
-        main(console=console)  # must not raise
+        data = _gather_status()
+        _render_rich(data, console)  # must not raise
 
         assert "Name re-eval due" in console.export_text()
+
+
+class TestRenderPlain:
+    def test_renders_compact(self, monkeypatch):
+        monkeypatch.setattr("aya.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.status.get_active_watches", list)
+
+        output = _render_plain(_gather_status())
+        assert "Systems" in output
+        assert "\n\n" not in output  # no blank lines
+
+
+class TestRenderJson:
+    def test_valid_json(self, monkeypatch):
+        import json as json_mod
+
+        monkeypatch.setattr("aya.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.status.get_active_watches", list)
+
+        raw = _render_json(_gather_status())
+        parsed = json_mod.loads(raw)
+        assert "systems" in parsed
+        assert "greeting" in parsed
+        assert parsed["systems"]["ok"] is True or parsed["systems"]["ok"] is False

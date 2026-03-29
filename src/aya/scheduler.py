@@ -1072,7 +1072,7 @@ def run_poll(quiet: bool = False) -> None:
             _atomic_write(_alerts_file(), {"alerts": alerts})
 
 
-def show_alerts(as_json: bool = False, mark_seen: bool = False) -> list[dict[str, Any]]:
+def show_alerts(mark_seen: bool = False) -> list[dict[str, Any]]:
     """Show and optionally clear alerts. Returns unseen alerts."""
     if mark_seen:
         with _file_lock():

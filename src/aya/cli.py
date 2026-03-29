@@ -149,9 +149,14 @@ def _resolve_instance(p: Profile, instance: str, *, quiet: bool = False) -> Iden
 
 
 @app.command()
-def version() -> None:
+def version(
+    format_: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
+) -> None:
     """Show the installed aya version."""
-    console.print(f"aya {__version__}")
+    if format_ == "json":
+        console.out(json.dumps({"version": __version__}))
+    else:
+        console.print(f"aya {__version__}")
 
 
 # ── init ─────────────────────────────────────────────────────────────────────
@@ -727,20 +732,25 @@ def schedule_is_idle(
 def schedule_list(
     all_items: bool = typer.Option(False, "--all", "-a", help="Include dismissed/delivered"),
     item_type: str = typer.Option(None, "--type", help="Filter: reminder, watch, recurring, event"),
+    format_: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
 ) -> None:
     """List scheduled items."""
     items = list_items(show_all=all_items, item_type=item_type)
-    _display_items(items)
+    if format_ == "json":
+        console.out(json.dumps(items, indent=2, default=str))
+    else:
+        _display_items(items)
 
 
 @schedule_app.command("check")
 def schedule_check(
-    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+    format_: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
 ) -> None:
     """Check for due reminders and alerts."""
     due_items, unseen = check_due()
 
-    if as_json:
+    if format_ == "json":
+        console.out(json.dumps({"due": due_items, "alerts": unseen}, indent=2, default=str))
         return
 
     if not due_items and not unseen:
@@ -835,11 +845,11 @@ def schedule_pending(
 
 @schedule_app.command("status")
 def schedule_status(
-    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+    format_: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
 ) -> None:
     """Show scheduler overview — watches, reminders, crons, deliveries."""
     status = get_scheduler_status()
-    if as_json:
+    if format_ == "json":
         console.out(json.dumps(status, indent=2, default=str))
     else:
         console.print(format_scheduler_status(status))
@@ -847,13 +857,14 @@ def schedule_status(
 
 @schedule_app.command("alerts")
 def schedule_alerts(
-    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+    format_: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
     mark_seen: bool = typer.Option(False, "--mark-seen", help="Mark all alerts as seen"),
 ) -> None:
     """Show alerts from background watcher."""
-    unseen = show_alerts(as_json=as_json, mark_seen=mark_seen)
+    unseen = show_alerts(mark_seen=mark_seen)
 
-    if as_json:
+    if format_ == "json":
+        console.out(json.dumps(unseen, indent=2, default=str))
         return
 
     if not unseen:
@@ -1016,9 +1027,11 @@ def profile(
 
 
 @app.command()
-def status() -> None:
+def status(
+    format_: str = typer.Option("text", "--format", "-f", help="Output format: text or json"),
+) -> None:
     """Workspace readiness check — systems, schedule, focus."""
-    run_status()
+    run_status(format_=format_)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

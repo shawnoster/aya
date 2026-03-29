@@ -197,25 +197,33 @@ def _remove_cron_entry(dry_run: bool = False) -> bool:
 # ── Hook helpers ─────────────────────────────────────────────────────────────
 
 
+def _is_aya_command(cmd: str) -> bool:
+    """Check if a shell command invokes the aya binary.
+
+    Matches commands starting with ``aya`` or an absolute path ending in
+    ``/aya`` (e.g. ``/home/user/.local/bin/aya schedule activity``).
+    """
+    first_token = cmd.split(maxsplit=1)[0] if cmd.strip() else ""
+    binary = "aya"
+    return first_token == binary or first_token.endswith(f"/{binary}")
+
+
 def _is_aya_hook_entry(entry: dict[str, Any]) -> bool:
     """Check if a hook entry contains an aya command."""
-    for hook in entry.get("hooks", []):
-        cmd = hook.get("command", "")
-        if "aya " in cmd:
-            return True
-    return False
+    return any(_is_aya_command(hook.get("command", "")) for hook in entry.get("hooks", []))
 
 
 def _load_claude_settings(path: Path | None = None) -> dict[str, Any]:
-    """Load settings.json, returning {} if not found."""
+    """Load settings.json, returning {} if not found.
+
+    Raises ``json.JSONDecodeError`` on corrupt JSON so callers can surface
+    the error rather than silently overwriting the file.
+    """
     path = path or CLAUDE_SETTINGS_PATH
     if not path.exists():
         return {}
-    try:
-        data: dict[str, Any] = json.loads(path.read_text())
-        return data
-    except (json.JSONDecodeError, OSError):
-        return {}
+    data: dict[str, Any] = json.loads(path.read_text())
+    return data
 
 
 def _save_claude_settings(data: dict[str, Any], path: Path | None = None) -> None:
@@ -237,6 +245,8 @@ def _install_hooks(
     path = settings_path or CLAUDE_SETTINGS_PATH
     settings = _load_claude_settings(path)
     hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError(f"Expected 'hooks' to be a dict, got {type(hooks).__name__}")
 
     installed: list[str] = []
     already_present: list[str] = []
@@ -244,6 +254,10 @@ def _install_hooks(
 
     for event, canonical_entries in CANONICAL_HOOKS.items():
         existing = hooks.get(event, [])
+        if not isinstance(existing, list):
+            raise ValueError(
+                f"Expected hooks[{event!r}] to be a list, got {type(existing).__name__}"
+            )
         aya_entries = [e for e in existing if _is_aya_hook_entry(e)]
         non_aya_entries = [e for e in existing if not _is_aya_hook_entry(e)]
 
@@ -267,10 +281,14 @@ def _remove_hooks(dry_run: bool = False, settings_path: Path | None = None) -> l
     path = settings_path or CLAUDE_SETTINGS_PATH
     settings = _load_claude_settings(path)
     hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError(f"Expected 'hooks' to be a dict, got {type(hooks).__name__}")
 
     removed: list[str] = []
     for event in list(hooks.keys()):
         entries = hooks[event]
+        if not isinstance(entries, list):
+            continue
         filtered = [e for e in entries if not _is_aya_hook_entry(e)]
         if len(filtered) < len(entries):
             removed.append(event)
@@ -316,7 +334,7 @@ def install_scheduler(dry_run: bool = False, settings_path: Path | None = None) 
         result.hooks_installed = h_installed
         result.hooks_already_present = h_already
         result.hooks_updated = h_updated
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         result.errors.append(f"settings.json failed: {exc}")
 
     return result
@@ -337,7 +355,7 @@ def uninstall_scheduler(
     # Hooks
     try:
         result.hooks_removed = _remove_hooks(dry_run=dry_run, settings_path=settings_path)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         result.errors.append(f"settings.json failed: {exc}")
 
     return result

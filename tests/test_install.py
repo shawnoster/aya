@@ -15,6 +15,7 @@ from aya.install import (
     CRON_COMMENT,
     _build_cron_line,
     _has_aya_cron,
+    _is_aya_command,
     _is_aya_hook_entry,
     install_scheduler,
     uninstall_scheduler,
@@ -57,6 +58,24 @@ class TestIsAyaHookEntry:
     def test_negative_no_command(self) -> None:
         entry = {"hooks": [{"type": "command"}]}
         assert _is_aya_hook_entry(entry) is False
+
+    def test_negative_aya_substring_in_non_aya_command(self) -> None:
+        entry = {"hooks": [{"type": "command", "command": "echo aya hello"}]}
+        assert _is_aya_hook_entry(entry) is False
+
+
+class TestIsAyaCommand:
+    def test_bare_aya(self) -> None:
+        assert _is_aya_command("aya schedule activity") is True
+
+    def test_absolute_path(self) -> None:
+        assert _is_aya_command("/home/user/.local/bin/aya hook crons") is True
+
+    def test_non_aya(self) -> None:
+        assert _is_aya_command("echo aya hello") is False
+
+    def test_empty(self) -> None:
+        assert _is_aya_command("") is False
 
 
 # ── Crontab detection ────────────────────────────────────────────────────────
@@ -150,6 +169,22 @@ class TestInstallHooks:
             h["command"] for entry in data["hooks"]["SessionStart"] for h in entry.get("hooks", [])
         ]
         assert "echo custom" in commands
+
+    def test_corrupt_json_surfaces_error(self, tmp_path: Path) -> None:
+        settings = tmp_path / "settings.json"
+        settings.write_text("{not valid json")
+        with patch("aya.install._resolve_aya_path", return_value=None):
+            result = install_scheduler(settings_path=settings)
+        assert any("settings.json" in e for e in result.errors)
+        # File should NOT be overwritten
+        assert settings.read_text() == "{not valid json"
+
+    def test_malformed_hooks_key_surfaces_error(self, tmp_path: Path) -> None:
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"hooks": "not-a-dict"}) + "\n")
+        with patch("aya.install._resolve_aya_path", return_value=None):
+            result = install_scheduler(settings_path=settings)
+        assert any("settings.json" in e for e in result.errors)
 
 
 class TestUninstallHooks:

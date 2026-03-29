@@ -260,11 +260,8 @@ indefinitely until session ends.
 
 1. **Add `aya schedule activity` as the first SessionStart hook** — ensures
    a new session always starts with a fresh activity timestamp, preventing
-   stale-idle suppression. ✅ Done (PreToolUse hook added; SessionStart
-   ordering still needed).
-
-2. **Move `aya schedule activity` before `aya hook crons` in SessionStart**
-   so the activity reset happens before cron evaluation.
+   stale-idle suppression. ✅ Done (`aya schedule install` places it first
+   in SessionStart and also adds a PreToolUse hook).
 
 ### Medium-term (runtime idle checks)
 

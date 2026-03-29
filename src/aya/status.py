@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -222,6 +223,45 @@ def main(console: Console | None = None) -> None:
     console.print()
 
 
-def run_status() -> None:
-    """Entry point for aya status subcommand."""
-    main()
+def _status_to_dict() -> dict[str, Any]:
+    """Collect status data as a plain dict for JSON output."""
+    profile = _read_json(PROFILE)
+    checks = [
+        {"name": "profile", "ok": profile is not None, "detail": str(PROFILE)},
+        {"name": "workflow config", "ok": _read_json(CONFIG) is not None, "detail": str(CONFIG)},
+        {
+            "name": "scheduler",
+            "ok": _paths.SCHEDULER_FILE.exists(),
+            "detail": str(_paths.SCHEDULER_FILE),
+        },
+    ]
+    ship = profile.get("ship_mind_name", "GSV Unknown Vessel") if profile else "GSV Unknown Vessel"
+    result: dict[str, Any] = {
+        "ship": ship,
+        "user": profile.get("user_name", "Shawn") if profile else "Shawn",
+        "checks": checks,
+        "alerts": [],
+        "due_reminders": [],
+        "upcoming_reminders": [],
+        "active_watches": [],
+    }
+    try:
+        now_tz = datetime.now(LOCAL_TZ)
+        result["alerts"] = get_unseen_alerts()
+        result["due_reminders"] = get_due_reminders(now_tz)
+        result["upcoming_reminders"] = get_upcoming_reminders(now_tz, hours=12)
+        result["active_watches"] = get_active_watches()
+    except Exception:
+        pass
+    return result
+
+
+def run_status(format_: str = "text") -> None:
+    """Entry point for aya status subcommand. format_ must be 'text' or 'json'."""
+    if format_ == "json":
+        sys.stdout.write(json.dumps(_status_to_dict(), indent=2, default=str) + "\n")
+    elif format_ == "text":
+        main()
+    else:
+        sys.stderr.write(f"aya status: unknown format '{format_}' — expected text or json\n")
+        raise SystemExit(2)

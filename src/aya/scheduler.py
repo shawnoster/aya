@@ -10,11 +10,11 @@ Usage:
     scheduler.py watch   jira-query "project=CSD AND created>=-1d" -m "New CSD tickets"
     scheduler.py watch   jira-ticket CSD-225 -m "Ticket status changed"
     scheduler.py list    [--all] [--type TYPE]
-    scheduler.py check   [--json]
+    scheduler.py check   [--format json]
     scheduler.py dismiss <id>
     scheduler.py snooze  <id> --until "in 1 hour"
     scheduler.py poll    [--quiet]
-    scheduler.py alerts  [--json]
+    scheduler.py alerts  [--format json]
 """
 
 from __future__ import annotations
@@ -1072,7 +1072,7 @@ def run_poll(quiet: bool = False) -> None:
             _atomic_write(_alerts_file(), {"alerts": alerts})
 
 
-def show_alerts(as_json: bool = False, mark_seen: bool = False) -> list[dict[str, Any]]:
+def show_alerts(mark_seen: bool = False) -> list[dict[str, Any]]:
     """Show and optionally clear alerts. Returns unseen alerts."""
     if mark_seen:
         with _file_lock():

@@ -105,6 +105,45 @@ def _load_profile(profile_path: Path) -> Profile:
     return Profile.load(profile_path)
 
 
+def _resolve_instance(p: Profile, instance: str, *, quiet: bool = False) -> Identity:
+    """Return the local Identity for *instance*, with a smart single-instance fallback.
+
+    Resolution order:
+    1. Exact match on *instance* name — returned immediately.
+    2. If exactly one instance is registered, that instance is used automatically
+       regardless of the requested name (smart default for fresh ``aya init`` users).
+    3. Otherwise a descriptive error is printed (unless *quiet* is True) and
+       ``typer.Exit(1)`` is raised.
+
+    The *quiet* flag suppresses error output; it is intended for background hooks
+    (e.g. ``aya receive --quiet``) where silent failure is preferable to log noise.
+    """
+    local = p.instances.get(instance)
+    if local is not None:
+        return local
+
+    available = list(p.instances.keys())
+
+    # Smart default: exactly one instance — use it without fuss.
+    if len(available) == 1:
+        return next(iter(p.instances.values()))
+
+    if not quiet:
+        if available:
+            names = ", ".join(available)
+            err.print(
+                f"[red]Instance '{instance}' not found.[/red] "
+                f"Available instances: [cyan]{names}[/cyan].\n"
+                f"Use [bold]--instance {available[0]}[/bold] "
+                f"or run: [bold]aya init --label {instance}[/bold]"
+            )
+        else:
+            err.print(
+                f"[red]Instance '{instance}' not found.[/red] Run [bold]aya init[/bold] first."
+            )
+    raise typer.Exit(1)
+
+
 # ── version ──────────────────────────────────────────────────────────────────
 
 
@@ -193,7 +232,7 @@ def pack(
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
     out: Path = typer.Option(None, help="Write packet JSON to file (default: stdout)"),
-    instance: str = typer.Option("default", help="Which local instance to send from"),
+    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
     ),
@@ -201,10 +240,7 @@ def pack(
 ) -> None:
     """Pack a knowledge packet ready to send."""
     p = _load_profile(profile)
-    local = p.instances.get(instance)
-    if not local:
-        err.print(f"[red]Instance '{instance}' not found. Run aya init.[/red]")
-        raise typer.Exit(1)
+    local = _resolve_instance(p, instance)
 
     # Resolve recipient DID
     to_did = _resolve_did(to, p)
@@ -256,15 +292,12 @@ def pack(
 def send(
     packet_file: Path = typer.Argument(help="Packet JSON file to send"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
-    instance: str = typer.Option("default"),
+    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Send a packet to a Nostr relay."""
     p = _load_profile(profile)
-    local = p.instances.get(instance)
-    if not local:
-        err.print(f"[red]Instance '{instance}' not found.[/red]")
-        raise typer.Exit(1)
+    local = _resolve_instance(p, instance)
 
     relay_urls = [relay] if relay else p.default_relays
     packet = Packet.from_json(packet_file.read_text())
@@ -294,7 +327,7 @@ def dispatch(
     context: str = typer.Option(None, help="Annotation for the receiving assistant"),
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
-    instance: str = typer.Option("default", help="Which local instance to send from"),
+    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
@@ -305,10 +338,7 @@ def dispatch(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = p.instances.get(instance)
-        if not local:
-            err.print(f"[red]Instance '{instance}' not found. Run aya init.[/red]")
-            raise typer.Exit(1)
+        local = _resolve_instance(p, instance)
 
         to_did = _resolve_did(to, p)
 
@@ -386,7 +416,7 @@ def dispatch(
 @app.command()
 def receive(
     relay: str = typer.Option(None),
-    instance: str = typer.Option("default"),
+    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
     auto_ingest: bool = typer.Option(False, help="Ingest all trusted packets without prompting"),
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Suppress output when inbox is empty (for startup hooks)"
@@ -397,11 +427,7 @@ def receive(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = p.instances.get(instance)
-        if not local:
-            if not quiet:
-                err.print(f"[red]Instance '{instance}' not found.[/red]")
-            raise typer.Exit(1)
+        local = _resolve_instance(p, instance, quiet=quiet)
 
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
@@ -477,17 +503,14 @@ def receive(
 @app.command()
 def inbox(
     relay: str = typer.Option(None),
-    instance: str = typer.Option("default"),
+    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """List pending packets without ingesting."""
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = p.instances.get(instance)
-        if not local:
-            err.print(f"[red]Instance '{instance}' not found.[/red]")
-            raise typer.Exit(1)
+        local = _resolve_instance(p, instance)
 
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
@@ -507,17 +530,14 @@ def inbox(
 @app.command()
 def pair(
     code: str = typer.Option(None, help="Pairing code from the other instance (joiner mode)"),
-    label: str = typer.Option(..., help="Label for this instance (work, home, laptop)"),
-    instance: str = typer.Option("default"),
+    label: str = typer.Option(..., help="Name to assign to the remote peer being paired with"),
+    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Pair two instances with a short-lived code — no manual DID exchange."""
     p = _load_profile(profile)
-    local = p.instances.get(instance)
-    if not local:
-        err.print(f"[red]Instance '{instance}' not found. Run aya init first.[/red]")
-        raise typer.Exit(1)
+    local = _resolve_instance(p, instance)
 
     relay_urls = [relay] if relay else p.default_relays
 

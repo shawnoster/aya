@@ -130,33 +130,28 @@ Replace `<LABEL>` with this machine's role (`home` or `work`), `<OTHER_LABEL>` w
 
 ## Agent integration (Claude Code)
 
-aya is designed to surface alerts and reminders *into* your agent session, not just on the terminal. Here's how to wire it up.
+aya is designed to surface alerts and reminders *into* your agent session, not just on the terminal. One command sets up everything:
 
-### SessionStart hooks
-
-Add these hooks to `~/.claude/settings.json` under `"hooks": { "SessionStart": [...] }`:
-
-```json
-[
-  {
-    "command": "aya hook crons",
-    "statusMessage": "Registering session crons..."
-  },
-  {
-    "command": "aya receive --quiet --auto-ingest 2>/dev/null || true",
-    "async": true
-  },
-  {
-    "command": "aya schedule pending --format text 2>/dev/null || true"
-  }
-]
+```bash
+aya schedule install          # crontab + Claude Code hooks
+aya schedule install --dry-run  # preview first
 ```
 
-| Hook | What it does |
-| ---- | ---- |
-| `aya hook crons` | Reads pending session crons, injects `CronCreate` instructions into session context |
-| `aya receive --quiet --auto-ingest` | Ingests packets from trusted senders in the background. Packets from unknown senders are skipped silently in non-interactive contexts. |
-| `aya schedule pending --format text` | Prints due reminders and alerts directly into the session |
+This installs:
+- A system crontab entry (`*/5 * * * *`) for background polling (watches, reminders, claim sweeping)
+- Claude Code hooks for session activity tracking, cron registration, packet receiving, and CI monitoring
+
+To remove everything: `aya schedule uninstall`.
+
+### What the hooks do
+
+| Hook | Event | What it does |
+| ---- | ---- | ---- |
+| `aya schedule activity` | SessionStart, PreToolUse | Resets the idle back-off timer so session crons aren't suppressed |
+| `aya hook crons` | SessionStart | Reads pending session crons, injects `CronCreate` instructions into session context |
+| `aya receive --quiet --auto-ingest` | SessionStart | Ingests packets from trusted senders in the background |
+| `aya schedule pending --format text` | SessionStart | Prints due reminders and alerts directly into the session |
+| `aya ci watch` | PostToolUse (Bash) | After `git push`, monitors CI and wakes agent if checks fail |
 
 ### How session crons work
 
@@ -234,6 +229,8 @@ This prints all due reminders, alerts, and session cron prompts as plain text. C
 | `aya schedule alerts` | Show alerts from background watcher |
 | `aya schedule tick` | One scheduler cycle — poll watches, expire alerts |
 | `aya schedule pending` | Show unclaimed alerts + session crons (SessionStart hook) |
+| `aya schedule install` | Install scheduler integrations — system crontab + Claude Code hooks |
+| `aya schedule uninstall` | Remove scheduler integrations |
 | `aya schedule status` | Scheduler overview — watches, reminders, deliveries |
 
 ## How it works

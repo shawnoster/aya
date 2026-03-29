@@ -1,20 +1,19 @@
-"""Ship Mind status ritual — workspace readiness check."""
+"""Ship Mind status ritual — aya readiness check."""
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from rich.console import Console
 from rich.rule import Rule
 
+from aya import paths as _paths
 from aya.scheduler import (
     LOCAL_TZ,
-    _find_workspace_root,
     get_active_watches,
     get_due_reminders,
     get_unseen_alerts,
@@ -22,11 +21,9 @@ from aya.scheduler import (
     load_items,
 )
 
-ROOT = _find_workspace_root()
-ASSISTANT = ROOT / "assistant"
-MEMORY = ASSISTANT / "memory"
-PROFILE = ASSISTANT / "profile.json"
-CONFIG = ASSISTANT / "config.json"
+# ── aya data paths (from ~/.aya) ────────────────────────────────────────────
+PROFILE = _paths.PROFILE_PATH
+CONFIG = _paths.CONFIG_PATH
 
 
 # ── data ──────────────────────────────────────────────────────────────────────
@@ -91,185 +88,6 @@ def _time_flavor(now: datetime) -> str:
     return "Unconventional hours. The ship is watching regardless."
 
 
-# ── daily notes parser ────────────────────────────────────────────────────────
-
-
-def _parse_time(time_str: str, pm_context: bool = False) -> datetime | None:
-    """Parse 'H:MM' or 'HH:MM' into today's datetime, respecting AM/PM context."""
-    m = re.match(r"(\d{1,2}):(\d{2})", time_str)
-    if not m:
-        return None
-    hour, minute = int(m.group(1)), int(m.group(2))
-    if pm_context and hour != 12:
-        hour += 12
-    elif not pm_context and hour == 12:
-        hour = 0
-    try:
-        return datetime.now(LOCAL_TZ).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    except ValueError:
-        return None
-
-
-def _parse_block_header(header: str) -> tuple[datetime | None, datetime | None, str]:
-    """
-    Parse a time block header like '9:00–10:00 AM', '11:05 AM–12:00 PM',
-    '2:30–2:55 PM', '4:00 PM+', '11:05 AM'.
-    Returns (start_dt, end_dt_or_None, label).
-    """
-    header.upper()
-
-    # Range with explicit AM/PM on each side: '11:05 AM–12:00 PM'
-    mixed_m = re.match(
-        r"(\d{1,2}:\d{2})\s*(AM|PM)[\u2013\-](\d{1,2}:\d{2})\s*(AM|PM)",
-        header,
-        re.IGNORECASE,
-    )
-    if mixed_m:
-        start = _parse_time(mixed_m.group(1), mixed_m.group(2).upper() == "PM")
-        end = _parse_time(mixed_m.group(3), mixed_m.group(4).upper() == "PM")
-        return start, end, header
-
-    # Range with shared AM/PM suffix: '9:00–10:00 AM' or '2:30–2:55 PM'
-    shared_m = re.match(
-        r"(\d{1,2}:\d{2})[\u2013\-](\d{1,2}:\d{2})\s*(AM|PM)", header, re.IGNORECASE
-    )
-    if shared_m:
-        is_pm = shared_m.group(3).upper() == "PM"
-        start = _parse_time(shared_m.group(1), is_pm)
-        end = _parse_time(shared_m.group(2), is_pm)
-        if start and end and end <= start:  # e.g. 12:15–2:00 PM where start wraps
-            end = end.replace(hour=end.hour + 12)
-        return start, end, header
-
-    # Single time with AM/PM: '11:05 AM' or '4:00 PM+'
-    single_m = re.match(r"(\d{1,2}:\d{2})\s*(AM|PM)", header, re.IGNORECASE)
-    if single_m:
-        is_pm = single_m.group(2).upper() == "PM"
-        start = _parse_time(single_m.group(1), is_pm)
-        end = (start + timedelta(hours=1)) if start else None
-        return start, end, header
-
-    return None, None, header
-
-
-def _parse_daily_notes(today: str) -> dict[str, Any]:
-    notes_path = ASSISTANT / "notes" / "daily" / f"{today}.md"
-    result: dict[str, Any] = {
-        "found": False,
-        "priorities": [],
-        "current_block": None,
-        "next_block": None,
-    }
-    if not notes_path.exists():
-        return result
-
-    result["found"] = True
-    content = notes_path.read_text()
-    now = datetime.now(LOCAL_TZ)
-
-    # Priority stack — numbered lines inside ``` block
-    # Skip completed (✅) and struck-through (~~) lines
-    prio_m = re.search(r"## Priority Stack.*?```\n(.*?)```", content, re.DOTALL)
-    if prio_m:
-        result["priorities"] = [
-            ln.strip()
-            for ln in prio_m.group(1).strip().splitlines()
-            if re.match(r"^\d+\.", ln.strip())
-            and "✅" not in ln
-            and not ln.strip().startswith("~~")
-        ]
-
-    # Filter out priorities referencing past time-of-day events
-    if result["priorities"]:
-        filtered = []
-        time_ref_re = re.compile(r"(\d{1,2}):(\d{2})\s*(AM|PM)", re.IGNORECASE)
-        for p in result["priorities"]:
-            m_time = time_ref_re.search(p)
-            if m_time:
-                ref_time = _parse_time(
-                    m_time.group(1) + ":" + m_time.group(2), m_time.group(3).upper() == "PM"
-                )
-                if ref_time and ref_time < now:
-                    continue
-            filtered.append(p)
-        result["priorities"] = filtered
-
-    # Time blocks — ### <time> — <label>
-    block_pattern = re.compile(
-        r"^### ([^\n]+?) —[^\n]*\n((?:(?!^###).)*)",
-        re.MULTILINE | re.DOTALL,
-    )
-
-    current: dict[str, Any] | None = None
-    next_blk: dict[str, Any] | None = None
-    last_past_blk: dict[str, Any] | None = None
-
-    for m in block_pattern.finditer(content):
-        header = m.group(1).strip()
-        # Skip struck-through blocks (e.g., ~~2:15 PM — cancelled~~)
-        if header.startswith("~~") or header.endswith("~~"):
-            continue
-        body = m.group(2)
-
-        start, end, _ = _parse_block_header(header)
-        if start is None:
-            continue
-
-        bullets = [
-            ln.strip().lstrip("- *").strip()
-            for ln in body.splitlines()
-            if ln.strip().startswith("-")
-        ]
-        bullets = [b for b in bullets if b]
-
-        block_end = end or start + timedelta(hours=1)
-        if start <= now < block_end:
-            current = {"time": header, "tasks": bullets[:4]}
-        elif block_end <= now:
-            last_past_blk = {"time": header, "tasks": bullets[:4]}
-        elif start > now and next_blk is None:
-            next_blk = {"time": header, "tasks": bullets[:3]}
-
-    result["current_block"] = current
-    result["next_block"] = next_blk
-    result["last_past_block"] = last_past_blk
-    return result
-
-
-# ── cron watch summary ────────────────────────────────────────────────────────
-
-
-def _cron_watches() -> list[str]:
-    """
-    Extract named cron job entries from cron-schedules.md.
-    A valid entry has a job ID (hex token) or a cron expression in backticks.
-    """
-    path = MEMORY / "cron-schedules.md"
-    if not path.exists():
-        return []
-
-    job_id_re = re.compile(r"`[0-9a-f]{8}`")  # e.g. `e6a8407c`
-    cron_expr_re = re.compile(r"`[\d\*,/\- ]+ [\d\*,/\- ]+")  # e.g. `17,47 * * * *`
-
-    watches = []
-    for line in path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("**"):
-            continue
-        if not (job_id_re.search(stripped) or cron_expr_re.search(stripped)):
-            continue
-        # Extract bold label
-        end = stripped.index("**", 2)
-        label = stripped[2:end]
-        # Short descriptor: text after the label, before first parens or long dash
-        rest = stripped[end + 2 :].strip(" —–-").strip()
-        short = re.split(r"\s*[\(—]", rest)[0].strip(" -–").strip()
-        entry = label + (f" — {short}" if short else "")
-        watches.append(entry)
-
-    return watches[:6]
-
-
 # ── perspective ───────────────────────────────────────────────────────────────
 
 
@@ -296,7 +114,6 @@ def _active_scheduler_items() -> list[dict[str, Any]]:
 def main(console: Console | None = None) -> None:
     console = console or Console()
     now_local = datetime.now(LOCAL_TZ)
-    today = now_local.strftime("%Y-%m-%d")
 
     # Profile
     profile = _read_json(PROFILE)
@@ -304,30 +121,19 @@ def main(console: Console | None = None) -> None:
     user = profile.get("user_name", "Shawn") if profile else "Shawn"
     next_eval = profile.get("name_next_reevaluation_at", "unknown") if profile else "unknown"
 
-    # System checks
+    # System checks — aya data only
     checks: list[CheckResult] = [
-        _exists(ROOT / "CLAUDE.md", "root CLAUDE"),
-        _exists(ASSISTANT / "AGENTS.md", "assistant AGENTS"),
-        _exists(ASSISTANT / "CLAUDE.md", "assistant CLAUDE"),
-        _exists(ASSISTANT / "persona.md", "Ship persona prompt"),
-        _exists(MEMORY / "README.md", "memory::README.md"),
-        _exists(MEMORY / "preferences.md", "memory::preferences.md"),
-        CheckResult(
-            name="memory::cron-schedules.md",
-            ok=(MEMORY / "cron-schedules.md").exists() or bool(_active_scheduler_items()),
-            detail=str(MEMORY / "cron-schedules.md"),
-        ),
-        _exists(MEMORY / "activity-tracker.md", "memory::activity-tracker.md"),
-        _exists(MEMORY / "done-log.md", "memory::done-log.md"),
-        CheckResult("Assistant profile", profile is not None, str(PROFILE)),
+        CheckResult("profile", profile is not None, str(PROFILE)),
         CheckResult("workflow config", _read_json(CONFIG) is not None, str(CONFIG)),
+        CheckResult(
+            name="scheduler",
+            ok=_paths.SCHEDULER_FILE.exists(),
+            detail=str(_paths.SCHEDULER_FILE),
+        ),
     ]
     ok = sum(1 for c in checks if c.ok)
     total = len(checks)
     all_ok = ok == total
-
-    # Daily notes
-    notes = _parse_daily_notes(today)
 
     # ── Output ──────────────────────────────────────────────────────────────
 
@@ -348,8 +154,6 @@ def main(console: Console | None = None) -> None:
 
     if isinstance(next_eval, str) and len(next_eval) >= 10:
         try:
-            # Profile stores timestamps as ISO 8601 with trailing "Z"; normalize
-            # to "+00:00" so fromisoformat() handles it across all Python versions.
             eval_dt = datetime.fromisoformat(next_eval.replace("Z", "+00:00"))
             days_until = (eval_dt.date() - now_local.date()).days
             if days_until <= 1:
@@ -359,36 +163,7 @@ def main(console: Console | None = None) -> None:
 
     console.print()
 
-    # Focus — current time block or priority stack
-    if notes["found"] and notes["current_block"]:
-        blk = notes["current_block"]
-        console.print(f"[bold cyan]Now:[/bold cyan]  {blk['time']}")
-        for task in blk["tasks"]:
-            console.print(f"  · {task}")
-    elif notes["found"] and notes["priorities"]:
-        n = len(notes["priorities"])
-        console.print(f"[bold cyan]Focus:[/bold cyan]  Priority stack ({n} items)")
-        for p in notes["priorities"][:3]:
-            console.print(f"  · {p}")
-        if n > 3:
-            console.print(f"  [dim]… and {n - 3} more[/dim]")
-    elif notes["found"]:
-        console.print("[dim]Daily note found — no priorities or time blocks.[/dim]")
-    else:
-        console.print(f"[dim]No daily note for {today}.[/dim]")
-
-    # Up next
-    if notes["found"] and notes["next_block"]:
-        nb = notes["next_block"]
-        console.print()
-        console.print(f"[bold]Up next:[/bold]  {nb['time']}")
-        for task in nb["tasks"][:2]:
-            console.print(f"  · {task}")
-
-    console.print()
-
     # Reminders and alerts
-    active_watches: list[dict[str, Any]] = []
     try:
         now_tz = datetime.now(LOCAL_TZ)
 
@@ -438,15 +213,6 @@ def main(console: Console | None = None) -> None:
 
     except Exception:
         pass  # scheduler runtime error — skip silently
-
-    # Active watches (legacy cron-schedules.md — fallback only)
-    if not active_watches:
-        watches = _cron_watches()
-        if watches:
-            console.print(f"[bold]Watches ({len(watches)}):[/bold]")
-            for w in watches:
-                console.print(f"  · {w}")
-            console.print()
 
     # Perspective + sign-off
     console.print(Rule(style="dim"))

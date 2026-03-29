@@ -1,7 +1,6 @@
 """Initialize or rotate the persistent assistant profile.
 
-Canonical location: {workspace}/assistant/profile.json
-Legacy location:    ~/.copilot/assistant_profile.json (symlinked by bootstrap)
+Canonical location: ~/.aya/profile.json
 """
 
 from __future__ import annotations
@@ -11,21 +10,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from aya.paths import PROFILE_PATH
 
-def _find_workspace_root() -> Path:
-    """Walk up from cwd looking for assistant/memory/scheduler.json."""
-    cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        if (parent / "assistant" / "memory" / "scheduler.json").exists():
-            return parent
-    return cwd  # fallback
-
-
-ROOT = _find_workspace_root()
-ACTIVITY_TRACKER_PATH = ROOT / "assistant" / "memory" / "activity-tracker.md"
-PROFILE_PATH = ROOT / "assistant" / "profile.json"
-LEGACY_COPILOT_PATH = Path.home() / ".copilot" / "assistant_profile.json"
-LEGACY_ACE_PATH = Path.home() / ".copilot" / "ace_profile.json"
 REEVALUATION_DAYS = 3
 
 NAME_CANDIDATES = [
@@ -158,15 +144,6 @@ def ensure_profile(path: Path = PROFILE_PATH, now: datetime | None = None) -> di
     now_dt = now or datetime.now(UTC)
     profile = _default_profile(now_dt)
 
-    # Migrate from legacy locations if canonical path doesn't exist yet.
-    # Priority: ~/.copilot/assistant_profile.json > ~/.copilot/ace_profile.json
-    if not path.exists():
-        for legacy in (LEGACY_COPILOT_PATH, LEGACY_ACE_PATH):
-            if legacy.exists() and not legacy.is_symlink():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                legacy.rename(path)
-                break
-
     if path.exists():
         try:
             loaded = json.loads(path.read_text())
@@ -177,7 +154,7 @@ def ensure_profile(path: Path = PROFILE_PATH, now: datetime | None = None) -> di
 
     next_eval = _parse_iso(profile.get("name_next_reevaluation_at"))
     current_name = profile.get("ship_mind_name")
-    recent_activity = _activity_entries_last_days(ACTIVITY_TRACKER_PATH, now_dt, days=3)
+    recent_activity: list[str] = []
 
     if next_eval is None:
         profile["ship_mind_name"] = (
@@ -193,7 +170,6 @@ def ensure_profile(path: Path = PROFILE_PATH, now: datetime | None = None) -> di
         profile["name_last_evaluated_at"] = _iso_z(now_dt)
         profile["name_next_reevaluation_at"] = _iso_z(now_dt + timedelta(days=REEVALUATION_DAYS))
         profile["name_basis"] = {
-            "source": "assistant/memory/activity-tracker.md",
             "window_days": 3,
             "activity_items_considered": len(recent_activity),
         }

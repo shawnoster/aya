@@ -283,6 +283,7 @@ class TestRenderJson:
         parsed = json_mod.loads(raw)
         assert len(parsed["alerts"]) == 1
         assert parsed["alerts"][0]["message"] == "PR 85 merged"
+        assert "source_item_id" in parsed["alerts"][0]
         assert len(parsed["due"]) == 1
         assert len(parsed["upcoming"]) == 1
         assert len(parsed["watches"]) == 1

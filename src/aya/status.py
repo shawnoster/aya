@@ -214,7 +214,12 @@ def _render_json(data: dict[str, Any]) -> str:
             "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in checks],
         },
         "alerts": [
-            {"id": a["source_item_id"][:8], "message": a["message"]} for a in data["unseen"]
+            {
+                "id": a.get("id", "")[:8],
+                "source_item_id": a["source_item_id"][:8],
+                "message": a["message"],
+            }
+            for a in data["unseen"]
         ],
         "due": [
             {"id": r["id"][:8], "due_at": r["due_at"], "message": r["message"]} for r in data["due"]
@@ -313,5 +318,7 @@ def run_status(format_: str = "text") -> None:
     elif format_ == "text":
         print(_render_plain(data))  # noqa: T201 — raw stdout for plain text
     else:
-        sys.stderr.write(f"aya status: unknown format '{format_}'\n")
+        sys.stderr.write(
+            f"aya status: unknown format '{format_}'. Expected one of: text, json, rich.\n"
+        )
         raise SystemExit(2)

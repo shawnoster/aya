@@ -62,6 +62,11 @@ from aya.status import run_status
 class OutputFormat(StrEnum):
     TEXT = "text"
     JSON = "json"
+
+
+class StatusFormat(StrEnum):
+    TEXT = "text"
+    JSON = "json"
     RICH = "rich"
 
 
@@ -1047,8 +1052,8 @@ def profile(
 
 @app.command()
 def status(
-    format_: OutputFormat = typer.Option(
-        OutputFormat.TEXT, "--format", "-f", help="Output format: text, json, or rich"
+    format_: StatusFormat = typer.Option(
+        StatusFormat.TEXT, "--format", "-f", help="Output format: text, json, or rich"
     ),
 ) -> None:
     """Workspace readiness check — systems, schedule, focus."""

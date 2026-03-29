@@ -144,7 +144,7 @@ Add these hooks to `~/.claude/settings.json` under `"hooks": { "SessionStart": [
 
 `aya hook crons` is the bridge between aya's persistent scheduler and Claude Code's in-session cron system. On each session start it:
 
-1. Calls `get_pending()` to fetch active session-required recurring items
+1. Fetches active session-required recurring items (without claiming alerts)
 2. Filters by idle back-off and work-hours constraints
 3. Outputs a `hookSpecificOutput.additionalContext` block with explicit `CronCreate` instructions
 

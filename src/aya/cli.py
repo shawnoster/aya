@@ -44,6 +44,7 @@ from aya.scheduler import (
     format_scheduler_status,
     get_pending,
     get_scheduler_status,
+    get_session_crons,
     is_idle,
     list_items,
     parse_due,
@@ -835,7 +836,7 @@ def schedule_alerts(
         console.print(f"\n  Marked {len(unseen)} alert(s) as seen.")
 
 
-# ��─ hook ──────────────────────────────────────────────────────────────────────
+# ── hook ──────────────────────────────────────────────────────────────────────
 
 
 @hook_app.command("crons")
@@ -846,11 +847,13 @@ def hook_crons() -> None:
     hookSpecificOutput block that tells Claude Code to register them
     via CronCreate.  Exits silently when there are no crons to register.
 
+    Unlike get_pending(), this does NOT claim alerts — safe to run before
+    ``aya schedule pending`` without consuming alerts.
+
     Usage in ~/.claude/settings.json:
         {"command": "aya hook crons", "statusMessage": "Registering crons..."}
     """
-    pending = get_pending()
-    crons = pending.get("session_crons", [])
+    crons, _suppressed = get_session_crons()
     if not crons:
         return
 

@@ -218,7 +218,9 @@ def init(
 @app.command()
 def trust(
     did: str = typer.Argument(help="DID to trust (did:key:z6Mk…)"),
-    peer: str = typer.Option(..., "--peer", "--label", help="Name for the remote peer"),
+    peer: str = typer.Option(
+        ..., "--peer", "--label", help="Name for the remote peer (legacy alias: --label)"
+    ),
     nostr_pubkey: str = typer.Option(
         None,
         help="Nostr pubkey hex (required for send/receive; pairing fills this automatically)",
@@ -253,7 +255,9 @@ def pack(
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
     out: Path = typer.Option(None, help="Write packet JSON to file (default: stdout)"),
-    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
+    as_: str = typer.Option(
+        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    ),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
     ),
@@ -313,7 +317,9 @@ def pack(
 def send(
     packet_file: Path = typer.Argument(help="Packet JSON file to send"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
-    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
+    as_: str = typer.Option(
+        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Send a packet to a Nostr relay."""
@@ -348,7 +354,9 @@ def dispatch(
     context: str = typer.Option(None, help="Annotation for the receiving assistant"),
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
-    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
+    as_: str = typer.Option(
+        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
@@ -437,7 +445,9 @@ def dispatch(
 @app.command()
 def receive(
     relay: str = typer.Option(None),
-    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
+    as_: str = typer.Option(
+        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    ),
     auto_ingest: bool = typer.Option(False, help="Ingest all trusted packets without prompting"),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Auto-confirm all prompts (non-interactive mode)"
@@ -527,7 +537,9 @@ def receive(
 @app.command()
 def inbox(
     relay: str = typer.Option(None),
-    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
+    as_: str = typer.Option(
+        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    ),
     format_: OutputFormat = typer.Option(
         OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
     ),
@@ -565,8 +577,12 @@ def inbox(
 @app.command()
 def pair(
     code: str = typer.Option(None, help="Pairing code from the other instance (joiner mode)"),
-    peer: str = typer.Option(..., "--peer", "--label", help="Name for the remote peer"),
-    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
+    peer: str = typer.Option(
+        ..., "--peer", "--label", help="Name for the remote peer (legacy alias: --label)"
+    ),
+    as_: str = typer.Option(
+        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
@@ -609,7 +625,8 @@ def pair(
             Panel.fit(
                 f"[bold]Pairing code:[/bold]  [bold cyan]{pairing_code}[/bold cyan]\n\n"
                 "Enter this on your other machine:\n"
-                f"  [dim]aya pair --code {pairing_code} --peer <their-name>[/dim]\n\n"
+                f"  [dim]aya pair --code {pairing_code}"
+                " --peer <their-name> --as <local-identity>[/dim]\n\n"
                 "[dim]Expires in 10 minutes.[/dim]",
                 title="aya — pair",
             )

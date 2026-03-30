@@ -385,6 +385,9 @@ def dispatch(
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
     ),
+    no_encrypt: bool = typer.Option(
+        False, "--no-encrypt", help="Send plaintext (debug or private-relay mode)"
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Pack and send in one step — the natural 'pack for home' flow."""
@@ -425,6 +428,10 @@ def dispatch(
                 conflict_strategy=conflict,
             )
 
+        # Mark the packet encrypted before signing so the flag is covered by the signature.
+        if not no_encrypt:
+            packet.encrypted = True
+
         signed = packet.sign(local)
 
         relay_urls = [relay] if relay else p.default_relays
@@ -439,7 +446,7 @@ def dispatch(
 
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
         try:
-            event_id = await client.publish(signed, recipient_nostr_pub)
+            event_id = await client.publish(signed, recipient_nostr_pub, encrypt=not no_encrypt)
         except Exception:
             err.print("[yellow]Could not reach relay — dispatch failed.[/yellow]")
             raise typer.Exit(1) from None

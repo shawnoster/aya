@@ -38,26 +38,26 @@ aya schedule snooze <id-prefix> --until "in 1 hour"
 
 ```bash
 # Send context to another machine
-aya dispatch --instance home --to work \
+aya dispatch --as home --to work \
   --intent "context sync" --files path/to/file.md
 
 # Send a conversation seed (request for research/action)
-aya dispatch --instance home --to work --seed \
+aya dispatch --as home --to work --seed \
   --intent "investigate caching" \
   --opener "Can you trace the auth flow and find where sessions drop?"
 
 # Check inbox
-aya inbox --instance home
+aya inbox --as home
 
 # Receive and ingest trusted packets
-aya receive --instance home --auto-ingest --quiet
+aya receive --as home --auto-ingest --quiet
 
 # Fully non-interactive receive — ingest everything without prompting (trusted or not)
-aya receive --instance home --auto-ingest --yes --quiet
+aya receive --as home --auto-ingest --yes --quiet
 
 # Set up recurring relay poll (persists across sessions)
 aya schedule recurring -m "relay-poll" -c "*/10 * * * *" \
-  -p "Run: aya receive --instance home --auto-ingest --quiet. If any packets were ingested, surface their content to the user."
+  -p "Run: aya receive --as home --auto-ingest --quiet. If any packets were ingested, surface their content to the user."
 ```
 
 > **New machine?** See the "One-prompt setup" section in `README.md` for a single prompt that installs aya, pairs instances, wires hooks, and registers relay polling.
@@ -69,17 +69,44 @@ aya schedule recurring -m "relay-poll" -c "*/10 * * * *" \
 aya init --label home
 
 # Pair with another machine (initiator)
-aya pair --label home --instance home
+aya pair --peer home --as home
 # On the other machine (joiner)
-aya pair --code WORD-WORD-1234 --label work --instance work
+aya pair --code WORD-WORD-1234 --peer work --as work
 
 # Check status
 aya status
 ```
 
-> **`--instance` vs `--label`** — these look similar but mean different things:
-> - `--instance` is your **local identity** (which keypair to act as). It matches the label you used with `aya init --label <name>`. If you only have one instance it is selected automatically — even if the name you pass doesn't match — so you can omit `--instance` entirely after a fresh `aya init`.
-> - `--label` is a **name you assign to a remote peer** — either the name you broadcast when pairing (`aya pair` initiator) or the name you give to the peer you're pairing with (`aya pair` joiner).
+> **`--as` vs `--label` vs `--peer`** — three flags, three roles:
+> - `--as` is your **local identity** (which keypair to act as). Matches the label from `aya init --label <name>`. Legacy alias: `--instance`.
+> - `--label` is used with `aya init` to **name a new local identity**. (In older versions, `--label` was also used where `--peer` is now; some commands still accept it as a legacy alias.)
+> - `--peer` names a **remote machine** (used in `pair` and `trust`). Preferred over the legacy `--label` alias.
+
+## Plugin & Slash Commands
+
+aya ships as a Claude Code plugin. Load it with:
+
+```bash
+claude --plugin-dir /path/to/aya
+```
+
+Or add a permanent alias to your shell profile:
+
+```bash
+alias claude='claude --plugin-dir /path/to/aya'
+```
+
+Available slash commands (work in any project):
+
+| Command | What it does |
+|---------|--------------|
+| `/aya-send` | Pack and dispatch a packet to another machine |
+| `/aya-triage-packets` | Receive and route incoming packets |
+| `/aya-pair` | Guided pairing between two instances |
+| `/aya-setup` | First-run bootstrap (identity, hooks, polling) |
+| `/aya-watch` | Watch a GitHub PR with smart defaults |
+
+After editing skill files, run `/reload-plugins` to pick up changes live.
 
 ## How Session Crons Work
 
@@ -160,7 +187,7 @@ aya schedule watch github-pr owner/repo#456 -m "PR review" --remove-when merged_
 
 **Sending work to another machine:**
 ```bash
-aya dispatch --instance home --to work --seed \
+aya dispatch --as home --to work --seed \
   --intent "research request" \
   --opener "What logging do we have for the payment flow?"
 ```

@@ -91,7 +91,7 @@ def profile_with_no_instances(profile_path: Path) -> Path:
 
 @pytest.fixture
 def profile_with_multiple_trusted(profile_with_instance: Path) -> Path:
-    """Profile with two trusted keys ('home' and 'laptop') — for testing ambiguous recipient errors."""
+    """Profile with two trusted keys — for testing ambiguous recipient errors."""
     p = Profile.load(profile_with_instance)
     home = Identity.generate("home")
     laptop = Identity.generate("laptop")
@@ -584,21 +584,25 @@ class TestDispatch:
         self, profile_with_trusted: Path
     ) -> None:
         """'--to default' should succeed when exactly one trusted key exists."""
-        result = runner.invoke(
-            app,
-            [
-                "dispatch",
-                "--to",
-                "default",
-                "--intent",
-                "test",
-                "--profile",
-                str(profile_with_trusted),
-            ],
-            input="hello\n",
-        )
-        # Should not fail on recipient resolution — may fail later (relay), but not on --to
+        mock_publish = AsyncMock(return_value="b" * 64)
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "default",
+                    "--intent",
+                    "test",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+                input="hello\n",
+            )
+        assert result.exit_code == 0, result.output
         assert "Unknown recipient" not in (result.output or "")
+        mock_publish.assert_awaited_once()
 
     def test_dispatch_unknown_recipient_lists_available(
         self, profile_with_multiple_trusted: Path

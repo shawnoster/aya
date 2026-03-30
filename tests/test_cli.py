@@ -140,7 +140,7 @@ class TestTrust:
             [
                 "trust",
                 home.did,
-                "--label",
+                "--peer",
                 "home",
                 "--profile",
                 str(profile_with_instance),
@@ -160,7 +160,7 @@ class TestTrust:
             [
                 "trust",
                 home.did,
-                "--label",
+                "--peer",
                 "home",
                 "--profile",
                 str(missing),
@@ -175,7 +175,7 @@ class TestTrust:
             [
                 "trust",
                 home.did,
-                "--label",
+                "--peer",
                 "home",
                 "--profile",
                 str(profile_with_instance),
@@ -191,7 +191,7 @@ class TestTrust:
             [
                 "trust",
                 home.did,
-                "--label",
+                "--peer",
                 "home",
                 "--nostr-pubkey",
                 home.nostr_public_hex,
@@ -298,7 +298,7 @@ class TestPack:
                 "did:key:z6Mkfake",
                 "--intent",
                 "fail",
-                "--instance",
+                "--as",
                 "default",
                 "--profile",
                 str(profile_path),
@@ -310,7 +310,7 @@ class TestPack:
     def test_pack_smart_default_single_named_instance(
         self, profile_with_named_instance: Path, tmp_path: Path
     ) -> None:
-        """When only one instance exists and its name differs from --instance, use it anyway."""
+        """When only one instance exists and its name differs from --as, use it anyway."""
         p = Profile.load(profile_with_named_instance)
         # Add a trusted key so the pack can resolve a recipient
         remote = Identity.generate("remote")
@@ -330,7 +330,7 @@ class TestPack:
                 "smart default test",
                 "--out",
                 str(out_file),
-                "--instance",
+                "--as",
                 "default",  # no 'default' instance — only 'work' exists
                 "--profile",
                 str(profile_with_named_instance),
@@ -352,7 +352,7 @@ class TestPack:
                 "did:key:z6Mkfake",
                 "--intent",
                 "fail",
-                "--instance",
+                "--as",
                 "default",
                 "--profile",
                 str(profile_with_multiple_instances),
@@ -377,7 +377,7 @@ class TestPack:
                 "did:key:z6Mkfake",
                 "--intent",
                 "fail",
-                "--instance",
+                "--as",
                 "default",
                 "--profile",
                 str(profile_with_no_instances),
@@ -584,7 +584,7 @@ class TestDispatch:
                 "home",
                 "--intent",
                 "fail",
-                "--instance",
+                "--as",
                 "nonexistent",
                 "--profile",
                 str(profile_with_multiple_instances),

@@ -148,7 +148,7 @@ def _resolve_instance(p: Profile, instance: str, *, quiet: bool = False) -> Iden
             err.print(
                 f"[red]Instance '{instance}' not found.[/red] "
                 f"Available instances: [cyan]{names}[/cyan].\n"
-                f"Use [bold]--instance {available[0]}[/bold] "
+                f"Use [bold]--as {available[0]}[/bold] "
                 f"or run: [bold]aya init --label {instance}[/bold]"
             )
         else:
@@ -218,7 +218,7 @@ def init(
 @app.command()
 def trust(
     did: str = typer.Argument(help="DID to trust (did:key:z6Mk…)"),
-    label: str = typer.Option(..., help="Human label for this key (home, friend:alice)"),
+    peer: str = typer.Option(..., "--peer", "--label", help="Name for the remote peer"),
     nostr_pubkey: str = typer.Option(
         None,
         help="Nostr pubkey hex (required for send/receive; pairing fills this automatically)",
@@ -227,13 +227,13 @@ def trust(
 ) -> None:
     """Add a DID to your trusted keys list."""
     p = _load_profile(profile)
-    p.trusted_keys[label] = TrustedKey(
+    p.trusted_keys[peer] = TrustedKey(
         did=did,
-        label=label,
+        label=peer,
         nostr_pubkey=nostr_pubkey,
     )
     p.save(profile)
-    console.print(f"[green]✓[/green] Trusted: [cyan]{label}[/cyan]  [dim]{did}[/dim]")
+    console.print(f"[green]✓[/green] Trusted: [cyan]{peer}[/cyan]  [dim]{did}[/dim]")
     if not nostr_pubkey:
         console.print(
             "[dim]Note: No Nostr pubkey provided. "
@@ -253,7 +253,7 @@ def pack(
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
     out: Path = typer.Option(None, help="Write packet JSON to file (default: stdout)"),
-    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
+    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
     ),
@@ -261,7 +261,7 @@ def pack(
 ) -> None:
     """Pack a knowledge packet ready to send."""
     p = _load_profile(profile)
-    local = _resolve_instance(p, instance)
+    local = _resolve_instance(p, as_)
 
     # Resolve recipient DID
     to_did = _resolve_did(to, p)
@@ -313,12 +313,12 @@ def pack(
 def send(
     packet_file: Path = typer.Argument(help="Packet JSON file to send"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
-    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
+    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Send a packet to a Nostr relay."""
     p = _load_profile(profile)
-    local = _resolve_instance(p, instance)
+    local = _resolve_instance(p, as_)
 
     relay_urls = [relay] if relay else p.default_relays
     packet = Packet.from_json(packet_file.read_text())
@@ -348,7 +348,7 @@ def dispatch(
     context: str = typer.Option(None, help="Annotation for the receiving assistant"),
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
-    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
+    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
@@ -359,7 +359,7 @@ def dispatch(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = _resolve_instance(p, instance)
+        local = _resolve_instance(p, as_)
 
         to_did = _resolve_did(to, p)
 
@@ -437,7 +437,7 @@ def dispatch(
 @app.command()
 def receive(
     relay: str = typer.Option(None),
-    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
+    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
     auto_ingest: bool = typer.Option(False, help="Ingest all trusted packets without prompting"),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Auto-confirm all prompts (non-interactive mode)"
@@ -451,7 +451,7 @@ def receive(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = _resolve_instance(p, instance, quiet=quiet)
+        local = _resolve_instance(p, as_, quiet=quiet)
 
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
@@ -527,7 +527,7 @@ def receive(
 @app.command()
 def inbox(
     relay: str = typer.Option(None),
-    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
+    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
     format_: OutputFormat = typer.Option(
         OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
     ),
@@ -537,7 +537,7 @@ def inbox(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = _resolve_instance(p, instance)
+        local = _resolve_instance(p, as_)
 
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
@@ -565,21 +565,21 @@ def inbox(
 @app.command()
 def pair(
     code: str = typer.Option(None, help="Pairing code from the other instance (joiner mode)"),
-    label: str = typer.Option(..., help="Name to assign to the remote peer being paired with"),
-    instance: str = typer.Option("default", help="Local instance name (identity to act as)"),
+    peer: str = typer.Option(..., "--peer", "--label", help="Name for the remote peer"),
+    as_: str = typer.Option("default", "--as", "--instance", help="Local identity to act as"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Pair two instances with a short-lived code — no manual DID exchange."""
     p = _load_profile(profile)
-    local = _resolve_instance(p, instance)
+    local = _resolve_instance(p, as_)
 
     relay_urls = [relay] if relay else p.default_relays
 
     if code:
         # ── Joiner mode ──────────────────────────────────────────────
         try:
-            trusted = asyncio.run(join_pairing(local, label, code, relay_urls))
+            trusted = asyncio.run(join_pairing(local, peer, code, relay_urls))
         except PairingError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
@@ -602,21 +602,21 @@ def pair(
 
         # Publish the request
         console.print("[dim]Publishing pairing request…[/dim]")
-        request_event_id = asyncio.run(publish_pair_request(local, label, code_h, relay_urls))
+        request_event_id = asyncio.run(publish_pair_request(local, peer, code_h, relay_urls))
 
         # Show the code — user reads this aloud or types it on the other machine
         console.print(
             Panel.fit(
                 f"[bold]Pairing code:[/bold]  [bold cyan]{pairing_code}[/bold cyan]\n\n"
                 "Enter this on your other machine:\n"
-                f"  [dim]aya pair --code {pairing_code} --label <their-label>[/dim]\n\n"
+                f"  [dim]aya pair --code {pairing_code} --peer <their-name>[/dim]\n\n"
                 "[dim]Expires in 10 minutes.[/dim]",
                 title="aya — pair",
             )
         )
 
         # Poll for response
-        with console.status("[bold cyan]Waiting for the other instance…[/bold cyan]"):
+        with console.status("[bold cyan]Waiting for the other peer…[/bold cyan]"):
             trusted = asyncio.run(
                 poll_for_pair_response(relay_urls, local.nostr_public_hex, request_event_id)
             )

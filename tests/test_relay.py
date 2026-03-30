@@ -13,11 +13,11 @@ import pytest
 from aya.identity import Identity
 from aya.packet import Packet
 from aya.relay import (
+    _FETCH_PAGE_SIZE,
     AYA_KIND,
     AYA_RESULT_KIND,
     RelayClient,
     RelayError,
-    _FETCH_PAGE_SIZE,
     _compute_event_id,
     _read_until_eose,
     _sign_hex,

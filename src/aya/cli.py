@@ -292,7 +292,7 @@ def pack(
     local = _resolve_instance(p, as_)
 
     # Resolve recipient DID
-    to_did = _resolve_did(to, p)
+    to_did, _to_label = _resolve_did(to, p)
 
     if seed:
         if not opener:
@@ -396,7 +396,7 @@ def dispatch(
         p = _load_profile(profile)
         local = _resolve_instance(p, as_)
 
-        to_did = _resolve_did(to, p)
+        to_did, to_label = _resolve_did(to, p)
 
         if seed:
             if not opener:
@@ -462,7 +462,7 @@ def dispatch(
                 f"Packet:  [dim]{signed.id[:8]}[/dim]\n"
                 f"Event:   [dim]{event_id[:8]}[/dim]\n"
                 f"Relay:   [dim]{relay_display}[/dim]\n"
-                f"To:      [dim]{to}[/dim]",
+                f"To:      [dim]{to_label}[/dim]",
                 title="aya — dispatch",
             )
         )
@@ -1122,18 +1122,42 @@ def status(
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _resolve_did(to: str, profile: Profile) -> str:
-    """Resolve a label ('home') or raw DID to a DID string."""
+def _resolve_did(to: str, profile: Profile) -> tuple[str, str]:
+    """Resolve a label ('home') or raw DID to ``(did, resolved_label)``.
+
+    Resolution order:
+    1. Raw DID (starts with "did:") — returned immediately.
+    2. Exact match on label in trusted_keys.
+    3. Smart single-recipient fallback: if exactly one trusted key exists, use it
+       regardless of the requested label (mirrors ``_resolve_instance`` behaviour).
+    4. Otherwise print a descriptive error that lists available labels.
+    """
     if to.startswith("did:"):
-        return to
+        return to, to
     key = profile.trusted_keys.get(to)
-    if not key:
+    if key:
+        return key.did, to
+
+    available = list(profile.trusted_keys.keys())
+
+    # Smart default: exactly one trusted key — use it without fuss.
+    if len(available) == 1:
+        label = available[0]
+        return next(iter(profile.trusted_keys.values())).did, label
+
+    if available:
+        names = ", ".join(available)
+        err.print(
+            f"[red]Unknown recipient '{to}'.[/red] "
+            f"Available recipients: [cyan]{names}[/cyan].\n"
+            "Use a full DID or one of the labels above."
+        )
+    else:
         err.print(
             f"[red]Unknown recipient '{to}'.[/red]\n"
             "Use a full DID or add with [bold]aya trust[/bold]."
         )
-        raise typer.Exit(1)
-    return key.did
+    raise typer.Exit(1)
 
 
 def _packet_to_dict(pkt: Packet, profile: Profile) -> dict[str, object]:

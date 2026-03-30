@@ -89,6 +89,22 @@ def profile_with_no_instances(profile_path: Path) -> Path:
     return profile_path
 
 
+@pytest.fixture
+def profile_with_multiple_trusted(profile_with_instance: Path) -> Path:
+    """Profile with two trusted keys — for testing ambiguous recipient errors."""
+    p = Profile.load(profile_with_instance)
+    home = Identity.generate("home")
+    laptop = Identity.generate("laptop")
+    p.trusted_keys["home"] = TrustedKey(
+        did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
+    )
+    p.trusted_keys["laptop"] = TrustedKey(
+        did=laptop.did, label="laptop", nostr_pubkey=laptop.nostr_public_hex
+    )
+    p.save(profile_with_instance)
+    return profile_with_instance
+
+
 # ── init ─────────────────────────────────────────────────────────────────────
 
 
@@ -563,6 +579,51 @@ class TestDispatch:
             input="data\n",
         )
         assert result.exit_code != 0
+
+    def test_dispatch_default_resolves_to_single_trusted_key(
+        self, profile_with_trusted: Path
+    ) -> None:
+        """'--to default' should succeed when exactly one trusted key exists."""
+        mock_publish = AsyncMock(return_value="b" * 64)
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "default",
+                    "--intent",
+                    "test",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+                input="hello\n",
+            )
+        assert result.exit_code == 0, result.output
+        assert "Unknown recipient" not in (result.output or "")
+        mock_publish.assert_awaited_once()
+
+    def test_dispatch_unknown_recipient_lists_available(
+        self, profile_with_multiple_trusted: Path
+    ) -> None:
+        """Error for unknown --to should list available recipient labels."""
+        result = runner.invoke(
+            app,
+            [
+                "dispatch",
+                "--to",
+                "nobody",
+                "--intent",
+                "fail",
+                "--profile",
+                str(profile_with_multiple_trusted),
+            ],
+            input="data\n",
+        )
+        assert result.exit_code != 0
+        assert "home" in result.output
+        assert "laptop" in result.output
 
     def test_dispatch_missing_instance_fails(self, profile_with_multiple_instances: Path) -> None:
         """When multiple instances exist and requested one is absent, dispatch must fail.

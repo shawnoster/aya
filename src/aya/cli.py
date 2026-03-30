@@ -1116,17 +1116,40 @@ def status(
 
 
 def _resolve_did(to: str, profile: Profile) -> str:
-    """Resolve a label ('home') or raw DID to a DID string."""
+    """Resolve a label ('home') or raw DID to a DID string.
+
+    Resolution order:
+    1. Raw DID (starts with "did:") — returned immediately.
+    2. Exact match on label in trusted_keys.
+    3. Smart single-recipient fallback: if exactly one trusted key exists, use it
+       regardless of the requested label (mirrors ``_resolve_instance`` behaviour).
+    4. Otherwise print a descriptive error that lists available labels.
+    """
     if to.startswith("did:"):
         return to
     key = profile.trusted_keys.get(to)
-    if not key:
+    if key:
+        return key.did
+
+    available = list(profile.trusted_keys.keys())
+
+    # Smart default: exactly one trusted key — use it without fuss.
+    if len(available) == 1:
+        return next(iter(profile.trusted_keys.values())).did
+
+    if available:
+        names = ", ".join(available)
+        err.print(
+            f"[red]Unknown recipient '{to}'.[/red] "
+            f"Available recipients: [cyan]{names}[/cyan].\n"
+            "Use a full DID or one of the labels above."
+        )
+    else:
         err.print(
             f"[red]Unknown recipient '{to}'.[/red]\n"
             "Use a full DID or add with [bold]aya trust[/bold]."
         )
-        raise typer.Exit(1)
-    return key.did
+    raise typer.Exit(1)
 
 
 def _packet_to_dict(pkt: Packet, profile: Profile) -> dict[str, object]:

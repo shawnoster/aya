@@ -32,19 +32,22 @@ uv sync
 ## Quick start
 
 ```bash
-# Set up identity
-aya init --label work
+# Set up identity on each machine
+aya init --label alice       # on Alice's machine
+aya init --label bob         # on Bob's machine
 
-# Pair with another machine
-aya pair --peer home         # shows a code
-aya pair --code WORD-WORD-0000 --peer work   # on the other machine
+# Pair them
+aya pair --peer bob          # on Alice's machine — shows a code
+aya pair --code WORD-WORD-0000 --peer alice   # on Bob's machine
 
 # Send a packet
-aya dispatch --to home --intent "test" --files notes.md
+aya dispatch --to bob --intent "build notes" --files notes.md
 
 # Check inbox
 aya inbox
 ```
+
+Labels can be anything — `home`/`work`, names, machine hostnames. They're local aliases for the keypair on each side.
 
 ## Scheduling
 
@@ -116,9 +119,9 @@ CCR minimum interval is 1 hour. aya can fire at any cron interval.
 
 Already have aya installed on another machine? Give Claude Code this prompt on the new machine and it will handle everything:
 
-> Install aya (`uv tool install aya-ai-assist`), initialize identity with `aya init --label <LABEL>` (use "home" or "work"), then pair with my other instance. If I have a pairing code from the other machine, run `aya pair --code <CODE> --peer <OTHER_LABEL> --as <LABEL>` and we're done. If not, run `aya pair --peer <OTHER_LABEL> --as <LABEL>` — this will block waiting for the other machine to join (up to 10 minutes), so give me the short code it displays and immediately run `aya pair --code <CODE>` on the other machine before the window expires. After pairing, install hooks and crontab with `aya schedule install`. Register a relay poll cron: `aya schedule recurring -m "relay-poll" -c "*/10 * * * *" -p "Run: aya receive --as <LABEL> --auto-ingest --quiet. If any packets were ingested, surface their content to the user."`. Finally, add the aya plugin to your shell profile: `alias claude='claude --plugin-dir /path/to/aya'` and verify everything with `aya status`.
+> Install aya (`uv tool install aya-ai-assist`), initialize identity with `aya init --label <LABEL>`, then pair with my other instance. If I have a pairing code from the other machine, run `aya pair --code <CODE> --peer <OTHER_LABEL> --as <LABEL>` and we're done. If not, run `aya pair --peer <OTHER_LABEL> --as <LABEL>` — this will block waiting for the other machine to join (up to 10 minutes), so give me the short code it displays and immediately run `aya pair --code <CODE>` on the other machine before the window expires. After pairing, install hooks and crontab with `aya schedule install`. Register a relay poll cron: `aya schedule recurring -m "relay-poll" -c "*/10 * * * *" -p "Run: aya receive --as <LABEL> --auto-ingest --quiet. If any packets were ingested, surface their content to the user."`. Finally, add the aya plugin to your shell profile: `alias claude='claude --plugin-dir /path/to/aya'` and verify everything with `aya status`.
 
-Replace `<LABEL>` with this machine's role (`home` or `work`), `<OTHER_LABEL>` with the other machine's role, and `<CODE>` with the pairing code.
+Replace `<LABEL>` with a name for this machine (e.g. `home`, `work`, `laptop`, your name), `<OTHER_LABEL>` with the other machine's label, and `<CODE>` with the pairing code.
 
 ### What that prompt does
 
@@ -262,8 +265,9 @@ After editing any skill file in the aya repo, run `/reload-plugins` in your sess
 
 - **Identity**: `did:key` (ed25519) for packet signing + secp256k1 for Nostr transport
 - **Transport**: Nostr relays (NIP-01, kind 5999) — async, federated, self-hostable
+- **Encryption**: NIP-44 v2 (secp256k1 ECDH + ChaCha20 + HMAC-SHA256) — on by default for public relays
 - **Packets**: Signed JSON envelopes with markdown content, TTL, and conflict strategies
-- **Security**: Signature verification, user approval before ingest, trust registry
+- **Security**: End-to-end encryption, signature verification, user approval before ingest, trust registry
 
 ## License
 

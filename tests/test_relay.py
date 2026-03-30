@@ -502,9 +502,9 @@ class TestFetchPagination:
         # Two REQ filters should have been sent.
         assert len(sent_filters) == 2
 
-        # Second REQ must carry an `until` cursor set to oldest_ts_of_page1 - 1.
+        # Second REQ must carry an inclusive `until` cursor (oldest_ts of page 1).
         oldest_page1_ts = base_ts - (_FETCH_PAGE_SIZE - 1)
-        assert sent_filters[1].get("until") == oldest_page1_ts - 1
+        assert sent_filters[1].get("until") == oldest_page1_ts
 
     async def test_stops_after_partial_page(
         self, client: RelayClient, sender: Identity, recipient: Identity
@@ -573,6 +573,45 @@ class TestFetchPagination:
         assert len(packets) == _FETCH_PAGE_SIZE
         # Only one REQ: no cursor to advance when created_at is absent.
         assert req_count == 1
+
+    async def test_no_progress_guard_stops_pagination(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """Pagination stops when a full page contains only already-seen event IDs."""
+        base_ts = 1_700_000_000
+
+        def _make_event(idx: int) -> dict:
+            p = Packet(
+                **{"from": sender.did, "to": recipient.did},
+                intent=f"Packet {idx}",
+                content="data",
+            )
+            return {"id": f"evt-{idx}", "content": p.to_json(), "created_at": base_ts}
+
+        # Both pages return the *same* set of events (identical IDs).
+        same_events = [_make_event(i) for i in range(_FETCH_PAGE_SIZE)]
+        req_count = 0
+
+        async def fake_read_until_eose(ws, sub_id):
+            nonlocal req_count
+            req_count += 1
+            for evt in same_events:
+                yield evt
+
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.relay.websockets.connect", return_value=mock_ws),
+        ):
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        # Only the first page's packets should be yielded (no duplicates).
+        assert len(packets) == _FETCH_PAGE_SIZE
+        # After seeing no-progress on page 2, pagination must stop (2 REQs total).
+        assert req_count == 2
 
 
 # ── publish ───────────────────────────────────────────────────────────────────

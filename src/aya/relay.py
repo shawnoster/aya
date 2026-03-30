@@ -8,7 +8,7 @@ import json
 import logging
 import random
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import websockets
 from coincurve import PrivateKey as Secp256k1PrivateKey
@@ -39,6 +39,9 @@ _MAX_RETRIES_FETCH = 3
 # Fetch pagination — events per REQ batch.  Pagination continues with an
 # `until` cursor until the relay returns fewer events than this size.
 _FETCH_PAGE_SIZE = 200
+# Default look-back window used when no `since` is specified.  Matches the
+# default packet TTL (7 days) so no live packet can fall outside the window.
+_DEFAULT_FETCH_WINDOW_DAYS = 7
 
 
 def _backoff_delay(attempt: int) -> float:
@@ -199,25 +202,37 @@ class RelayClient:
 
         Sends REQ filters with ``limit=_FETCH_PAGE_SIZE``.  After each page,
         if the relay returned a full page the cursor advances to
-        ``oldest_seen_ts - 1`` and another REQ is issued.  Iteration stops
-        when a page is smaller than _FETCH_PAGE_SIZE (signals end of matching
-        events) or when no ``created_at`` timestamp is available to advance
-        the cursor.
+        ``oldest_seen_ts`` (inclusive) and another REQ is issued.  Pagination
+        stops when:
+
+        * the page is smaller than ``_FETCH_PAGE_SIZE`` (relay exhausted), or
+        * no ``created_at`` timestamp is available to advance the cursor, or
+        * no new event IDs were seen in the last page (no progress — guards
+          against infinite loops when many events share the same timestamp).
+
+        When *since* is omitted a default look-back window of
+        ``_DEFAULT_FETCH_WINDOW_DAYS`` is applied (matching the packet TTL) so
+        the scan is bounded to the live-packet window.  Pass an explicit *since*
+        to override this lower bound.
         """
+        now = datetime.now(UTC)
+        effective_since = since if since is not None else (
+            now - timedelta(days=_DEFAULT_FETCH_WINDOW_DAYS)
+        )
         until: int | None = None
+        seen_event_ids: set[str] = set()  # intra-relay dedup for inclusive cursor
 
         while True:
             filter_: dict = {
                 "kinds": [AYA_KIND],
                 "#p": [self.public_key_hex],
                 "limit": _FETCH_PAGE_SIZE,
+                "since": int(effective_since.timestamp()),
             }
-            if since:
-                filter_["since"] = int(since.timestamp())
             if until is not None:
                 filter_["until"] = until
 
-            sub_id = f"aya-{datetime.now(UTC).timestamp():.0f}"
+            sub_id = f"aya-{now.timestamp():.0f}-{until or 'first'}"
 
             # Collect the raw events for this page so we can count them and
             # determine the oldest timestamp before deciding whether to paginate.
@@ -258,13 +273,21 @@ class RelayClient:
             if not fetch_ok:
                 return
 
-            # Process events and track the oldest timestamp for cursor advancement.
+            # Process events, track the oldest timestamp for cursor advancement,
+            # and count truly new events (guards against infinite loops when many
+            # events share the same created_at at the page boundary).
             oldest_ts: int | None = None
+            new_event_count = 0
             for raw in page_events:
                 raw_ts = raw.get("created_at")
-                if isinstance(raw_ts, int):
-                    if oldest_ts is None or raw_ts < oldest_ts:
-                        oldest_ts = raw_ts
+                if isinstance(raw_ts, int) and (oldest_ts is None or raw_ts < oldest_ts):
+                    oldest_ts = raw_ts
+                event_id: str | None = raw.get("id")
+                if event_id is not None:
+                    if event_id in seen_event_ids:
+                        continue  # already yielded via inclusive cursor overlap
+                    seen_event_ids.add(event_id)
+                new_event_count += 1
                 try:
                     # Skip pairing events — same kind (5999) but not
                     # Packet-shaped. Constants live in relay.py to avoid
@@ -287,17 +310,18 @@ class RelayClient:
                 except Exception as exc:
                     logger.warning("Skipping malformed event: %s", exc)
 
-            # Stop paginating if this page was smaller than the batch size
-            # (relay has no more matching events) or if we have no timestamp
-            # cursor to advance.
-            if len(page_events) < _FETCH_PAGE_SIZE or oldest_ts is None:
+            # Stop paginating if the relay is exhausted (partial page), if we
+            # have no timestamp cursor to advance, or if no new events were seen
+            # (inclusive cursor already covered the remaining events at oldest_ts).
+            if len(page_events) < _FETCH_PAGE_SIZE or oldest_ts is None or new_event_count == 0:
                 break
 
-            until = oldest_ts - 1
+            until = oldest_ts  # inclusive: re-fetch the boundary timestamp
             logger.debug(
-                "Relay %s: fetched %d events, advancing cursor to until=%d",
+                "Relay %s: fetched %d events (%d new), advancing cursor to until=%d",
                 relay_url,
                 len(page_events),
+                new_event_count,
                 until,
             )
 

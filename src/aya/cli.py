@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime
 from enum import StrEnum
@@ -60,14 +61,36 @@ from aya.status import run_status
 
 
 class OutputFormat(StrEnum):
+    AUTO = "auto"
     TEXT = "text"
     JSON = "json"
 
 
 class StatusFormat(StrEnum):
+    AUTO = "auto"
     TEXT = "text"
     JSON = "json"
     RICH = "rich"
+
+
+def resolve_format(fmt: OutputFormat) -> OutputFormat:
+    """Resolve AUTO to a concrete format based on env var or TTY detection."""
+    if fmt is not OutputFormat.AUTO:
+        return fmt
+    env = os.environ.get("AYA_FORMAT", "").strip().lower()
+    if env in ("text", "json"):
+        return OutputFormat(env)
+    return OutputFormat.TEXT if sys.stdout.isatty() else OutputFormat.JSON
+
+
+def resolve_status_format(fmt: StatusFormat) -> StatusFormat:
+    """Resolve AUTO to a concrete format based on env var or TTY detection."""
+    if fmt is not StatusFormat.AUTO:
+        return fmt
+    env = os.environ.get("AYA_FORMAT", "").strip().lower()
+    if env in ("text", "json", "rich"):
+        return StatusFormat(env)
+    return StatusFormat.TEXT if sys.stdout.isatty() else StatusFormat.JSON
 
 
 app = typer.Typer(
@@ -164,10 +187,11 @@ def _resolve_instance(p: Profile, instance: str, *, quiet: bool = False) -> Iden
 @app.command()
 def version(
     format_: OutputFormat = typer.Option(
-        OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
     """Show the installed aya version."""
+    format_ = resolve_format(format_)
     if format_ == OutputFormat.JSON:
         console.out(json.dumps({"version": __version__}))
     else:
@@ -541,11 +565,12 @@ def inbox(
         "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
     ),
     format_: OutputFormat = typer.Option(
-        OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """List pending packets without ingesting."""
+    format_ = resolve_format(format_)
 
     async def _run() -> None:
         p = _load_profile(profile)
@@ -767,10 +792,11 @@ def schedule_list(
     all_items: bool = typer.Option(False, "--all", "-a", help="Include dismissed/delivered"),
     item_type: str = typer.Option(None, "--type", help="Filter: reminder, watch, recurring, event"),
     format_: OutputFormat = typer.Option(
-        OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
     """List scheduled items."""
+    format_ = resolve_format(format_)
     items = list_items(show_all=all_items, item_type=item_type)
     if format_ == OutputFormat.JSON:
         console.out(json.dumps(items, indent=2, default=str))
@@ -781,10 +807,11 @@ def schedule_list(
 @schedule_app.command("check")
 def schedule_check(
     format_: OutputFormat = typer.Option(
-        OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
     """Check for due reminders and alerts."""
+    format_ = resolve_format(format_)
     due_items, unseen = check_due()
 
     if format_ == OutputFormat.JSON:
@@ -868,7 +895,7 @@ def schedule_tick(
 @schedule_app.command("pending")
 def schedule_pending(
     format_: OutputFormat = typer.Option(
-        OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
     """Show pending items for this session — alerts to deliver + session crons.
@@ -876,6 +903,7 @@ def schedule_pending(
     SessionStart hook entry point:
         aya scheduler pending --format text
     """
+    format_ = resolve_format(format_)
     pending = get_pending()
     if format_ == OutputFormat.JSON:
         console.out(json.dumps(pending, indent=2, default=str))
@@ -886,10 +914,11 @@ def schedule_pending(
 @schedule_app.command("status")
 def schedule_status(
     format_: OutputFormat = typer.Option(
-        OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
     """Show scheduler overview — watches, reminders, crons, deliveries."""
+    format_ = resolve_format(format_)
     status = get_scheduler_status()
     if format_ == OutputFormat.JSON:
         console.out(json.dumps(status, indent=2, default=str))
@@ -900,11 +929,12 @@ def schedule_status(
 @schedule_app.command("alerts")
 def schedule_alerts(
     format_: OutputFormat = typer.Option(
-        OutputFormat.TEXT, "--format", "-f", help="Output format: text or json"
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
     mark_seen: bool = typer.Option(False, "--mark-seen", help="Mark all alerts as seen"),
 ) -> None:
     """Show alerts from background watcher."""
+    format_ = resolve_format(format_)
     unseen = show_alerts(mark_seen=mark_seen)
 
     if format_ == OutputFormat.JSON:
@@ -1070,10 +1100,14 @@ def profile(
 @app.command()
 def status(
     format_: StatusFormat = typer.Option(
-        StatusFormat.TEXT, "--format", "-f", help="Output format: text, json, or rich"
+        StatusFormat.AUTO,
+        "--format",
+        "-f",
+        help="Output format: auto (default), text, json, or rich",
     ),
 ) -> None:
     """Workspace readiness check — systems, schedule, focus."""
+    format_ = resolve_status_format(format_)
     run_status(format_=format_)
 
 

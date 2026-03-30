@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -25,7 +26,7 @@ class TestVersion:
         from importlib.metadata import version
 
         expected = version("aya-ai-assist")
-        result = runner.invoke(app, ["version"])
+        result = runner.invoke(app, ["version", "--format", "text"])
         assert result.exit_code == 0, result.output
         assert f"aya {expected}" in result.output
 
@@ -1052,3 +1053,63 @@ class TestReceive:
         assert result.exit_code == 0, result.output
         saved = Profile.load(profile_with_instance)
         assert packet.id in saved.ingested_ids
+
+
+# ── AUTO format resolution ──────────────────────────────────────────────────
+
+
+class TestAutoFormat:
+    def test_auto_resolves_to_text_in_tty(self) -> None:
+        """When stdout is a TTY, AUTO should produce text output."""
+        from aya.cli import OutputFormat, resolve_format
+
+        with patch("aya.cli.sys") as mock_sys:
+            mock_sys.stdout.isatty.return_value = True
+            mock_sys.environ = os.environ
+            assert resolve_format(OutputFormat.AUTO) == OutputFormat.TEXT
+
+        # And verify via CLI with explicit --format text
+        result = runner.invoke(app, ["version", "--format", "text"])
+        assert result.exit_code == 0, result.output
+        assert result.output.startswith("aya ")
+
+    def test_auto_resolves_to_json_when_not_tty(self) -> None:
+        """When stdout.isatty() returns False, AUTO should resolve to JSON.
+        CliRunner provides a non-TTY stdout, so the default should be JSON."""
+        result = runner.invoke(app, ["version"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert "version" in data
+
+    def test_aya_format_env_overrides_tty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AYA_FORMAT=json should force JSON even in a TTY context."""
+        monkeypatch.setenv("AYA_FORMAT", "json")
+        result = runner.invoke(app, ["version"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert "version" in data
+
+    def test_aya_format_env_text_overrides_non_tty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AYA_FORMAT=text should force text even in a non-TTY context."""
+        monkeypatch.setenv("AYA_FORMAT", "text")
+        result = runner.invoke(app, ["version"])
+        assert result.exit_code == 0, result.output
+        assert result.output.startswith("aya ")
+
+    def test_explicit_format_text_overrides_auto(self) -> None:
+        """--format text must always produce text, regardless of TTY."""
+        result = runner.invoke(app, ["version", "--format", "text"])
+        assert result.exit_code == 0, result.output
+        assert result.output.startswith("aya ")
+
+    def test_explicit_format_json_overrides_auto(self) -> None:
+        """--format json must always produce JSON, regardless of TTY."""
+        result = runner.invoke(app, ["version", "--format", "json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert "version" in data
+
+    def test_auto_can_be_passed_explicitly(self) -> None:
+        """--format auto should be accepted and behave like the default."""
+        result = runner.invoke(app, ["version", "--format", "auto"])
+        assert result.exit_code == 0, result.output

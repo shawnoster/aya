@@ -14,6 +14,7 @@ import websockets
 from coincurve import PrivateKey as Secp256k1PrivateKey
 from websockets.asyncio.client import ClientConnection
 
+from aya.encryption import nip44_decrypt, nip44_encrypt
 from aya.packet import Packet
 
 logger = logging.getLogger(__name__)
@@ -105,15 +106,21 @@ class RelayClient:
         self._private_key_hex = nostr_private_hex
         self.public_key_hex = nostr_public_hex
 
-    async def publish(self, packet: Packet, recipient_nostr_pubkey: str) -> str:
+    async def publish(
+        self, packet: Packet, recipient_nostr_pubkey: str, encrypt: bool = True
+    ) -> str:
         """Publish a packet to all configured relays.
 
         Fans out to every relay regardless of individual results.
         Retries individual relays on transient failures (rate-limit, 503, network)
         with exponential back-off + jitter.  Raises *RelayError* only if all
         relays fail after exhausting retries.
+
+        *encrypt* controls NIP-44 encryption of the Nostr event content (default: True).
+        Pass ``encrypt=False`` for debug or private-relay use where transport-level
+        security is trusted.
         """
-        event = self._build_event(packet, recipient_nostr_pubkey)
+        event = self._build_event(packet, recipient_nostr_pubkey, encrypt=encrypt)
         errors: list[str] = []
         last_event_id: str | None = None
 
@@ -305,7 +312,34 @@ class RelayClient:
                     if pairing_tag is not None:
                         logger.debug("Skipping pairing event (tag=%s)", pairing_tag[1])
                         continue
-                    packet = Packet.from_json(raw["content"])
+                    content = raw["content"]
+                    # Route on content shape: JSON → parse directly; anything else
+                    # (base64 NIP-44 payload) → decrypt first.  Checking the leading
+                    # character avoids masking parse/validation errors in malformed
+                    # JSON packets by misattributing them as decryption failures.
+                    if content.lstrip().startswith("{"):
+                        packet = Packet.from_json(content)
+                    else:
+                        # Attempt NIP-44 decryption using the sender's Nostr pubkey
+                        # from the Nostr event envelope.
+                        sender_pub = raw.get("pubkey", "")
+                        if not sender_pub:
+                            logger.warning(
+                                "Skipping event %s: content is not JSON and "
+                                "no sender pubkey in envelope for decryption",
+                                raw.get("id", "?")[:8],
+                            )
+                            continue
+                        try:
+                            plaintext = nip44_decrypt(content, self._private_key_hex, sender_pub)
+                        except ValueError as crypto_exc:
+                            logger.warning(
+                                "Skipping event %s: NIP-44 decryption failed — %s",
+                                raw.get("id", "?")[:8],
+                                crypto_exc,
+                            )
+                            continue
+                        packet = Packet.from_json(plaintext)
                     if not packet.is_expired():
                         yield packet
                 except Exception as exc:
@@ -337,11 +371,20 @@ class RelayClient:
             except Exception as exc:
                 logger.warning("Failed to send receipt to %s: %s", relay_url, exc)
 
-    def _build_event(self, packet: Packet, recipient_nostr_pubkey: str) -> dict:
-        """Build a NIP-01 compliant Nostr event wrapping the Assistant Sync packet."""
+    def _build_event(
+        self, packet: Packet, recipient_nostr_pubkey: str, encrypt: bool = True
+    ) -> dict:
+        """Build a NIP-01 compliant Nostr event wrapping the Assistant Sync packet.
+
+        When *encrypt* is True (default), the packet JSON is NIP-44 encrypted to the
+        recipient's Nostr pubkey before embedding in the event content.
+        """
         recipient_pubkey = recipient_nostr_pubkey
 
-        content = packet.to_json()
+        if encrypt:
+            content = nip44_encrypt(packet.to_json(), self._private_key_hex, recipient_pubkey)
+        else:
+            content = packet.to_json()
         tags = [
             ["p", recipient_pubkey],
             ["expiration", str(int(datetime.fromisoformat(packet.expires_at).timestamp()))],

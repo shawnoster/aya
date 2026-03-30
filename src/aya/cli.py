@@ -356,7 +356,7 @@ def send(
 
     # Resolve recipient's Nostr pubkey
     recipient_nostr_pub = _resolve_nostr_pubkey(packet.to_did, p)
-    event_id = asyncio.run(client.publish(packet, recipient_nostr_pub))
+    event_id = asyncio.run(client.publish(packet, recipient_nostr_pub, encrypt=packet.encrypted))
     relay_count = len(relay_urls)
     relay_display = relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
     console.print(
@@ -384,6 +384,9 @@ def dispatch(
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
+    ),
+    no_encrypt: bool = typer.Option(
+        False, "--no-encrypt", help="Send plaintext (debug or private-relay mode)"
     ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
@@ -425,6 +428,10 @@ def dispatch(
                 conflict_strategy=conflict,
             )
 
+        # Mark the packet encrypted before signing so the flag is covered by the signature.
+        if not no_encrypt:
+            packet.encrypted = True
+
         signed = packet.sign(local)
 
         relay_urls = [relay] if relay else p.default_relays
@@ -439,7 +446,7 @@ def dispatch(
 
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
         try:
-            event_id = await client.publish(signed, recipient_nostr_pub)
+            event_id = await client.publish(signed, recipient_nostr_pub, encrypt=not no_encrypt)
         except Exception:
             err.print("[yellow]Could not reach relay — dispatch failed.[/yellow]")
             raise typer.Exit(1) from None

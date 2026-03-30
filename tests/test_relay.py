@@ -129,11 +129,35 @@ class TestBuildEvent:
         event = client._build_event(packet, recipient.nostr_public_hex)
         assert event["pubkey"] == sender.nostr_public_hex
 
-    def test_content_is_packet_json(
+    def test_content_is_packet_json_plaintext(
         self, client: RelayClient, packet: Packet, recipient: Identity
     ) -> None:
-        event = client._build_event(packet, recipient.nostr_public_hex)
+        event = client._build_event(packet, recipient.nostr_public_hex, encrypt=False)
         restored = Packet.from_json(event["content"])
+        assert restored.id == packet.id
+        assert restored.intent == packet.intent
+
+    def test_content_is_encrypted_by_default(
+        self, client: RelayClient, packet: Packet, recipient: Identity
+    ) -> None:
+        import base64
+
+        event = client._build_event(packet, recipient.nostr_public_hex)
+        # Encrypted content is base64-encoded NIP-44 — not raw JSON
+        raw = base64.b64decode(event["content"], validate=True)
+        assert raw[0] == 2  # NIP-44 v2 version byte
+        assert not event["content"].startswith("{")  # definitely not JSON
+
+    def test_encrypted_content_decrypts_correctly(
+        self, client: RelayClient, packet: Packet, sender: Identity, recipient: Identity
+    ) -> None:
+        from aya.encryption import nip44_decrypt
+
+        event = client._build_event(packet, recipient.nostr_public_hex)
+        plaintext = nip44_decrypt(
+            event["content"], recipient.nostr_private_hex, sender.nostr_public_hex
+        )
+        restored = Packet.from_json(plaintext)
         assert restored.id == packet.id
         assert restored.intent == packet.intent
 
@@ -444,6 +468,53 @@ class TestFetchPending:
 
         assert len(packets) == 1
         assert packets[0].id == p.id
+
+    async def test_yields_nip44_encrypted_packets(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """fetch_pending must transparently decrypt NIP-44-encrypted Nostr events."""
+        from aya.encryption import nip44_encrypt
+
+        p = Packet(
+            **{"from": sender.did, "to": recipient.did},
+            intent="Encrypted handoff",
+            content="This is secret.",
+            encrypted=True,
+        )
+        # Encrypt from sender → recipient; client holds recipient keys.
+        encrypted_content = nip44_encrypt(
+            p.to_json(), sender.nostr_private_hex, recipient.nostr_public_hex
+        )
+        # The Nostr event carries the sender's pubkey in the envelope.
+        raw_event = {
+            "id": "evt-enc",
+            "pubkey": sender.nostr_public_hex,
+            "content": encrypted_content,
+        }
+
+        async def fake_read_until_eose(ws, sub_id):
+            yield raw_event
+
+        # client was built with sender keys (see fixture); for this test we need a client
+        # built with recipient keys so it can decrypt.
+        recipient_client = RelayClient(
+            relay_urls="wss://relay.example.com",
+            nostr_private_hex=recipient.nostr_private_hex,
+            nostr_public_hex=recipient.nostr_public_hex,
+        )
+
+        with patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose):
+            mock_ws = AsyncMock()
+            mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("aya.relay.websockets.connect", return_value=mock_ws):
+                packets = [pkt async for pkt in recipient_client.fetch_pending()]
+
+        assert len(packets) == 1
+        assert packets[0].id == p.id
+        assert packets[0].intent == p.intent
+        assert packets[0].encrypted is True
 
 
 # ── pagination ────────────────────────────────────────────────────────────────

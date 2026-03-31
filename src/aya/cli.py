@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from aya import __version__
 from aya.ci import watch_pr_checks
@@ -575,6 +576,9 @@ def inbox(
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
+    show_all: bool = typer.Option(
+        False, "--all", help="Show all packets including already-ingested ones"
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """List pending packets without ingesting."""
@@ -587,13 +591,23 @@ def inbox(
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
-        packets = [pkt async for pkt in client.fetch_pending()]
+        all_packets = [pkt async for pkt in client.fetch_pending()]
+        ingested_set = {entry["id"] for entry in p.ingested_ids}
+
+        new_packets = [pkt for pkt in all_packets if pkt.id not in ingested_set]
+        display_packets = all_packets if show_all else new_packets
+
         if format_ == OutputFormat.JSON:
-            _output_json([_packet_to_dict(pkt, p) for pkt in packets])
-        elif not packets:
+            ingested_for_json = ingested_set if show_all else None
+            _output_json([_packet_to_dict(pkt, p, ingested_for_json) for pkt in display_packets])
+        elif not display_packets:
             console.print("[dim]Inbox empty.[/dim]")
         else:
-            _show_inbox(packets, p)
+            _show_inbox(display_packets, p, ingested_set if show_all else None)
+            if show_all and len(all_packets) != len(new_packets):
+                total = len(all_packets)
+                new = len(new_packets)
+                console.print(f"[dim]{total} total, {new} new[/dim]")
 
     asyncio.run(_run())
 
@@ -1175,12 +1189,19 @@ def _extract_packet_data(pkt: Packet, profile: Profile) -> dict[str, object]:
     }
 
 
-def _packet_to_dict(pkt: Packet, profile: Profile) -> dict[str, object]:
-    """Convert packet to dict for JSON output."""
-    return _extract_packet_data(pkt, profile)
+def _packet_to_dict(
+    pkt: Packet, profile: Profile, ingested_set: set[str] | None = None
+) -> dict[str, object]:
+    """Convert packet to dict for JSON output, optionally marking ingested packets."""
+    d = _extract_packet_data(pkt, profile)
+    if ingested_set is not None:
+        d["ingested"] = pkt.id in ingested_set
+    return d
 
 
-def _show_inbox(packets: list[Packet], profile: Profile) -> None:
+def _show_inbox(
+    packets: list[Packet], profile: Profile, ingested_set: set[str] | None = None
+) -> None:
     table = Table(title=f"Inbox — {len(packets)} packet(s)", show_lines=True)
     table.add_column("ID", style="dim", width=10)
     table.add_column("Intent")
@@ -1192,9 +1213,14 @@ def _show_inbox(packets: list[Packet], profile: Profile) -> None:
     for pkt in packets:
         data = _extract_packet_data(pkt, profile)
         trusted_display = "[green]✓[/green]" if data["trusted"] else "[yellow]?[/yellow]"
+        already_ingested = ingested_set is not None and pkt.id in ingested_set
+        if already_ingested:
+            intent: str | Text = Text.assemble((data["intent"], "dim"), (" [ingested]", "dim"))
+        else:
+            intent = data["intent"]
         table.add_row(
             data["id"][:8],
-            data["intent"],
+            intent,
             data["from_label"],
             data["age"],
             data["content_type"],

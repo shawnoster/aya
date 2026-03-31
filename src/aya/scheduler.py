@@ -36,6 +36,31 @@ from zoneinfo import ZoneInfo
 
 from aya import paths as _paths
 
+# ── item types ───────────────────────────────────────────────────────────────
+TYPE_REMINDER = "reminder"
+TYPE_WATCH = "watch"
+TYPE_RECURRING = "recurring"
+TYPE_EVENT = "event"
+
+# ── item statuses ────────────────────────────────────────────────────────────
+STATUS_PENDING = "pending"
+STATUS_ACTIVE = "active"
+STATUS_SNOOZED = "snoozed"
+STATUS_DELIVERED = "delivered"
+STATUS_DISMISSED = "dismissed"
+STATUS_DONE = "done"
+
+# ── watch providers ──────────────────────────────────────────────────────────
+PROVIDER_GITHUB_PR = "github-pr"
+PROVIDER_JIRA_QUERY = "jira-query"
+PROVIDER_JIRA_TICKET = "jira-ticket"
+
+# ── watch conditions ─────────────────────────────────────────────────────────
+CONDITION_APPROVED_OR_MERGED = "approved_or_merged"
+CONDITION_MERGED = "merged"
+CONDITION_NEW_RESULTS = "new_results"
+CONDITION_STATUS_CHANGED = "status_changed"
+
 # ── Module-level path accessors ─────────────────────────────────────────────
 # These functions check module globals first so monkeypatch still works in
 # tests (e.g. monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", ...)).
@@ -503,6 +528,24 @@ def load_alerts() -> list[dict[str, Any]]:
 def save_alerts(alerts: list[dict[str, Any]]) -> None:
     with _file_lock():
         _atomic_write(_alerts_file(), {"alerts": alerts})
+
+
+# ── filter helpers ───────────────────────────────────────────────────────────
+
+
+def _items_of_type(items: list[dict[str, Any]], *types: str) -> list[dict[str, Any]]:
+    """Filter items by type."""
+    return [i for i in items if i.get("type") in types]
+
+
+def _items_with_status(items: list[dict[str, Any]], *statuses: str) -> list[dict[str, Any]]:
+    """Filter items by status."""
+    return [i for i in items if i.get("status") in statuses]
+
+
+def _unseen(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter unseen alerts."""
+    return [a for a in alerts if not a.get("seen")]
 
 
 def add_seed_alert(

@@ -194,7 +194,7 @@ def version(
     """Show the installed aya version."""
     format_ = resolve_format(format_)
     if format_ == OutputFormat.JSON:
-        console.out(json.dumps({"version": __version__}))
+        _output_json({"version": __version__})
     else:
         console.print(f"aya {__version__}")
 
@@ -599,13 +599,7 @@ def inbox(
 
         if format_ == OutputFormat.JSON:
             ingested_for_json = ingested_set if show_all else None
-            console.out(
-                json.dumps(
-                    [_packet_to_dict(pkt, p, ingested_for_json) for pkt in display_packets],
-                    indent=2,
-                    default=str,
-                )
-            )
+            _output_json([_packet_to_dict(pkt, p, ingested_for_json) for pkt in display_packets])
         elif not display_packets:
             console.print("[dim]Inbox empty.[/dim]")
         else:
@@ -713,7 +707,7 @@ def pair(
 def schedule_remind(
     message: str = typer.Option(..., "--message", "-m", help="Reminder message"),
     due: str = typer.Option(..., "--due", "-d", help="When: 'tomorrow 9am', 'in 2 hours', ISO8601"),
-    tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
+    tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
 ) -> None:
     """Add a one-shot reminder."""
     item = add_reminder(message, due, tag)
@@ -729,7 +723,7 @@ def schedule_watch(
     provider: str = typer.Argument(help="Provider: github-pr, jira-query, jira-ticket"),
     target: str = typer.Argument(help="Target: owner/repo#123, JQL, or TICKET-123"),
     message: str = typer.Option(..., "--message", "-m", help="Watch description"),
-    tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
+    tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
     condition: str = typer.Option(
         "", "--condition", "-c", help="Condition: approved_or_merged, etc."
     ),
@@ -752,7 +746,7 @@ def schedule_recurring(
     message: str = typer.Option(..., "--message", "-m", help="Short label for this recurring job"),
     cron: str = typer.Option(..., "--cron", "-c", help="Cron expression, e.g. '13,43 * * * *'"),
     prompt: str = typer.Option("", "--prompt", "-p", help="Prompt delivered to Claude each firing"),
-    tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
+    tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
     idle_back_off: str = typer.Option(
         "",
         "--idle-back-off",
@@ -823,7 +817,7 @@ def schedule_list(
     format_ = resolve_format(format_)
     items = list_items(show_all=all_items, item_type=item_type)
     if format_ == OutputFormat.JSON:
-        console.out(json.dumps(items, indent=2, default=str))
+        _output_json(items)
     else:
         _display_items(items)
 
@@ -839,7 +833,7 @@ def schedule_check(
     due_items, unseen = check_due()
 
     if format_ == OutputFormat.JSON:
-        console.out(json.dumps({"due": due_items, "alerts": unseen}, indent=2, default=str))
+        _output_json({"due": due_items, "alerts": unseen})
         return
 
     if not due_items and not unseen:
@@ -930,7 +924,7 @@ def schedule_pending(
     format_ = resolve_format(format_)
     pending = get_pending()
     if format_ == OutputFormat.JSON:
-        console.out(json.dumps(pending, indent=2, default=str))
+        _output_json(pending)
     else:
         console.print(format_pending(pending))
 
@@ -945,7 +939,7 @@ def schedule_status(
     format_ = resolve_format(format_)
     status = get_scheduler_status()
     if format_ == OutputFormat.JSON:
-        console.out(json.dumps(status, indent=2, default=str))
+        _output_json(status)
     else:
         console.print(format_scheduler_status(status))
 
@@ -962,7 +956,7 @@ def schedule_alerts(
     unseen = show_alerts(mark_seen=mark_seen)
 
     if format_ == OutputFormat.JSON:
-        console.out(json.dumps(unseen, indent=2, default=str))
+        _output_json(unseen)
         return
 
     if not unseen:
@@ -1176,10 +1170,14 @@ def _resolve_did(to: str, profile: Profile) -> tuple[str, str]:
     raise typer.Exit(1)
 
 
-def _packet_to_dict(
-    pkt: Packet, profile: Profile, ingested_set: set[str] | None = None
-) -> dict[str, object]:
-    d: dict[str, object] = {
+def _output_json(data: object) -> None:
+    """Output data as formatted JSON to console."""
+    console.out(json.dumps(data, indent=2, default=str))
+
+
+def _extract_packet_data(pkt: Packet, profile: Profile) -> dict[str, object]:
+    """Extract all packet fields and computed values for reuse across displays."""
+    return {
         "id": pkt.id,
         "intent": pkt.intent,
         "from_did": pkt.from_did,
@@ -1189,6 +1187,13 @@ def _packet_to_dict(
         "content_type": pkt.content_type,
         "trusted": profile.is_trusted(pkt.from_did),
     }
+
+
+def _packet_to_dict(
+    pkt: Packet, profile: Profile, ingested_set: set[str] | None = None
+) -> dict[str, object]:
+    """Convert packet to dict for JSON output, optionally marking ingested packets."""
+    d = _extract_packet_data(pkt, profile)
     if ingested_set is not None:
         d["ingested"] = pkt.id in ingested_set
     return d
@@ -1206,20 +1211,20 @@ def _show_inbox(
     table.add_column("Trust")
 
     for pkt in packets:
-        from_label = _label_for_did(pkt.from_did, profile)
-        trusted = "[green]✓[/green]" if profile.is_trusted(pkt.from_did) else "[yellow]?[/yellow]"
+        data = _extract_packet_data(pkt, profile)
+        trusted_display = "[green]✓[/green]" if data["trusted"] else "[yellow]?[/yellow]"
         already_ingested = ingested_set is not None and pkt.id in ingested_set
         if already_ingested:
-            intent: str | Text = Text.assemble((pkt.intent, "dim"), (" [ingested]", "dim"))
+            intent: str | Text = Text.assemble((data["intent"], "dim"), (" [ingested]", "dim"))
         else:
-            intent = pkt.intent
+            intent = data["intent"]
         table.add_row(
-            pkt.id[:8],
+            data["id"][:8],
             intent,
-            from_label,
-            human_age(pkt.sent_at),
-            pkt.content_type,
-            trusted,
+            data["from_label"],
+            data["age"],
+            data["content_type"],
+            trusted_display,
         )
     console.print(table)
 

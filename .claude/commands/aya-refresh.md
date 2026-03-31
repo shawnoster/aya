@@ -1,14 +1,12 @@
 ---
-name: aya-install
-description: Reinstall aya globally via uv tool after pulling updates from main
-triggers:
-  - "reinstall aya"
-  - "refresh aya"
-  - "update aya globally"
-  - "aya refresh"
+name: aya-refresh
+description: >
+  Refresh aya to the latest version after pulling updates. Uninstalls the current
+  installation and reinstalls from GitHub, with verification. Invoke when the user
+  says "refresh aya", "reinstall aya", "update aya globally", or "aya refresh".
 ---
 
-# Reinstall aya globally
+# Refresh aya
 
 Uninstall the current aya installation and reinstall the latest version from GitHub, with verification.
 

@@ -8,6 +8,7 @@ import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import base58
 from coincurve import PrivateKey as Secp256k1PrivateKey
@@ -105,7 +106,7 @@ def _is_valid_ulid(value: str) -> bool:
         return False
 
 
-def _validate_instance(key: str, data: dict) -> Identity:
+def _validate_instance(key: str, data: dict[str, Any]) -> Identity:
     """Validate and create an Instance from a dict, with helpful error messages.
 
     Raises ValueError with context if the dict is malformed.
@@ -120,7 +121,7 @@ def _validate_instance(key: str, data: dict) -> Identity:
         raise ValueError(f"Instance '{key}' could not be loaded: {e}") from e
 
 
-def _validate_trusted_key(key: str, data: dict) -> TrustedKey:
+def _validate_trusted_key(key: str, data: dict[str, Any]) -> TrustedKey:
     """Validate and create a TrustedKey from a dict, with helpful error messages.
 
     Raises ValueError with context if the dict is malformed.

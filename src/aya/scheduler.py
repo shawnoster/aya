@@ -82,7 +82,16 @@ def _activity_file() -> Path:
 
 @functools.lru_cache(maxsize=1)
 def _get_local_tz() -> ZoneInfo:
-    return ZoneInfo("America/Denver")
+    """Get the local timezone from AYA_TZ env var, with fallback to America/Denver.
+
+    Caching ensures consistent timezone throughout the session.
+    """
+    tz_name = os.environ.get("AYA_TZ", "America/Denver")
+    try:
+        return ZoneInfo(tz_name)
+    except KeyError:
+        logging.warning("Invalid timezone %r; falling back to America/Denver", tz_name)
+        return ZoneInfo("America/Denver")
 
 
 # Lazy module attrs — lets tests monkeypatch these names via setattr.

@@ -235,7 +235,7 @@ def _save_claude_settings(data: dict[str, Any], path: Path | None = None) -> Non
 
 def _hooks_match(existing: list[dict[str, Any]], canonical: list[dict[str, Any]]) -> bool:
     """Check if existing aya hooks match the canonical set."""
-    return json.dumps(existing, sort_keys=True) == json.dumps(canonical, sort_keys=True)
+    return existing == canonical
 
 
 def _install_hooks(

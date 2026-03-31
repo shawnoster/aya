@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+from ulid import ULID
+
+logger = logging.getLogger(__name__)
 
 # Multicodec prefix for ed25519 public keys: 0xed 0x01
 _ED25519_MULTICODEC = bytes([0xED, 0x01])
@@ -92,6 +96,45 @@ class TrustedKey:
 _DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"]
 
 
+def _is_valid_ulid(value: str) -> bool:
+    """Check if a string is a valid ULID."""
+    try:
+        ULID.from_str(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _validate_instance(key: str, data: dict) -> Identity:
+    """Validate and create an Instance from a dict, with helpful error messages.
+
+    Raises ValueError with context if the dict is malformed.
+    """
+    try:
+        return Identity(**data)
+    except TypeError as e:
+        raise ValueError(
+            f"Instance '{key}' is malformed: missing or invalid required field. {e}"
+        ) from e
+    except Exception as e:
+        raise ValueError(f"Instance '{key}' could not be loaded: {e}") from e
+
+
+def _validate_trusted_key(key: str, data: dict) -> TrustedKey:
+    """Validate and create a TrustedKey from a dict, with helpful error messages.
+
+    Raises ValueError with context if the dict is malformed.
+    """
+    try:
+        return TrustedKey(**data)
+    except TypeError as e:
+        raise ValueError(
+            f"Trusted key '{key}' is malformed: missing or invalid required field. {e}"
+        ) from e
+    except Exception as e:
+        raise ValueError(f"Trusted key '{key}' could not be loaded: {e}") from e
+
+
 def _normalize_ingested_ids(raw: object) -> list[dict[str, str]]:
     """Coerce legacy string entries to the ``{id, ingested_at}`` dict format.
 
@@ -99,6 +142,8 @@ def _normalize_ingested_ids(raw: object) -> list[dict[str, str]]:
     first load after the migration, those strings are converted to dicts with
     ``ingested_at`` set to the current time so they survive the next TTL prune
     and don't cause an immediate false-re-ingestion.
+
+    Logs warnings for entries with invalid ULIDs but preserves the data.
     """
     if not isinstance(raw, list):
         return []
@@ -106,8 +151,15 @@ def _normalize_ingested_ids(raw: object) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
     for entry in raw:
         if isinstance(entry, str):
+            # Validate that the string is a valid ULID, but preserve it anyway
+            if not _is_valid_ulid(entry):
+                logger.warning("Ingested_id entry has invalid ULID format: %s", entry)
             result.append({"id": entry, "ingested_at": now_iso})
         elif isinstance(entry, dict) and "id" in entry:
+            # Validate ULID in dict entries
+            entry_id = entry.get("id")
+            if entry_id and not _is_valid_ulid(entry_id):
+                logger.warning("Ingested_id entry has invalid ULID format: %s", entry_id)
             result.append(entry)
     return result
 
@@ -144,10 +196,14 @@ class Profile:
 
         Reads from 'aya' key; migrates 'assistant_sync' if present.
         Accepts both legacy ``default_relay`` (string) and ``default_relays`` (list).
+
+        Validates profile structure and logs warnings for deprecated keys or malformed data.
         """
         data = json.loads(path.read_text())
         # Migrate profiles written by older versions (assistant_sync → aya)
         aya_data = data.get("aya") or data.get("assistant_sync", {})
+
+        # Load and validate instances
         instances = {}
         for k, v in aya_data.get("instances", {}).items():
             # Migrate old profiles missing Nostr keys
@@ -157,8 +213,20 @@ class Profile:
                 nostr_pub_xonly = nostr_key.public_key.format(compressed=True)[1:]
                 v["nostr_private_hex"] = nostr_secret.hex()
                 v["nostr_public_hex"] = nostr_pub_xonly.hex()
-            instances[k] = Identity(**v)
-        trusted = {k: TrustedKey(**v) for k, v in aya_data.get("trusted_keys", {}).items()}
+            try:
+                instances[k] = _validate_instance(k, v)
+            except ValueError as e:
+                logger.error("Profile validation error: %s", e)
+                raise
+
+        # Load and validate trusted keys
+        trusted = {}
+        for k, v in aya_data.get("trusted_keys", {}).items():
+            try:
+                trusted[k] = _validate_trusted_key(k, v)
+            except ValueError as e:
+                logger.error("Profile validation error: %s", e)
+                raise
 
         # Support both default_relays (list) and legacy default_relay (string).
         # Coerce a bare string to a list, strip non-string entries, fall back to
@@ -172,6 +240,11 @@ class Profile:
             if not relays:
                 relays = list(_DEFAULT_RELAYS)
         elif "default_relay" in aya_data:
+            # Warn about deprecated key
+            logger.warning(
+                "Profile uses deprecated 'default_relay' key; prefer 'default_relays' list. "
+                "This key will be removed on next save."
+            )
             relays = [aya_data["default_relay"]]
         else:
             relays = list(_DEFAULT_RELAYS)

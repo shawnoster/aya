@@ -232,7 +232,6 @@ class TestPair:
         label from the response content (which was the initiator's own label), so
         the peer DID overwrote the local self-trust entry.
         """
-        from aya.identity import TrustedKey
         from aya.pair import TrustedKey as PairTrustedKey
 
         local_identity = Identity.generate("guild-shawnoster")
@@ -278,9 +277,10 @@ class TestPair:
         assert trusted_keys["sean-okeefe"]["did"] == peer_identity.did
 
         # Local label must NOT be overwritten with the peer DID
-        assert "guild-shawnoster" not in trusted_keys or trusted_keys.get(
-            "guild-shawnoster", {}
-        ).get("did") != peer_identity.did, "Peer DID must not overwrite local label entry"
+        assert (
+            "guild-shawnoster" not in trusted_keys
+            or trusted_keys.get("guild-shawnoster", {}).get("did") != peer_identity.did
+        ), "Peer DID must not overwrite local label entry"
 
     def test_joiner_stores_peer_under_peer_label(self, profile_with_instance: Path) -> None:
         """Joiner must store the initiator DID under --peer label."""
@@ -322,9 +322,6 @@ class TestPair:
 
         assert "guild-shawnoster" in trusted_keys, "Initiator not stored under --peer label"
         assert trusted_keys["guild-shawnoster"]["did"] == initiator_identity.did
-
-
-
 
 
 class TestPack:

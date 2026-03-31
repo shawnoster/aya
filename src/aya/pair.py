@@ -441,7 +441,6 @@ async def _poll_single_relay(
 
 async def join_pairing(
     identity: Identity,
-    label: str,
     code: str,
     relay_url: str | list[str],
 ) -> TrustedKey:

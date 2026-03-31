@@ -628,7 +628,7 @@ def pair(
     if code:
         # ── Joiner mode ──────────────────────────────────────────────
         try:
-            trusted = asyncio.run(join_pairing(local, peer, code, relay_urls))
+            trusted = asyncio.run(join_pairing(local, code, relay_urls))
         except PairingError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc

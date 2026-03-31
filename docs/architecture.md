@@ -6,7 +6,7 @@ aya is a personal AI assistant toolkit that spans multiple machines. Each machin
 
 ```
 ┌─────────────────────────────────┐     ┌─────────────────────────────────┐
-│         WORK MACHINE            │     │         HOME MACHINE            │
+│         MACHINE A               │     │         MACHINE B               │
 │                                 │     │                                 │
 │  ┌───────────┐  ┌────────────┐  │     │  ┌───────────┐  ┌────────────┐ │
 │  │ Claude    │  │ aya CLI   │  │     │  │ Claude    │  │ aya CLI   │ │
@@ -15,26 +15,17 @@ aya is a personal AI assistant toolkit that spans multiple machines. Each machin
 │        │              │         │     │        │              │        │
 │  ┌─────┴──────────────┴──────┐  │     │  ┌─────┴──────────────┴──────┐ │
 │  │      Workspace            │  │     │  │      Workspace            │ │
-│  │  ~/guild/                 │  │     │  │  ~/                       │ │
-│  │  ├── assistant/           │  │     │  │  ├── assistant/           │ │
-│  │  │   ├── persona.md       │  │     │  │  │   ├── persona.md      │ │
-│  │  │   └── memory/          │  │     │  │  │   └── memory/         │ │
-│  │  ├── projects/            │  │     │  │  ├── projects/           │ │
-│  │  └── code/                │  │     │  │  └── code/               │ │
+│  │  Projects, notes, code    │  │     │  │  Projects, notes, code    │ │
 │  └───────────────────────────┘  │     │  └───────────────────────────┘ │
 │                                 │     │                                │
 │  ┌───────────────────────────┐  │     │  ┌───────────────────────────┐ │
-│  │ Profile                   │  │     │  │ Profile                   │ │
-│  │ assistant/                │  │     │  │ assistant/               │ │
+│  │ Profile (~/.aya/)         │  │     │  │ Profile (~/.aya/)         │ │
 │  │   profile.json            │  │     │  │   profile.json           │ │
-│  │   ├── alias: "Ace"        │  │     │  │   ├── alias: "Ace"       │ │
+│  │   ├── label: "alice"      │  │     │  │   ├── label: "bob"       │ │
 │  │   ├── did:key (ed25519)   │  │     │  │   ├── did:key (ed25519)  │ │
 │  │   ├── nostr (secp256k1)   │  │     │  │   ├── nostr (secp256k1)  │ │
-│  │   └── trusted_keys: [home]│  │     │  │   └── trusted_keys:[work]│ │
+│  │   └── trusted_keys:[bob]  │  │     │  │   └── trusted_keys:[alice]│
 │  └───────────────────────────┘  │     │  └───────────────────────────┘ │
-│                                 │     │                                │
-│  MCPs: Jira, Slack, GitHub,     │     │  MCPs: Google Calendar,       │
-│  Confluence, Granola             │     │  personal tools               │
 └──────────────┬──────────────────┘     └──────────────┬─────────────────┘
                │                                       │
                │         ┌───────────────┐             │
@@ -43,10 +34,12 @@ aya is a personal AI assistant toolkit that spans multiple machines. Each machin
                          │  relay.damus) │
                          │               │
                          │  kind: 5999   │
-                         │  Signed JSON  │
-                         │  packets      │
+                         │  NIP-44 E2E   │
+                         │  encrypted    │
                          └───────────────┘
 ```
+
+Labels can be anything: `home`/`work` for personal multi-machine setups, first names for sharing with friends or coworkers, hostnames for server fleets.
 
 ## Identity Model
 
@@ -74,38 +67,43 @@ Each instance has two keypairs serving different purposes:
 ## Packet Lifecycle
 
 ```
-SENDER (work)                    RELAY                    RECEIVER (home)
-─────────────                    ─────                    ───────────────
+SENDER (alice)                   RELAY                    RECEIVER (bob)
+──────────────                   ─────                    ──────────────
 
-1. User: "pack for home"
+1. User: "send this to bob"
    │
 2. Assistant gathers context
    │
-3. aya pack
+3. aya dispatch
    ├── Create JSON envelope
    ├── Sign with ed25519
-   └── Set TTL, intent, conflict strategy
-   │
-4. aya send
+   ├── Set TTL, intent, conflict strategy
+   ├── Encrypt content (NIP-44 ECDH + ChaCha20)
    ├── Wrap in Nostr event (kind 5999)
    ├── Sign with secp256k1 (Schnorr)
-   └── Publish to relay ──────────────► 5. Relay stores event
+   └── Publish to relay ──────────────► 4. Relay stores event
                                            tagged with
                                            recipient pubkey
+                                           (content is encrypted)
                                                 │
-                         6. SessionStart hook ◄──┘
+                         5. SessionStart hook ◄──┘
                             aya receive --quiet
                             │
-                         7. Query relay for
+                         6. Query relay for
                             packets to my pubkey
+                            │
+                         7. Decrypt content
+                            (NIP-44 ECDH)
                             │
                          8. Verify ed25519
                             signature
                             │
                          9. Surface to user
-                            "1 packet from work"
+                            "1 packet from alice"
                             │
                         10. User approves
+                            (or auto-ingest
+                             if trusted)
                             │
                         11. Ingest into context
 ```
@@ -113,10 +111,10 @@ SENDER (work)                    RELAY                    RECEIVER (home)
 ## Pairing Flow
 
 ```
-MACHINE A                        RELAY                    MACHINE B
-─────────                        ─────                    ─────────
+MACHINE A (alice)                RELAY                    MACHINE B (bob)
+─────────────────                ─────                    ───────────────
 
-1. aya pair --label work
+1. aya pair --peer bob
    │
 2. Generate code: ANCHOR-NORTH-0045
    │
@@ -128,20 +126,20 @@ MACHINE A                        RELAY                    MACHINE B
 6. Display code to user                              7. User enters code
    "ANCHOR-NORTH-0045"                                  aya pair --code
                                                         ANCHOR-NORTH-0045
-                                                        --label home
+                                                        --peer alice
                                                         │
                                  8. Query by ◄────── 9. Hash code, query
                                     code hash           for matching request
                                         │
                                         └──────────► 10. Found! Extract
-                                                         work's DID + pubkey
+                                                         alice's DID + pubkey
                                                          │
                                  11. Stored ◄─────── 12. Publish pair-response
                                                          (kind 5999, tag:
                                                           as-pair-resp)
 13. Poll finds response ◄───────
     │
-14. Extract home's DID + pubkey
+14. Extract bob's DID + pubkey
     │
 15. Both instances now trust              16. Both instances now trust
     each other                                each other
@@ -149,59 +147,56 @@ MACHINE A                        RELAY                    MACHINE B
 
 ## Adaptive Commands
 
-The same skill produces different output based on available MCPs:
+Skills adapt to available integrations — the same command produces different output depending on what's connected:
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                 /aya:morning                         │
+│              Adaptive Briefing                       │
 │                                                      │
 │  1. Detect available data sources                    │
-│     !`aya status --json`                            │
+│     `aya status --json`                              │
 │                                                      │
 │  2. Branch by what's available:                      │
 │                                                      │
 │  ┌─────────────────────┐  ┌────────────────────────┐ │
-│  │  WORK (all MCPs)    │  │  HOME (minimal MCPs)   │ │
+│  │  Full (many MCPs)   │  │  Light (minimal MCPs)  │ │
 │  │                     │  │                        │ │
-│  │  • Jira tickets     │  │  • Google Calendar     │ │
-│  │  • GitHub PRs       │  │  • Helm inbox          │ │
-│  │  • Slack mentions   │  │  • Project status      │ │
-│  │  • Confluence       │  │  • Scheduler           │ │
-│  │  • Granola          │  │                        │ │
-│  │  • Helm inbox       │  │                        │ │
+│  │  • Issue tracker    │  │  • Calendar            │ │
+│  │  • GitHub PRs       │  │  • aya inbox           │ │
+│  │  • Messaging        │  │  • Project status      │ │
+│  │  • Calendar         │  │  • Scheduler           │ │
+│  │  • aya inbox        │  │                        │ │
 │  │  • Project status   │  │                        │ │
 │  │  • Scheduler        │  │                        │ │
 │  └─────────┬───────────┘  └───────────┬────────────┘ │
 │            │                          │              │
 │            ▼                          ▼              │
-│  Full work briefing          Light personal briefing │
-│  Tier 1/2/3, PRs,           Calendar, inbox,        │
-│  Slack threads, prep         personal projects       │
+│  Full briefing with          Light briefing with     │
+│  tiered priorities           projects + todos        │
 └──────────────────────────────────────────────────────┘
 ```
 
 ## Setup Flow
 
-aya is a CLI tool — workspace scaffolding is the responsibility of your guild repo, not aya. Set up a new machine by cloning your workspace and then initializing aya identity:
+aya is a CLI tool — workspace scaffolding is your responsibility, not aya's. Set up a new machine by installing aya and initializing identity:
 
 ```
 Fresh machine
      │
      ▼
-git clone github.com/<you>/guild ~/guild
-cd ~/guild && uv sync   # install aya
+uv tool install aya-ai-assist   # install aya globally
      │
      ▼
-aya init --label home
+aya init --label <your-label>
      │
      ▼
-aya pair --code <CODE> --label home   # exchange trust with another instance
+aya pair --code <CODE> --peer <other-label>   # exchange trust with another instance
      │
      ▼
-Ready. Open Claude Code from ~/guild, packets auto-surface.
+Ready. Packets auto-surface at session start.
 ```
 
-Workspace structure (CLAUDE.md, AGENTS.md, skills, hooks) is defined in your guild repo and maintained there — not by aya.
+Workspace structure (CLAUDE.md, AGENTS.md, skills, hooks) is defined in your workspace and maintained there — not by aya.
 
 ## Component Map
 
@@ -214,6 +209,7 @@ aya (CLI + Plugin)
 ├── Sync
 │   ├── packet.py        — JSON envelope, signing, verification
 │   ├── relay.py         — Nostr WebSocket client (kind 5999)
+│   ├── encryption.py    — NIP-44 v2 E2E encryption (ECDH + ChaCha20)
 │   └── pair.py          — short-code pairing via relay
 │
 ├── Schedule
@@ -246,9 +242,9 @@ aya (CLI + Plugin)
 │     └── Packet content = user role context   │
 │         Never system instructions            │
 │                                              │
-│  5. Optional encryption                      │
-│     └── NaCl box to recipient pubkey         │
-│         Relay sees size + TTL only           │
+│  5. End-to-end encryption (default)           │
+│     └── NIP-44 v2: ECDH + ChaCha20 + HMAC   │
+│         Relay sees size + metadata only      │
 │                                              │
 │  6. TTL / expiration                         │
 │     └── Packets expire (default 7 days)      │

@@ -37,27 +37,30 @@ aya schedule snooze <id-prefix> --until "in 1 hour"
 ### Dispatch / Relay
 
 ```bash
-# Send context to another machine
-aya dispatch --as home --to work \
+# Send context to another machine (encrypted by default on public relays)
+aya dispatch --as alice --to bob \
   --intent "context sync" --files path/to/file.md
 
 # Send a conversation seed (request for research/action)
-aya dispatch --as home --to work --seed \
+aya dispatch --as alice --to bob --seed \
   --intent "investigate caching" \
   --opener "Can you trace the auth flow and find where sessions drop?"
 
-# Check inbox
-aya inbox --as home
+# Send plaintext (debug or private relay only)
+aya dispatch --as alice --to bob --no-encrypt --intent "test"
 
-# Receive and ingest trusted packets
-aya receive --as home --auto-ingest --quiet
+# Check inbox
+aya inbox --as alice
+
+# Receive and ingest trusted packets (decrypts transparently)
+aya receive --as alice --auto-ingest --quiet
 
 # Fully non-interactive receive — ingest everything without prompting (trusted or not)
-aya receive --as home --auto-ingest --yes --quiet
+aya receive --as alice --auto-ingest --yes --quiet
 
 # Set up recurring relay poll (persists across sessions)
 aya schedule recurring -m "relay-poll" -c "*/10 * * * *" \
-  -p "Run: aya receive --as home --auto-ingest --quiet. If any packets were ingested, surface their content to the user."
+  -p "Run: aya receive --as alice --auto-ingest --quiet. If any packets were ingested, surface their content to the user."
 ```
 
 > **New machine?** See the "One-prompt setup" section in `README.md` for a single prompt that installs aya, pairs instances, wires hooks, and registers relay polling.
@@ -65,13 +68,13 @@ aya schedule recurring -m "relay-poll" -c "*/10 * * * *" \
 ### Identity
 
 ```bash
-# First-time setup
-aya init --label home
+# First-time setup — label can be anything (name, machine role, hostname)
+aya init --label alice
 
 # Pair with another machine (initiator)
-aya pair --peer home --as home
+aya pair --peer bob --as alice
 # On the other machine (joiner)
-aya pair --code WORD-WORD-1234 --peer work --as work
+aya pair --code WORD-WORD-1234 --peer alice --as bob
 
 # Check status
 aya status
@@ -81,6 +84,8 @@ aya status
 > - `--as` is your **local identity** (which keypair to act as). Matches the label from `aya init --label <name>`. Legacy alias: `--instance`.
 > - `--label` is used with `aya init` to **name a new local identity**. (In older versions, `--label` was also used where `--peer` is now; some commands still accept it as a legacy alias.)
 > - `--peer` names a **remote machine** (used in `pair` and `trust`). Preferred over the legacy `--label` alias.
+>
+> Common label patterns: `home`/`work` (personal setup), first names (sharing with a friend), `laptop`/`desktop`/`server` (by machine).
 
 ## Plugin & Slash Commands
 
@@ -185,9 +190,9 @@ aya schedule remind -m "Review the deploy" --due "tomorrow 9am"
 aya schedule watch github-pr owner/repo#456 -m "PR review" --remove-when merged_or_closed
 ```
 
-**Sending work to another machine:**
+**Sending context to another machine:**
 ```bash
-aya dispatch --as home --to work --seed \
+aya dispatch --as alice --to bob --seed \
   --intent "research request" \
   --opener "What logging do we have for the payment flow?"
 ```

@@ -699,7 +699,7 @@ def pair(
 def schedule_remind(
     message: str = typer.Option(..., "--message", "-m", help="Reminder message"),
     due: str = typer.Option(..., "--due", "-d", help="When: 'tomorrow 9am', 'in 2 hours', ISO8601"),
-    tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
+    tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
 ) -> None:
     """Add a one-shot reminder."""
     item = add_reminder(message, due, tag)
@@ -715,7 +715,7 @@ def schedule_watch(
     provider: str = typer.Argument(help="Provider: github-pr, jira-query, jira-ticket"),
     target: str = typer.Argument(help="Target: owner/repo#123, JQL, or TICKET-123"),
     message: str = typer.Option(..., "--message", "-m", help="Watch description"),
-    tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
+    tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
     condition: str = typer.Option(
         "", "--condition", "-c", help="Condition: approved_or_merged, etc."
     ),
@@ -738,7 +738,7 @@ def schedule_recurring(
     message: str = typer.Option(..., "--message", "-m", help="Short label for this recurring job"),
     cron: str = typer.Option(..., "--cron", "-c", help="Cron expression, e.g. '13,43 * * * *'"),
     prompt: str = typer.Option("", "--prompt", "-p", help="Prompt delivered to Claude each firing"),
-    tag: str = typer.Option("", "--tag", "-t", help="Comma-separated tags"),
+    tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
     idle_back_off: str = typer.Option(
         "",
         "--idle-back-off",

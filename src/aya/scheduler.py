@@ -27,7 +27,7 @@ import re
 import subprocess
 import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -761,6 +761,54 @@ WATCH_PROVIDERS = {
 }
 
 
+# ── change detection strategies ──────────────────────────────────────────────
+
+
+def _detect_json_diff(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect change by comparing JSON dumps."""
+    return json.dumps(new, sort_keys=True) != json.dumps(last, sort_keys=True)
+
+
+def _detect_github_approved_or_merged(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect if PR was approved or merged."""
+    was_approved = (last or {}).get("has_approval", False)
+    was_merged = (last or {}).get("merged", False)
+    return (new["has_approval"] and not was_approved) or (new["merged"] and not was_merged)
+
+
+def _detect_github_merged(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect if PR was merged."""
+    return new["merged"] and not (last or {}).get("merged", False)
+
+
+def _detect_jira_new_results(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect new issues in Jira query results."""
+    old_keys = {i["key"] for i in (last or {}).get("issues", [])}
+    new_keys = {i["key"] for i in new.get("issues", [])}
+    return bool(new_keys - old_keys)
+
+
+def _detect_jira_count_change(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect change in Jira query result count."""
+    return new.get("total", 0) != (last or {}).get("total", 0)
+
+
+def _detect_jira_status_changed(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect if Jira ticket status changed."""
+    return new.get("status") != (last or {}).get("status")
+
+
+_CHANGE_DETECTORS: dict[tuple[str, str], Callable[[dict, dict | None], bool]] = {
+    ("github-pr", "approved_or_merged"): _detect_github_approved_or_merged,
+    ("github-pr", "merged"): _detect_github_merged,
+    ("github-pr", ""): _detect_json_diff,
+    ("jira-query", "new_results"): _detect_jira_new_results,
+    ("jira-query", ""): _detect_jira_count_change,
+    ("jira-ticket", "status_changed"): _detect_jira_status_changed,
+    ("jira-ticket", ""): _detect_json_diff,
+}
+
+
 def poll_watch(item: dict[str, Any]) -> tuple[dict | None, bool]:
     """Poll a watch item. Returns (new_state, changed)."""
     provider = item.get("provider", "")
@@ -773,38 +821,11 @@ def poll_watch(item: dict[str, Any]) -> tuple[dict | None, bool]:
         return None, False
 
     last_state = item.get("last_state")
-    changed = False
     condition = item.get("condition", "")
 
-    if provider == "github-pr":
-        if condition == "approved_or_merged":
-            was_approved = (last_state or {}).get("has_approval", False)
-            was_merged = (last_state or {}).get("merged", False)
-            changed = (new_state["has_approval"] and not was_approved) or (
-                new_state["merged"] and not was_merged
-            )
-        elif condition == "merged":
-            changed = new_state["merged"] and not (last_state or {}).get("merged", False)
-        else:
-            changed = json.dumps(new_state, sort_keys=True) != json.dumps(
-                last_state, sort_keys=True
-            )
-
-    elif provider == "jira-query":
-        if condition == "new_results":
-            old_keys = {i["key"] for i in (last_state or {}).get("issues", [])}
-            new_keys = {i["key"] for i in new_state.get("issues", [])}
-            changed = bool(new_keys - old_keys)
-        else:
-            changed = new_state.get("total", 0) != (last_state or {}).get("total", 0)
-
-    elif provider == "jira-ticket":
-        if condition == "status_changed":
-            changed = new_state.get("status") != (last_state or {}).get("status")
-        else:
-            changed = json.dumps(new_state, sort_keys=True) != json.dumps(
-                last_state, sort_keys=True
-            )
+    # Use strategy dict to detect changes
+    detector = _CHANGE_DETECTORS.get((provider, condition))
+    changed = detector(new_state, last_state) if detector else False
 
     return new_state, changed
 

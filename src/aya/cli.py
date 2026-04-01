@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
+import subprocess
 import sys
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -18,6 +20,8 @@ from rich.text import Text
 
 from aya import __version__
 from aya.ci import watch_pr_checks
+from aya.config import get_notebook_path, load_config, set_config_value
+from aya.context import build_context_block
 from aya.identity import Identity, Profile, TrustedKey
 from aya.install import install_scheduler, uninstall_scheduler
 from aya.packet import ConflictStrategy, ContentType, Packet, human_age
@@ -29,7 +33,7 @@ from aya.pair import (
     poll_for_pair_response,
     publish_pair_request,
 )
-from aya.paths import PROFILE_PATH
+from aya.paths import CONFIG_PATH, PROFILE_PATH
 from aya.profile import ensure_profile
 from aya.relay import RelayClient
 
@@ -126,6 +130,15 @@ ci_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(ci_app, name="ci")
+
+# ── Config sub-app ────────────────────────────────────────────────────────────
+
+config_app = typer.Typer(
+    name="config",
+    help="Workspace configuration (notebook path, etc.).",
+    no_args_is_help=True,
+)
+app.add_typer(config_app, name="config")
 
 console = Console()
 err = Console(stderr=True)
@@ -1291,3 +1304,86 @@ def _ingest(packet: Packet) -> None:
                 subtitle=f"[dim]{packet.id[:8]} · {packet.sent_at[:10]}[/dim]",
             )
         )
+
+
+# ── Config commands ───────────────────────────────────────────────────────────
+
+
+@config_app.command("set")
+def config_set(
+    key: str = typer.Argument(..., help="Config key (e.g. notebook_path)"),
+    value: str = typer.Argument(..., help="Value to set"),
+) -> None:
+    """Set a config value in ~/.aya/config.json."""
+    set_config_value(key, value)
+    console.print(f"[green]✓[/green] {key} = {value}")
+    console.print(f"[dim]Saved to {CONFIG_PATH}[/dim]")
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """Show current config."""
+    config = load_config()
+    if not config:
+        console.print("[dim]No config set. Use `aya config set <key> <value>`.[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Key")
+    table.add_column("Value")
+    for k, v in sorted(config.items()):
+        table.add_row(k, str(v))
+    console.print(table)
+
+
+# ── Clipboard helper ─────────────────────────────────────────────────────────
+
+
+def _copy_to_clipboard(text: str) -> None:
+    xclip = shutil.which("xclip")
+    xsel = shutil.which("xsel")
+    clip = shutil.which("clip.exe")
+    if xclip:
+        subprocess.run([xclip, "-selection", "clipboard"], input=text.encode(), check=False)  # noqa: S603
+        console.print("[dim]Copied to clipboard (xclip)[/dim]")
+    elif xsel:
+        subprocess.run([xsel, "--clipboard", "--input"], input=text.encode(), check=False)  # noqa: S603
+        console.print("[dim]Copied to clipboard (xsel)[/dim]")
+    elif clip:
+        subprocess.run([clip], input=text.encode(), check=False)  # noqa: S603
+        console.print("[dim]Copied to clipboard (clip.exe)[/dim]")
+    else:
+        err.print("[yellow]--copy: no clipboard tool found (xclip, xsel, clip.exe)[/yellow]")
+
+
+# ── Context command ───────────────────────────────────────────────────────────
+
+
+@app.command("context")
+def context_cmd(
+    short: bool = typer.Option(False, "--short", help="Compact one-line format"),
+    copy: bool = typer.Option(False, "--copy", help="Copy output to clipboard"),
+    all_projects: bool = typer.Option(False, "--all", help="Include brainstorming projects"),
+    project: str | None = typer.Option(None, "--project", help="Filter to a single project"),
+) -> None:
+    """Assemble a paste-ready session handshake block from the notebook."""
+    notebook_path = get_notebook_path()
+    if not notebook_path:
+        err.print(
+            "[red]notebook_path not set.[/red] "
+            "Run: [bold]aya config set notebook_path ~/notebook[/bold]"
+        )
+        raise typer.Exit(1)
+    if not notebook_path.exists():
+        err.print(f"[red]Notebook path does not exist:[/red] {notebook_path}")
+        raise typer.Exit(1)
+
+    output = build_context_block(
+        notebook_path,
+        short=short,
+        include_brainstorming=all_projects,
+        project_filter=project,
+    )
+    console.print(output)
+
+    if copy:
+        _copy_to_clipboard(output)

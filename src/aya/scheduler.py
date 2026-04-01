@@ -32,7 +32,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict, cast, overload
 from zoneinfo import ZoneInfo
 
 from aya import paths as _paths
@@ -81,11 +81,11 @@ class SchedulerItem(TypedDict):
     snoozed_until: NotRequired[str | None]
     # Watch-specific
     provider: NotRequired[str]
-    watch_config: NotRequired[dict[str, Any]]
+    watch_config: NotRequired[GithubPrConfig | JiraQueryConfig | JiraTicketConfig]
     condition: NotRequired[str]
     poll_interval_minutes: NotRequired[int]
     last_checked_at: NotRequired[str | None]
-    last_state: NotRequired[dict[str, Any] | None]
+    last_state: NotRequired[WatchState | None]
     remove_when: NotRequired[str]
     # Recurring-specific
     cron: NotRequired[str]
@@ -760,9 +760,19 @@ def add_seed_alert(
     return alert
 
 
-def _find[T](items: list[T], item_id: str) -> T | None:
+@overload
+def _find(items: list[SchedulerItem], item_id: str) -> SchedulerItem | None: ...
+
+
+@overload
+def _find(items: list[AlertItem], item_id: str) -> AlertItem | None: ...
+
+
+def _find(
+    items: list[SchedulerItem] | list[AlertItem], item_id: str
+) -> SchedulerItem | AlertItem | None:
     for item in items:
-        if item["id"] == item_id or item["id"].startswith(item_id):  # type: ignore[index]
+        if item["id"] == item_id or item["id"].startswith(item_id):
             return item
     return None
 
@@ -932,7 +942,7 @@ def _check_jira_ticket(config: JiraTicketConfig) -> JiraTicketState | None:
         return None
 
 
-WATCH_PROVIDERS = {
+WATCH_PROVIDERS: dict[str, Callable[..., WatchState | None]] = {
     "github-pr": _check_github_pr,
     "jira-query": _check_jira_query,
     "jira-ticket": _check_jira_ticket,
@@ -947,36 +957,36 @@ def _detect_json_diff(new: WatchState, last: WatchState | None) -> bool:
     return json.dumps(new, sort_keys=True) != json.dumps(last, sort_keys=True)
 
 
-def _detect_github_approved_or_merged(new: WatchState, last: WatchState | None) -> bool:
+def _detect_github_approved_or_merged(new: GithubPrState, last: GithubPrState | None) -> bool:
     """Detect if PR was approved or merged."""
-    was_approved = (last or {}).get("has_approval", False)
-    was_merged = (last or {}).get("merged", False)
-    return (new["has_approval"] and not was_approved) or (new["merged"] and not was_merged)  # type: ignore[typeddict-item]
+    was_approved = last["has_approval"] if last else False
+    was_merged = last["merged"] if last else False
+    return (new["has_approval"] and not was_approved) or (new["merged"] and not was_merged)
 
 
-def _detect_github_merged(new: WatchState, last: WatchState | None) -> bool:
+def _detect_github_merged(new: GithubPrState, last: GithubPrState | None) -> bool:
     """Detect if PR was merged."""
-    return new["merged"] and not (last or {}).get("merged", False)  # type: ignore[typeddict-item]
+    return new["merged"] and not (last["merged"] if last else False)
 
 
-def _detect_jira_new_results(new: WatchState, last: WatchState | None) -> bool:
+def _detect_jira_new_results(new: JiraQueryState, last: JiraQueryState | None) -> bool:
     """Detect new issues in Jira query results."""
-    old_keys = {i["key"] for i in (last or {}).get("issues", [])}  # type: ignore[union-attr]
-    new_keys = {i["key"] for i in new.get("issues", [])}  # type: ignore[union-attr]
+    old_keys = {i["key"] for i in last["issues"]} if last else set()
+    new_keys = {i["key"] for i in new["issues"]}
     return bool(new_keys - old_keys)
 
 
-def _detect_jira_count_change(new: WatchState, last: WatchState | None) -> bool:
+def _detect_jira_count_change(new: JiraQueryState, last: JiraQueryState | None) -> bool:
     """Detect change in Jira query result count."""
-    return new.get("total", 0) != (last or {}).get("total", 0)  # type: ignore[union-attr]
+    return new["total"] != (last["total"] if last else 0)
 
 
-def _detect_jira_status_changed(new: WatchState, last: WatchState | None) -> bool:
+def _detect_jira_status_changed(new: JiraTicketState, last: JiraTicketState | None) -> bool:
     """Detect if Jira ticket status changed."""
-    return new.get("status") != (last or {}).get("status")  # type: ignore[union-attr]
+    return new["status"] != (last["status"] if last else None)
 
 
-_CHANGE_DETECTORS: dict[tuple[str, str], Callable[[WatchState, WatchState | None], bool]] = {
+_CHANGE_DETECTORS: dict[tuple[str, str], Callable[[Any, Any], bool]] = {
     ("github-pr", "approved_or_merged"): _detect_github_approved_or_merged,
     ("github-pr", "merged"): _detect_github_merged,
     ("github-pr", ""): _detect_json_diff,
@@ -994,7 +1004,10 @@ def poll_watch(item: SchedulerItem) -> tuple[WatchState | None, bool]:
     if not check_fn:
         return None, False
 
-    new_state = check_fn(item.get("watch_config", {}))
+    watch_config = item.get("watch_config")
+    if watch_config is None:
+        return None, False
+    new_state = check_fn(watch_config)
     if new_state is None:
         return None, False
 
@@ -1055,7 +1068,7 @@ def add_watch(
 ) -> SchedulerItem:
     """Add a condition-based watch. Returns the created item."""
     now = datetime.now(_get_local_tz())
-    watch_config: GithubPrConfig | JiraQueryConfig | JiraTicketConfig | dict[str, Any] = {}
+    watch_config: GithubPrConfig | JiraQueryConfig | JiraTicketConfig
 
     if provider == "github-pr":
         m = re.match(r"([^/]+)/([^#]+)#(\d+)", target)
@@ -1236,12 +1249,12 @@ def snooze_item(item_id: str, until_text: str) -> tuple[SchedulerItem, datetime]
 
 def _load_items_unlocked() -> list[SchedulerItem]:
     """Read scheduler items without acquiring a lock (caller holds lock)."""
-    return _load_collection_unlocked(_scheduler_file(), "items")  # type: ignore[return-value]
+    return cast(list[SchedulerItem], _load_collection_unlocked(_scheduler_file(), "items"))
 
 
 def _load_alerts_unlocked() -> list[AlertItem]:
     """Read alerts without acquiring a lock (caller holds lock)."""
-    return _load_collection_unlocked(_alerts_file(), "alerts")  # type: ignore[return-value]
+    return cast(list[AlertItem], _load_collection_unlocked(_alerts_file(), "alerts"))
 
 
 def run_poll(quiet: bool = False) -> None:

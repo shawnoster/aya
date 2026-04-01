@@ -466,7 +466,9 @@ def dispatch(
             event_id = await client.publish(signed, recipient_nostr_pub, encrypt=not no_encrypt)
         except Exception:
             logger.exception("Relay publish failed during dispatch")
-            err.print("[yellow]Could not reach relay — dispatch failed.[/yellow]")
+            err.print(
+                "[yellow]Dispatch failed — event could not be published to relay(s).[/yellow]"
+            )
             raise typer.Exit(1) from None
 
         relay_count = len(relay_urls)

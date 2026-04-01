@@ -101,15 +101,33 @@ class RelayClient:
             not isinstance(url, str) or not url.strip() for url in self._relay_urls
         ):
             raise ValueError("relay_urls must contain at least one non-empty string URL")
-        # Keep relay_url as a single-URL alias for backward compatibility.
-        self.relay_url: str = self._relay_urls[0]
         self._private_key_hex = nostr_private_hex
         self.public_key_hex = nostr_public_hex
+
+    @property
+    def relay_url(self) -> str:
+        """Return the first relay URL. Backward compatibility alias for _relay_urls[0]."""
+        return self._relay_urls[0]
+
+    @relay_url.setter
+    def relay_url(self, url: str) -> None:
+        """Set the primary relay URL, updating the first entry in _relay_urls.
+
+        This preserves backward compatibility for code that previously did
+        ``client.relay_url = "wss://..."`` when relay_url was a plain attribute.
+        """
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("relay_url must be a non-empty string URL")
+        if self._relay_urls:
+            self._relay_urls[0] = url
+        else:
+            # Defensive fallback; in normal use _relay_urls is non-empty.
+            self._relay_urls.append(url)
 
     async def publish(
         self, packet: Packet, recipient_nostr_pubkey: str, encrypt: bool = True
     ) -> str:
-        """Publish a packet to all configured relays.
+        """Publish a packet to all configured relays. **ASYNC.**
 
         Fans out to every relay regardless of individual results.
         Retries individual relays on transient failures (rate-limit, 503, network)
@@ -119,6 +137,14 @@ class RelayClient:
         *encrypt* controls NIP-44 encryption of the Nostr event content (default: True).
         Pass ``encrypt=False`` for debug or private-relay use where transport-level
         security is trusted.
+
+        Usage::
+
+            # In async context: await
+            event_id = await client.publish(packet, recipient_pubkey)
+
+            # In sync context: asyncio.run()
+            event_id = asyncio.run(client.publish(packet, recipient_pubkey))
         """
         event = self._build_event(packet, recipient_nostr_pubkey, encrypt=encrypt)
         errors: list[str] = []
@@ -185,14 +211,27 @@ class RelayClient:
         self,
         since: datetime | None = None,
     ) -> AsyncIterator[Packet]:
-        """
-        Yield packets addressed to this instance's pubkey, querying all relays.
+        """Yield packets addressed to this instance's pubkey, querying all relays. **ASYNC.**
 
         Results are deduplicated by packet ID across relays.  When *since* is
         omitted a default look-back window of ``_DEFAULT_FETCH_WINDOW_DAYS``
         (matching the packet TTL) is applied so the scan is bounded to the
         live-packet window.  Pass an explicit *since* to override that lower
         bound.
+
+        Usage::
+
+            # In async context: use `async for` in an async function
+            async for packet in client.fetch_pending():
+                print(packet)
+
+            # In sync context: asyncio.run with async generator wrapper
+            async def fetch_all():
+                packets = []
+                async for p in client.fetch_pending():
+                    packets.append(p)
+                return packets
+            packets = asyncio.run(fetch_all())
         """
         seen_ids: set[str] = set()
         for relay_url in self._relay_urls:
@@ -361,7 +400,16 @@ class RelayClient:
             )
 
     async def send_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> None:
-        """Publish a read receipt for the given packet to all configured relays."""
+        """Publish a read receipt for the given packet to all configured relays. **ASYNC.**
+
+        Usage::
+
+            # In async context: await
+            await client.send_receipt(packet, sender_pubkey)
+
+            # In sync context: asyncio.run()
+            asyncio.run(client.send_receipt(packet, sender_pubkey))
+        """
         event = self._build_receipt(packet, sender_nostr_pubkey)
         for relay_url in self._relay_urls:
             try:

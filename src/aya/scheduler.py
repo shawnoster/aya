@@ -22,12 +22,13 @@ from __future__ import annotations
 import fcntl
 import functools
 import json
+import logging
 import os
 import re
 import subprocess
 import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,6 +36,31 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from aya import paths as _paths
+
+# ── item types ───────────────────────────────────────────────────────────────
+TYPE_REMINDER = "reminder"
+TYPE_WATCH = "watch"
+TYPE_RECURRING = "recurring"
+TYPE_EVENT = "event"
+
+# ── item statuses ────────────────────────────────────────────────────────────
+STATUS_PENDING = "pending"
+STATUS_ACTIVE = "active"
+STATUS_SNOOZED = "snoozed"
+STATUS_DELIVERED = "delivered"
+STATUS_DISMISSED = "dismissed"
+STATUS_DONE = "done"
+
+# ── watch providers ──────────────────────────────────────────────────────────
+PROVIDER_GITHUB_PR = "github-pr"
+PROVIDER_JIRA_QUERY = "jira-query"
+PROVIDER_JIRA_TICKET = "jira-ticket"
+
+# ── watch conditions ─────────────────────────────────────────────────────────
+CONDITION_APPROVED_OR_MERGED = "approved_or_merged"
+CONDITION_MERGED = "merged"
+CONDITION_NEW_RESULTS = "new_results"
+CONDITION_STATUS_CHANGED = "status_changed"
 
 # ── Module-level path accessors ─────────────────────────────────────────────
 # These functions check module globals first so monkeypatch still works in
@@ -56,7 +82,16 @@ def _activity_file() -> Path:
 
 @functools.lru_cache(maxsize=1)
 def _get_local_tz() -> ZoneInfo:
-    return ZoneInfo("America/Denver")
+    """Get the local timezone from AYA_TZ env var, with fallback to America/Denver.
+
+    Caching ensures consistent timezone throughout the session.
+    """
+    tz_name = os.environ.get("AYA_TZ", "America/Denver").strip()
+    try:
+        return ZoneInfo(tz_name)
+    except KeyError:
+        logging.warning("Invalid timezone %r; falling back to America/Denver", tz_name)
+        return ZoneInfo("America/Denver")
 
 
 # Lazy module attrs — lets tests monkeypatch these names via setattr.
@@ -505,6 +540,24 @@ def save_alerts(alerts: list[dict[str, Any]]) -> None:
         _atomic_write(_alerts_file(), {"alerts": alerts})
 
 
+# ── filter helpers ───────────────────────────────────────────────────────────
+
+
+def _items_of_type(items: list[dict[str, Any]], *types: str) -> list[dict[str, Any]]:
+    """Filter items by type."""
+    return [i for i in items if i.get("type") in types]
+
+
+def _items_with_status(items: list[dict[str, Any]], *statuses: str) -> list[dict[str, Any]]:
+    """Filter items by status."""
+    return [i for i in items if i.get("status") in statuses]
+
+
+def _unseen(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter unseen alerts."""
+    return [a for a in alerts if not a.get("seen")]
+
+
 def add_seed_alert(
     intent: str,
     opener: str,
@@ -521,14 +574,10 @@ def add_seed_alert(
     if open_questions:
         detail_lines.append("**Open questions:**")
         detail_lines.extend(f"  • {q}" for q in open_questions)
-    alert = {
-        "id": _new_id(),
-        # source_item_id is required by run_poll/tick for existing_sources dedup;
-        # use the originating packet ID so the alert can be traced back to its source.
-        "source_item_id": packet_id or _new_id(),
-        "created_at": now.isoformat(),
-        "message": f"Seed from {from_label}: {intent}",
-        "details": {
+    alert = _create_alert(
+        source_item_id=packet_id or _new_id(),
+        message=f"Seed from {from_label}: {intent}",
+        details={
             "type": "seed",
             "intent": intent,
             "opener": opener,
@@ -537,8 +586,8 @@ def add_seed_alert(
             "from_label": from_label,
             "body": "\n".join(detail_lines),
         },
-        "seen": False,
-    }
+        now=now,
+    )
     with _file_lock():
         alerts = _load_alerts_unlocked()
         alerts.append(alert)
@@ -557,6 +606,42 @@ def _new_id() -> str:
     return str(uuid.uuid4())
 
 
+# ── infrastructure helpers ───────────────────────────────────────────────────
+
+
+def _load_collection_unlocked(path: Path, key: str) -> list[dict[str, Any]]:
+    """Generic loader for JSON collections (caller holds lock)."""
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+    return data.get(key, []) if isinstance(data, dict) else []
+
+
+def _create_alert(
+    source_item_id: str, message: str, details: dict[str, Any], now: datetime
+) -> dict[str, Any]:
+    """Create an alert dict with standard fields."""
+    return {
+        "id": _new_id(),
+        "source_item_id": source_item_id,
+        "created_at": now.isoformat(),
+        "message": message,
+        "details": details,
+        "seen": False,
+    }
+
+
+def _get_jira_credentials() -> tuple[str, str, str]:
+    """Extract Jira credentials from environment. Returns (email, token, server)."""
+    email = os.environ.get("ATLASSIAN_EMAIL", "")
+    token = os.environ.get("ATLASSIAN_API_TOKEN", "")
+    server = os.environ.get("ATLASSIAN_SERVER_URL", "").rstrip("/")
+    return email, token, server
+
+
 # ── watch providers ──────────────────────────────────────────────────────────
 
 
@@ -573,7 +658,8 @@ def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list | None:
         if result.returncode != 0:
             return None
         return json.loads(result.stdout) if result.stdout.strip() else None
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+        logging.debug("gh command failed: %s", e)
         return None
 
 
@@ -616,9 +702,7 @@ def _check_github_pr(config: dict[str, Any]) -> dict[str, Any] | None:
 def _check_jira_query(config: dict[str, Any]) -> dict[str, Any] | None:
     """Run a JQL query and return results."""
     jql = config["jql"]
-    email = os.environ.get("ATLASSIAN_EMAIL", "")
-    token = os.environ.get("ATLASSIAN_API_TOKEN", "")
-    server = os.environ.get("ATLASSIAN_SERVER_URL", "").rstrip("/")
+    email, token, server = _get_jira_credentials()
 
     if not all([email, token, server]):
         return None
@@ -646,16 +730,15 @@ def _check_jira_query(config: dict[str, Any]) -> dict[str, Any] | None:
                 for i in data.get("issues", [])
             ],
         }
-    except Exception:
+    except Exception as e:
+        logging.debug("Jira query failed: %s", e)
         return None
 
 
 def _check_jira_ticket(config: dict[str, Any]) -> dict[str, Any] | None:
     """Check a specific Jira ticket's status."""
     ticket = config["ticket"]
-    email = os.environ.get("ATLASSIAN_EMAIL", "")
-    token = os.environ.get("ATLASSIAN_API_TOKEN", "")
-    server = os.environ.get("ATLASSIAN_SERVER_URL", "").rstrip("/")
+    email, token, server = _get_jira_credentials()
 
     if not all([email, token, server]):
         return None
@@ -679,7 +762,8 @@ def _check_jira_ticket(config: dict[str, Any]) -> dict[str, Any] | None:
             "status": fields.get("status", {}).get("name", ""),
             "assignee": (fields.get("assignee") or {}).get("displayName", "Unassigned"),
         }
-    except Exception:
+    except Exception as e:
+        logging.debug("Jira ticket check failed: %s", e)
         return None
 
 
@@ -687,6 +771,54 @@ WATCH_PROVIDERS = {
     "github-pr": _check_github_pr,
     "jira-query": _check_jira_query,
     "jira-ticket": _check_jira_ticket,
+}
+
+
+# ── change detection strategies ──────────────────────────────────────────────
+
+
+def _detect_json_diff(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect change by comparing JSON dumps."""
+    return json.dumps(new, sort_keys=True) != json.dumps(last, sort_keys=True)
+
+
+def _detect_github_approved_or_merged(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect if PR was approved or merged."""
+    was_approved = (last or {}).get("has_approval", False)
+    was_merged = (last or {}).get("merged", False)
+    return (new["has_approval"] and not was_approved) or (new["merged"] and not was_merged)
+
+
+def _detect_github_merged(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect if PR was merged."""
+    return new["merged"] and not (last or {}).get("merged", False)
+
+
+def _detect_jira_new_results(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect new issues in Jira query results."""
+    old_keys = {i["key"] for i in (last or {}).get("issues", [])}
+    new_keys = {i["key"] for i in new.get("issues", [])}
+    return bool(new_keys - old_keys)
+
+
+def _detect_jira_count_change(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect change in Jira query result count."""
+    return new.get("total", 0) != (last or {}).get("total", 0)
+
+
+def _detect_jira_status_changed(new: dict[str, Any], last: dict[str, Any] | None) -> bool:
+    """Detect if Jira ticket status changed."""
+    return new.get("status") != (last or {}).get("status")
+
+
+_CHANGE_DETECTORS: dict[tuple[str, str], Callable[[dict, dict | None], bool]] = {
+    ("github-pr", "approved_or_merged"): _detect_github_approved_or_merged,
+    ("github-pr", "merged"): _detect_github_merged,
+    ("github-pr", ""): _detect_json_diff,
+    ("jira-query", "new_results"): _detect_jira_new_results,
+    ("jira-query", ""): _detect_jira_count_change,
+    ("jira-ticket", "status_changed"): _detect_jira_status_changed,
+    ("jira-ticket", ""): _detect_json_diff,
 }
 
 
@@ -702,38 +834,11 @@ def poll_watch(item: dict[str, Any]) -> tuple[dict | None, bool]:
         return None, False
 
     last_state = item.get("last_state")
-    changed = False
     condition = item.get("condition", "")
 
-    if provider == "github-pr":
-        if condition == "approved_or_merged":
-            was_approved = (last_state or {}).get("has_approval", False)
-            was_merged = (last_state or {}).get("merged", False)
-            changed = (new_state["has_approval"] and not was_approved) or (
-                new_state["merged"] and not was_merged
-            )
-        elif condition == "merged":
-            changed = new_state["merged"] and not (last_state or {}).get("merged", False)
-        else:
-            changed = json.dumps(new_state, sort_keys=True) != json.dumps(
-                last_state, sort_keys=True
-            )
-
-    elif provider == "jira-query":
-        if condition == "new_results":
-            old_keys = {i["key"] for i in (last_state or {}).get("issues", [])}
-            new_keys = {i["key"] for i in new_state.get("issues", [])}
-            changed = bool(new_keys - old_keys)
-        else:
-            changed = new_state.get("total", 0) != (last_state or {}).get("total", 0)
-
-    elif provider == "jira-ticket":
-        if condition == "status_changed":
-            changed = new_state.get("status") != (last_state or {}).get("status")
-        else:
-            changed = json.dumps(new_state, sort_keys=True) != json.dumps(
-                last_state, sort_keys=True
-            )
+    # Use strategy dict to detect changes
+    detector = _CHANGE_DETECTORS.get((provider, condition))
+    changed = detector(new_state, last_state) if detector else False
 
     return new_state, changed
 
@@ -966,26 +1071,12 @@ def snooze_item(item_id: str, until_text: str) -> tuple[dict[str, Any], datetime
 
 def _load_items_unlocked() -> list[dict[str, Any]]:
     """Read scheduler items without acquiring a lock (caller holds lock)."""
-    path = _scheduler_file()
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return []
-    return data.get("items", []) if isinstance(data, dict) else []
+    return _load_collection_unlocked(_scheduler_file(), "items")
 
 
 def _load_alerts_unlocked() -> list[dict[str, Any]]:
     """Read alerts without acquiring a lock (caller holds lock)."""
-    path = _alerts_file()
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return []
-    return data.get("alerts", []) if isinstance(data, dict) else []
+    return _load_collection_unlocked(_alerts_file(), "alerts")
 
 
 def run_poll(quiet: bool = False) -> None:
@@ -1000,6 +1091,7 @@ def run_poll(quiet: bool = False) -> None:
         now = datetime.now(_get_local_tz())
         items_modified = False
         alerts_modified = False
+        existing_sources = {a["source_item_id"] for a in alerts if not a.get("seen")}
 
         for item in items:
             if (
@@ -1021,14 +1113,12 @@ def run_poll(quiet: bool = False) -> None:
                     items_modified = True
 
                     if changed:
-                        alert = {
-                            "id": _new_id(),
-                            "source_item_id": item["id"],
-                            "created_at": now.isoformat(),
-                            "message": _format_watch_alert(item, new_state),
-                            "details": new_state,
-                            "seen": False,
-                        }
+                        alert = _create_alert(
+                            source_item_id=item["id"],
+                            message=_format_watch_alert(item, new_state),
+                            details=new_state,
+                            now=now,
+                        )
                         alerts.append(alert)
                         alerts_modified = True
                         if not quiet:
@@ -1046,16 +1136,13 @@ def run_poll(quiet: bool = False) -> None:
             elif item["type"] == "reminder" and item["status"] == "pending":
                 due = datetime.fromisoformat(item["due_at"])
                 if due <= now:
-                    existing_sources = {a["source_item_id"] for a in alerts if not a.get("seen")}
                     if item["id"] not in existing_sources:
-                        alert = {
-                            "id": _new_id(),
-                            "source_item_id": item["id"],
-                            "created_at": now.isoformat(),
-                            "message": f"Reminder due: {item['message']}",
-                            "details": {"due_at": item["due_at"]},
-                            "seen": False,
-                        }
+                        alert = _create_alert(
+                            source_item_id=item["id"],
+                            message=f"Reminder due: {item['message']}",
+                            details={"due_at": item["due_at"]},
+                            now=now,
+                        )
                         alerts.append(alert)
                         alerts_modified = True
                         if not quiet:
@@ -1444,31 +1531,46 @@ def _display_items(items: list[dict[str, Any]]) -> None:
 
     now = datetime.now(_get_local_tz())
 
-    for item_type in ("reminder", "watch", "recurring", "event"):
-        typed = [i for i in items if i.get("type") == item_type]
+    status_icons = {
+        STATUS_PENDING: "⏳",
+        STATUS_ACTIVE: "✅",
+        STATUS_SNOOZED: "💤",
+        STATUS_DELIVERED: "📬",
+        STATUS_DISMISSED: "✗",
+    }
+
+    for item_type in (TYPE_REMINDER, TYPE_WATCH, TYPE_RECURRING, TYPE_EVENT):
+        typed = _items_of_type(items, item_type)
         if not typed:
             continue
-        for i in typed:
-            {
-                "pending": "⏳",
-                "active": "✅",
-                "snoozed": "💤",
-                "delivered": "📬",
-                "dismissed": "✗",
-            }.get(i.get("status", "active"), "•")
-            f" [{', '.join(i['tags'])}]" if i.get("tags") else ""
 
-            if i.get("type") == "reminder":
+        print(f"\n{item_type.upper()}:")  # noqa: T201
+        for i in typed:
+            status = i.get("status", STATUS_ACTIVE)
+            icon = status_icons.get(status, "•")
+            tags_str = f" [{', '.join(i['tags'])}]" if i.get("tags") else ""
+            message = i.get("message", "")
+
+            if item_type == TYPE_REMINDER:
                 due = datetime.fromisoformat(i["due_at"])
-                due.strftime("%a %b %d, %I:%M %p")
-                due <= now and i.get("status") == "pending"
-            elif i.get("type") == "watch":
-                i.get("provider", "?")
-                i.get("poll_interval_minutes", "?")
+                due_str = due.strftime("%a %b %d, %I:%M %p")
+                is_overdue = "⚠️" if due <= now and status == STATUS_PENDING else ""
+                print(  # noqa: T201
+                    f"  {icon} {message}{tags_str} — due {due_str} {is_overdue}".rstrip()
+                )
+            elif item_type == TYPE_WATCH:
+                provider = i.get("provider", "?")
+                interval = i.get("poll_interval_minutes", "?")
                 last = i.get("last_checked_at")
-                datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
-            elif i.get("type") == "recurring":
-                i.get("cron", "?")
-                " [session]" if i.get("session_required") else ""
-            elif i.get("type") == "event":
-                i.get("trigger", "?")
+                last_checked = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
+                print(  # noqa: T201
+                    f"  {icon} {message}{tags_str} — {provider} (every {interval}m, "
+                    f"checked {last_checked})"
+                )
+            elif item_type == TYPE_RECURRING:
+                cron = i.get("cron", "?")
+                session_flag = " [session]" if i.get("session_required") else ""
+                print(f"  {icon} {message}{tags_str} — {cron}{session_flag}")  # noqa: T201
+            elif item_type == TYPE_EVENT:
+                trigger = i.get("trigger", "?")
+                print(f"  {icon} {message}{tags_str} — on {trigger}")  # noqa: T201

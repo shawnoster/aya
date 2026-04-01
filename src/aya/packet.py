@@ -61,6 +61,7 @@ class Packet(BaseModel):
     content_type: ContentType = ContentType.MARKDOWN
     content: str | dict[str, Any] = ""
     reply_to: str | None = None
+    in_reply_to: str | None = None
     conflict_strategy: ConflictStrategy = ConflictStrategy.LAST_WRITE_WINS
     tags: list[str] = Field(default_factory=list)
     encrypted: bool = False
@@ -81,8 +82,15 @@ class Packet(BaseModel):
         return datetime.fromisoformat(self.expires_at) < datetime.now(UTC)
 
     def canonical_bytes(self) -> bytes:
-        """Deterministic serialisation for signing — excludes signature field."""
+        """Deterministic serialisation for signing — excludes signature field.
+
+        ``in_reply_to`` is omitted when None so that non-ACK packets have the
+        same canonical form as before this field was introduced, preserving
+        cross-version signature compatibility.
+        """
         data = self.model_dump(by_alias=True, exclude={"signature"})
+        if data.get("in_reply_to") is None:
+            data.pop("in_reply_to", None)
         return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 
     def sign(self, identity: Identity) -> Packet:

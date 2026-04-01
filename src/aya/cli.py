@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -63,6 +64,8 @@ from aya.scheduler import (
     snooze_item,
 )
 from aya.status import run_status
+
+logger = logging.getLogger(__name__)
 
 
 class OutputFormat(StrEnum):
@@ -256,9 +259,8 @@ def init(
 @app.command()
 def trust(
     did: str = typer.Argument(help="DID to trust (did:key:z6Mk…)"),
-    peer: str = typer.Option(
-        ..., "--peer", "--label", help="Name for the remote peer (legacy alias: --label)"
-    ),
+    peer: str = typer.Option(None, "--peer", help="Name for the remote peer"),
+    label: str = typer.Option(None, "--label", help="[deprecated] Use --peer instead", hidden=True),
     nostr_pubkey: str = typer.Option(
         None,
         help="Nostr pubkey hex (required for send/receive; pairing fills this automatically)",
@@ -266,6 +268,15 @@ def trust(
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Add a DID to your trusted keys list."""
+    if label is not None and peer is not None:
+        err.print("[red]Cannot use --peer and --label together. Use --peer only.[/red]")
+        raise typer.Exit(2)
+    if label is not None:
+        err.print("[yellow]Warning: --label is deprecated, use --peer instead[/yellow]")
+        peer = label
+    if peer is None:
+        err.print("[red]Missing option '--peer'.[/red]")
+        raise typer.Exit(2)
     p = _load_profile(profile)
     p.trusted_keys[peer] = TrustedKey(
         did=did,
@@ -293,8 +304,9 @@ def pack(
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
     out: Path = typer.Option(None, help="Write packet JSON to file (default: stdout)"),
-    as_: str = typer.Option(
-        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    instance: str = typer.Option(
+        None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
@@ -302,6 +314,12 @@ def pack(
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Pack a knowledge packet ready to send."""
+    if instance is not None and as_ != "default":
+        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
+        raise typer.Exit(2)
+    if instance is not None:
+        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
+        as_ = instance
     p = _load_profile(profile)
     local = _resolve_instance(p, as_)
 
@@ -355,12 +373,19 @@ def pack(
 def send(
     packet_file: Path = typer.Argument(help="Packet JSON file to send"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
-    as_: str = typer.Option(
-        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    instance: str = typer.Option(
+        None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Send a packet to a Nostr relay."""
+    if instance is not None and as_ != "default":
+        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
+        raise typer.Exit(2)
+    if instance is not None:
+        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
+        as_ = instance
     p = _load_profile(profile)
     local = _resolve_instance(p, as_)
 
@@ -392,8 +417,9 @@ def dispatch(
     context: str = typer.Option(None, help="Annotation for the receiving assistant"),
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
-    as_: str = typer.Option(
-        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    instance: str = typer.Option(
+        None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     conflict: ConflictStrategy = typer.Option(
@@ -405,6 +431,12 @@ def dispatch(
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Pack and send in one step — the natural 'pack for home' flow."""
+    if instance is not None and as_ != "default":
+        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
+        raise typer.Exit(2)
+    if instance is not None:
+        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
+        as_ = instance
 
     async def _run() -> None:
         p = _load_profile(profile)
@@ -462,7 +494,10 @@ def dispatch(
         try:
             event_id = await client.publish(signed, recipient_nostr_pub, encrypt=not no_encrypt)
         except Exception:
-            err.print("[yellow]Could not reach relay — dispatch failed.[/yellow]")
+            logger.exception("Relay publish failed during dispatch")
+            err.print(
+                "[yellow]Dispatch failed — event could not be published to relay(s).[/yellow]"
+            )
             raise typer.Exit(1) from None
 
         relay_count = len(relay_urls)
@@ -484,14 +519,148 @@ def dispatch(
     asyncio.run(_run())
 
 
+# ── ack ───────────────────────────────────────────────────────────────────────
+
+
+@app.command()
+def ack(
+    packet_id: str = typer.Argument(help="Packet ID or prefix to acknowledge"),
+    message: str | None = typer.Argument(
+        None, help="Short reply message (default: 'acknowledged')"
+    ),
+    dismiss: bool = typer.Option(
+        False, "--dismiss", help="No-action acknowledgment; message defaults to 'acknowledged'"
+    ),
+    as_: str = typer.Option(
+        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    ),
+    relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    profile: Path = typer.Option(DEFAULT_PROFILE),
+) -> None:
+    """Acknowledge a received seed packet — sends a reply back to the sender."""
+
+    async def _run() -> None:
+        p = _load_profile(profile)
+        local = _resolve_instance(p, as_)
+
+        # Resolve full packet ID from ingested_ids (prefix match, min 8 chars)
+        if len(packet_id) < 8:
+            err.print("[red]Packet ID prefix must be at least 8 characters.[/red]")
+            raise typer.Exit(1)
+        ingested_ids = [entry["id"] for entry in p.ingested_ids]
+        matched = [pid for pid in ingested_ids if pid.startswith(packet_id)]
+        if not matched:
+            err.print(
+                f"[red]Packet ID '{packet_id}' not found in ingested_ids.[/red]\n"
+                "Only ingested packets can be acknowledged."
+            )
+            raise typer.Exit(1)
+        if len(matched) > 1:
+            err.print(
+                f"[red]Ambiguous prefix '{packet_id}' — matches {len(matched)} packets:[/red]\n"
+                + "\n".join(f"  {pid}" for pid in matched)
+            )
+            raise typer.Exit(1)
+
+        full_packet_id = matched[0]
+
+        # Determine the sender's DID — look through trusted keys for a packet
+        # that arrived from a known peer.  Since we don't store per-packet
+        # sender metadata in ingested_ids, we must find the original sender
+        # via the relay or trusted keys.  As a best-effort, look up a single
+        # trusted key (the common case for cross-instance ACK) or require the
+        # user to specify.
+        #
+        # Strategy: if there is exactly one trusted peer with a Nostr pubkey,
+        # use them.  If there are multiple, the user must disambiguate with
+        # a DID or peer label via --to (future enhancement).  For now emit a
+        # helpful error when ambiguous.
+        trusted_with_nostr = [
+            (label, tk) for label, tk in p.trusted_keys.items() if tk.nostr_pubkey
+        ]
+
+        if not trusted_with_nostr:
+            err.print(
+                "[red]No trusted peers with a Nostr pubkey found.[/red]\n"
+                "Pair with the sender first: [bold]aya pair[/bold]"
+            )
+            raise typer.Exit(1)
+
+        if len(trusted_with_nostr) > 1:
+            # Can't auto-resolve; surface a helpful message.
+            names = ", ".join(lbl for lbl, _ in trusted_with_nostr)
+            err.print(
+                "[red]Multiple trusted peers — cannot determine ACK recipient.[/red]\n"
+                f"Available: [cyan]{names}[/cyan]\n"
+                "[dim]Support for --to <peer> will be added in a future release.[/dim]"
+            )
+            raise typer.Exit(1)
+
+        to_label, to_key = trusted_with_nostr[0]
+        to_did = to_key.did
+        recipient_nostr_pub = to_key.nostr_pubkey  # guaranteed non-None above
+
+        reply_text = message if message else "acknowledged"
+
+        ack_packet = Packet(
+            **{"from": local.did, "to": to_did},
+            intent="ack",
+            content_type=ContentType.JSON,
+            content={
+                "in_reply_to": full_packet_id,
+                "message": reply_text,
+                "dismiss": dismiss,
+            },
+            in_reply_to=full_packet_id,
+        )
+        signed = ack_packet.sign(local)
+
+        relay_urls = [relay] if relay else p.default_relays
+        client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
+        try:
+            event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
+        except Exception:
+            err.print("[yellow]Could not reach relay — ack failed.[/yellow]")
+            raise typer.Exit(1) from None
+
+        # Mark any matching seed alert as seen (best-effort)
+        try:
+            alerts = show_alerts(mark_seen=False)
+            for alert in alerts:
+                if alert.get("source_item_id", "").startswith(packet_id):
+                    dismiss_alert(alert["id"])
+                    break
+        except Exception:  # noqa: S110
+            pass  # alert cleanup is best-effort; do not block the ACK response
+
+        relay_count = len(relay_urls)
+        relay_display = (
+            relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
+        )
+        console.print(
+            Panel.fit(
+                f"[bold green]✓ ACK sent[/bold green]\n\n"
+                f"In reply to: [dim]{full_packet_id[:8]}[/dim]\n"
+                f"To:          [dim]{to_label}[/dim]\n"
+                f"Message:     [cyan]{reply_text}[/cyan]\n"
+                f"Event:       [dim]{event_id[:8]}[/dim]\n"
+                f"Relay:       [dim]{relay_display}[/dim]",
+                title="aya — ack",
+            )
+        )
+
+    asyncio.run(_run())
+
+
 # ── receive ───────────────────────────────────────────────────────────────────
 
 
 @app.command()
 def receive(
     relay: str = typer.Option(None),
-    as_: str = typer.Option(
-        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    instance: str = typer.Option(
+        None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     auto_ingest: bool = typer.Option(False, help="Ingest all trusted packets without prompting"),
     yes: bool = typer.Option(
@@ -503,6 +672,12 @@ def receive(
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Poll for pending packets and surface them for review."""
+    if instance is not None and as_ != "default":
+        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
+        raise typer.Exit(2)
+    if instance is not None:
+        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
+        as_ = instance
 
     async def _run() -> None:
         p = _load_profile(profile)
@@ -529,6 +704,7 @@ def receive(
             async for packet in client.fetch_pending(**since_kwargs):
                 packets.append(packet)
         except Exception:
+            logger.exception("Relay fetch failed during receive")
             if not quiet:
                 err.print("[yellow]Could not reach relay — skipping relay fetch.[/yellow]")
             return
@@ -603,8 +779,9 @@ def receive(
 @app.command()
 def inbox(
     relay: str = typer.Option(None),
-    as_: str = typer.Option(
-        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    instance: str = typer.Option(
+        None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
@@ -615,6 +792,12 @@ def inbox(
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """List pending packets without ingesting."""
+    if instance is not None and as_ != "default":
+        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
+        raise typer.Exit(2)
+    if instance is not None:
+        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
+        as_ = instance
     format_ = resolve_format(format_)
 
     async def _run() -> None:
@@ -651,16 +834,34 @@ def inbox(
 @app.command()
 def pair(
     code: str = typer.Option(None, help="Pairing code from the other instance (joiner mode)"),
-    peer: str = typer.Option(
-        ..., "--peer", "--label", help="Name for the remote peer (legacy alias: --label)"
-    ),
-    as_: str = typer.Option(
-        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
+    peer: str = typer.Option(None, "--peer", help="Name for the remote peer"),
+    label: str = typer.Option(None, "--label", help="[deprecated] Use --peer instead", hidden=True),
+    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    instance: str = typer.Option(
+        None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Pair two instances with a short-lived code — no manual DID exchange."""
+    if label is not None and peer is not None:
+        err.print("[red]Cannot use --peer and --label together. Use --peer only.[/red]")
+        raise typer.Exit(2)
+    if label is not None:
+        err.print("[yellow]Warning: --label is deprecated, use --peer instead[/yellow]")
+        peer = label
+    if instance is not None and as_ != "default":
+        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
+        raise typer.Exit(2)
+    if instance is not None and as_ != "default":
+        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
+        raise typer.Exit(2)
+    if instance is not None:
+        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
+        as_ = instance
+    if peer is None:
+        err.print("[red]Missing option '--peer'.[/red]")
+        raise typer.Exit(2)
     p = _load_profile(profile)
     local = _resolve_instance(p, as_)
 

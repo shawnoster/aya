@@ -796,7 +796,7 @@ class TestDispatch:
                 input="data\n",
             )
         assert result.exit_code != 0
-        assert "Could not reach relay" in result.output
+        assert "Dispatch failed" in result.output
 
 
 # ── schedule status ──────────────────────────────────────────────────────────
@@ -1519,3 +1519,391 @@ class TestAutoFormat:
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert "version" in data
+
+
+# ── deprecation warnings ──────────────────────────────────────────────────────
+
+
+class TestDeprecationWarnings:
+    """Verify that legacy flags emit deprecation warnings and still work correctly."""
+
+    def test_trust_label_warns(self, profile_with_instance: Path) -> None:
+        """--label on trust emits a deprecation warning to stderr."""
+        home = Identity.generate("home")
+        result = runner.invoke(
+            app,
+            [
+                "trust",
+                home.did,
+                "--label",
+                "home",
+                "--profile",
+                str(profile_with_instance),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" in stderr
+        assert "--peer" in stderr
+
+    def test_trust_peer_no_warning(self, profile_with_instance: Path) -> None:
+        """--peer on trust does NOT emit a deprecation warning."""
+        home = Identity.generate("home")
+        result = runner.invoke(
+            app,
+            [
+                "trust",
+                home.did,
+                "--peer",
+                "home",
+                "--profile",
+                str(profile_with_instance),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" not in stderr
+
+    def test_pair_label_warns(self, profile_with_instance: Path) -> None:
+        """--label on pair emits a deprecation warning to stderr."""
+        from unittest.mock import patch
+
+        from aya.pair import TrustedKey as PairTrustedKey
+
+        local_identity = Identity.generate("remote-host")
+        p = Profile.load(profile_with_instance)
+        p.instances["remote-host"] = local_identity
+        p.save(profile_with_instance)
+
+        peer_identity = Identity.generate("peer-host")
+        mock_trusted = PairTrustedKey(
+            did=peer_identity.did,
+            label="peer-host",
+            nostr_pubkey=peer_identity.nostr_public_hex,
+        )
+
+        with (
+            patch("aya.cli.generate_code", return_value="ABCD1234"),
+            patch("aya.cli.hash_code", return_value="deadbeef"),
+            patch("aya.cli.publish_pair_request"),
+            patch("aya.cli.poll_for_pair_response", return_value=mock_trusted),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "pair",
+                    "--label",
+                    "peer-host",
+                    "--as",
+                    "remote-host",
+                    "--profile",
+                    str(profile_with_instance),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" in stderr
+        assert "--peer" in stderr
+
+    def test_pair_peer_no_warning(self, profile_with_instance: Path) -> None:
+        """--peer on pair does NOT emit a deprecation warning."""
+        from unittest.mock import patch
+
+        from aya.pair import TrustedKey as PairTrustedKey
+
+        local_identity = Identity.generate("remote-host")
+        p = Profile.load(profile_with_instance)
+        p.instances["remote-host"] = local_identity
+        p.save(profile_with_instance)
+
+        peer_identity = Identity.generate("peer-host")
+        mock_trusted = PairTrustedKey(
+            did=peer_identity.did,
+            label="peer-host",
+            nostr_pubkey=peer_identity.nostr_public_hex,
+        )
+
+        with (
+            patch("aya.cli.generate_code", return_value="ABCD1234"),
+            patch("aya.cli.hash_code", return_value="deadbeef"),
+            patch("aya.cli.publish_pair_request"),
+            patch("aya.cli.poll_for_pair_response", return_value=mock_trusted),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "pair",
+                    "--peer",
+                    "peer-host",
+                    "--as",
+                    "remote-host",
+                    "--profile",
+                    str(profile_with_instance),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" not in stderr
+
+    def test_pack_instance_warns(self, profile_with_trusted: Path, tmp_path: Path) -> None:
+        """--instance on pack emits a deprecation warning to stderr."""
+        out_file = tmp_path / "packet.json"
+        result = runner.invoke(
+            app,
+            [
+                "pack",
+                "--to",
+                "home",
+                "--intent",
+                "legacy flag test",
+                "--out",
+                str(out_file),
+                "--instance",
+                "default",  # uses the "default" instance which must exist in the fixture
+                "--profile",
+                str(profile_with_trusted),
+            ],
+            input="test content\n",
+        )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" in stderr
+        assert "--as" in stderr
+
+    def test_pack_instance_and_as_together_errors(
+        self, profile_with_trusted: Path, tmp_path: Path
+    ) -> None:
+        """Passing both --as and --instance is a usage error (exit 2)."""
+        out_file = tmp_path / "packet.json"
+        result = runner.invoke(
+            app,
+            [
+                "pack",
+                "--to",
+                "home",
+                "--intent",
+                "conflict test",
+                "--out",
+                str(out_file),
+                "--as",
+                "work",
+                "--instance",
+                "home",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+            input="test content\n",
+        )
+        assert result.exit_code == 2
+        stderr = result.stderr or result.output
+        assert "Cannot use" in stderr
+
+    def test_pack_as_no_warning(self, profile_with_trusted: Path, tmp_path: Path) -> None:
+        """--as on pack does NOT emit a deprecation warning."""
+        out_file = tmp_path / "packet.json"
+        result = runner.invoke(
+            app,
+            [
+                "pack",
+                "--to",
+                "home",
+                "--intent",
+                "new flag test",
+                "--out",
+                str(out_file),
+                "--as",
+                "default",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+            input="test content\n",
+        )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" not in stderr
+
+    def test_pair_instance_warns(self, profile_with_instance: Path) -> None:
+        """--instance on pair emits a deprecation warning to stderr."""
+        from unittest.mock import patch
+
+        from aya.pair import TrustedKey as PairTrustedKey
+
+        local_identity = Identity.generate("remote-host")
+        p = Profile.load(profile_with_instance)
+        p.instances["remote-host"] = local_identity
+        p.save(profile_with_instance)
+
+        peer_identity = Identity.generate("peer-host")
+        mock_trusted = PairTrustedKey(
+            did=peer_identity.did,
+            label="peer-host",
+            nostr_pubkey=peer_identity.nostr_public_hex,
+        )
+
+        with (
+            patch("aya.cli.generate_code", return_value="ABCD1234"),
+            patch("aya.cli.hash_code", return_value="deadbeef"),
+            patch("aya.cli.publish_pair_request"),
+            patch("aya.cli.poll_for_pair_response", return_value=mock_trusted),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "pair",
+                    "--peer",
+                    "peer-host",
+                    "--instance",
+                    "remote-host",
+                    "--profile",
+                    str(profile_with_instance),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" in stderr
+        assert "--as" in stderr
+
+
+# ── ack ───────────────────────────────────────────────────────────────────────
+
+
+class TestAck:
+    """Tests for the `aya ack` command."""
+
+    @pytest.fixture
+    def profile_with_ingested(self, tmp_path: Path) -> tuple[Path, str, Identity]:
+        """Profile with a 'default' instance, a trusted 'home' peer, and one ingested packet ID."""
+        local = Identity.generate("default")
+        home = Identity.generate("home")
+
+        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile.instances["default"] = local
+        profile.trusted_keys["home"] = TrustedKey(
+            did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
+        )
+
+        # Add a fake ingested packet ID
+        from datetime import UTC, datetime
+
+        pkt = Packet(
+            **{"from": home.did, "to": local.did},
+            intent="seed from home",
+        )
+        now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso})
+
+        profile_path = tmp_path / "profile.json"
+        profile.save(profile_path)
+        return profile_path, pkt.id, home
+
+    def test_ack_happy_path(self, profile_with_ingested: tuple) -> None:
+        """ack sends an ACK packet and prints confirmation."""
+        profile_path, packet_id, _home = profile_with_ingested
+        mock_publish = AsyncMock(return_value="c" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                ["ack", packet_id, "looks good", "--profile", str(profile_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "ACK sent" in result.output
+        assert packet_id[:8] in result.output
+        mock_publish.assert_awaited_once()
+
+    def test_ack_prefix_match(self, profile_with_ingested: tuple) -> None:
+        """ack resolves the full packet ID from a short prefix."""
+        profile_path, packet_id, _home = profile_with_ingested
+        prefix = packet_id[:8]
+        mock_publish = AsyncMock(return_value="d" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                ["ack", prefix, "--profile", str(profile_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "ACK sent" in result.output
+
+    def test_ack_dismiss_flag(self, profile_with_ingested: tuple) -> None:
+        """--dismiss sets the dismiss flag in the ACK content and uses default message."""
+        profile_path, packet_id, _home = profile_with_ingested
+        mock_publish = AsyncMock(return_value="e" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                ["ack", packet_id, "--dismiss", "--profile", str(profile_path)],
+            )
+        assert result.exit_code == 0, result.output
+        assert "ACK sent" in result.output
+        # Verify ACK packet content has dismiss=True
+        call_args = mock_publish.call_args
+        ack_pkt: Packet = call_args[0][0]
+        assert ack_pkt.intent == "ack"
+        assert isinstance(ack_pkt.content, dict)
+        assert ack_pkt.content["dismiss"] is True
+        assert ack_pkt.content["message"] == "acknowledged"
+
+    def test_ack_packet_has_correct_intent_and_reply_fields(
+        self, profile_with_ingested: tuple
+    ) -> None:
+        """ACK packet must have intent='ack' and in_reply_to set to the original packet ID."""
+        profile_path, packet_id, _home = profile_with_ingested
+        mock_publish = AsyncMock(return_value="f" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            runner.invoke(
+                app,
+                ["ack", packet_id, "got it", "--profile", str(profile_path)],
+            )
+        ack_pkt: Packet = mock_publish.call_args[0][0]
+        assert ack_pkt.intent == "ack"
+        assert ack_pkt.in_reply_to == packet_id
+        assert ack_pkt.content["in_reply_to"] == packet_id
+        assert ack_pkt.content["message"] == "got it"
+
+    def test_ack_unknown_packet_id_exits_nonzero(self, profile_with_ingested: tuple) -> None:
+        """ack with an ID not in ingested_ids must exit non-zero."""
+        profile_path, _packet_id, _home = profile_with_ingested
+        result = runner.invoke(
+            app,
+            ["ack", "00000000000000000000000000", "--profile", str(profile_path)],
+        )
+        assert result.exit_code != 0
+
+    def test_ack_no_trusted_peers_exits_nonzero(self, tmp_path: Path) -> None:
+        """ack with no trusted peers (no Nostr pubkey) must exit non-zero."""
+        local = Identity.generate("default")
+        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile.instances["default"] = local
+        # A trusted key without a Nostr pubkey
+        other = Identity.generate("other")
+        profile.trusted_keys["other"] = TrustedKey(did=other.did, label="other", nostr_pubkey=None)
+
+        from datetime import UTC, datetime
+
+        pkt = Packet(**{"from": other.did, "to": local.did}, intent="test")
+        now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso})
+
+        profile_path = tmp_path / "profile.json"
+        profile.save(profile_path)
+
+        result = runner.invoke(
+            app,
+            ["ack", pkt.id, "--profile", str(profile_path)],
+        )
+        assert result.exit_code != 0
+
+    def test_ack_relay_error_exits_nonzero(self, profile_with_ingested: tuple) -> None:
+        """ack must exit non-zero when the relay publish fails."""
+        profile_path, packet_id, _home = profile_with_ingested
+        mock_publish = AsyncMock(side_effect=Exception("relay down"))
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                ["ack", packet_id, "--profile", str(profile_path)],
+            )
+        assert result.exit_code != 0

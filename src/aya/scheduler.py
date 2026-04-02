@@ -1199,6 +1199,8 @@ def check_due() -> tuple[list[SchedulerItem], list[AlertItem]]:
                 item["snoozed_until"] = None
                 modified = True
             due_at = item.get("due_at", "")
+            if not due_at:
+                continue
             due = datetime.fromisoformat(due_at)
             if due <= now:
                 due_items.append(item)
@@ -1298,6 +1300,8 @@ def run_poll(quiet: bool = False) -> None:
                         alert = _create_alert(
                             source_item_id=item["id"],
                             message=_format_watch_alert(item, new_state),
+                            # WatchState fields overlap with AlertDetails (total=False);
+                            # safe because AlertDetails accepts any subset of its keys.
                             details=cast(AlertDetails, new_state),
                             now=now,
                         )

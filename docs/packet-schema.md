@@ -27,7 +27,7 @@ This document specifies the envelope structure, content types, conflict resoluti
 | `conflict_strategy` | string (enum) | optional | `"last_write_wins"` | How the receiver should handle conflicts. See [Conflict Strategies](#conflict-strategies). |
 | `tags` | list\[string\] | optional | `[]` | Arbitrary labels for filtering and categorization. |
 | `encrypted` | boolean | optional | `false` | Whether the content is end-to-end encrypted (NIP-44). |
-| `signature` | string \| null | optional | `null` | Base64url-encoded ed25519 signature over the canonical envelope. |
+| `signature` | string \| null | optional | `null` | Base64url-encoded (RFC 4648 §5, URL-safe alphabet with `=` padding) ed25519 signature over the canonical envelope. Decoders MUST accept signatures with or without padding. |
 
 ---
 
@@ -100,7 +100,8 @@ To verify a packet:
 
 ## Wire Format
 
-Packets are serialized to JSON using `model_dump_json(by_alias=True, indent=2)`.
+On the wire, packets are encoded as JSON objects; any valid JSON representation is acceptable.
+The reference implementation serializes with `model_dump_json(by_alias=True, indent=2)` for readability, but formatting is not normative — signature verification uses canonical bytes, not the wire JSON.
 
 **Field aliases in JSON:**
 
@@ -163,7 +164,7 @@ All other fields use their declared names as JSON keys.
 
 The version string follows the format `aya/<major>.<minor>`.
 
-- **Unknown minor version:** log a warning but accept the packet.
+- **Unknown minor version:** accept the packet (no warning is logged).
 - **Unknown major version:** log a warning. The packet is still accepted (future versions may reject).
 
 Current version: `aya/0.2`.

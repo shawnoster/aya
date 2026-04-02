@@ -37,6 +37,8 @@ from zoneinfo import ZoneInfo
 
 from aya import paths as _paths
 
+logger = logging.getLogger(__name__)
+
 # ── item types ───────────────────────────────────────────────────────────────
 TYPE_REMINDER = "reminder"
 TYPE_WATCH = "watch"
@@ -468,6 +470,7 @@ def record_activity(now: datetime | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock():
         _atomic_write(path, {"last_activity_at": now.isoformat()})
+    logger.debug("activity: recorded at %s", now.isoformat())
 
 
 def get_last_activity() -> datetime | None:
@@ -500,10 +503,18 @@ def is_idle(threshold_str: str, now: datetime | None = None) -> bool:
     threshold = parse_duration(threshold_str)
     last = get_last_activity()
     if last is None:
+        logger.debug("idle check: threshold=%s, last_activity=never, idle=False", threshold_str)
         return False
     if now is None:
         now = datetime.now(_get_local_tz())
-    return (now - last) >= threshold
+    result = (now - last) >= threshold
+    logger.debug(
+        "idle check: threshold=%s, last_activity=%s, idle=%s",
+        threshold_str,
+        last.isoformat(),
+        result,
+    )
+    return result
 
 
 # ── file safety (fcntl lock + atomic write) ──────────────────────────────────
@@ -1277,6 +1288,13 @@ def run_poll(quiet: bool = False) -> None:
         alerts_modified = False
         existing_sources = {a["source_item_id"] for a in alerts if not a.get("seen")}
 
+        active_watches = [
+            i
+            for i in items
+            if i["type"] == "watch" and i["status"] == "active" and not i.get("session_required")
+        ]
+        logger.debug("poll: checking %d active watches", len(active_watches))
+
         for item in items:
             if (
                 item["type"] == "watch"
@@ -1291,6 +1309,13 @@ def run_poll(quiet: bool = False) -> None:
                         continue
 
                 new_state, changed = poll_watch(item)
+                provider = item.get("provider", "unknown")
+                logger.debug(
+                    "poll: watch %s provider=%s changed=%s",
+                    item["id"][:8],
+                    provider,
+                    changed,
+                )
                 if new_state is not None:
                     item["last_checked_at"] = now.isoformat()
                     item["last_state"] = new_state
@@ -1307,6 +1332,7 @@ def run_poll(quiet: bool = False) -> None:
                         )
                         alerts.append(alert)
                         alerts_modified = True
+                        logger.info("poll: generated alert for watch %s", item["id"][:8])
                         if not quiet:
                             pass
 
@@ -1333,6 +1359,16 @@ def run_poll(quiet: bool = False) -> None:
                         alerts_modified = True
                         if not quiet:
                             pass
+
+        due_reminders = [
+            i
+            for i in items
+            if i["type"] == "reminder"
+            and i["status"] == "pending"
+            and datetime.fromisoformat(i.get("due_at", "9999-12-31")) <= now
+        ]
+        if due_reminders:
+            logger.info("poll: %d due reminders found", len(due_reminders))
 
         if items_modified:
             _atomic_write(_scheduler_file(), {"items": items})
@@ -1455,9 +1491,11 @@ def run_tick(quiet: bool = False) -> dict[str, int]:
 
     Returns a summary dict: {"watches_checked": N, "alerts_generated": N, "claims_swept": N}
     """
+    logger.info("tick: starting poll cycle")
     run_poll(quiet=quiet)
     swept = sweep_stale_claims()
     expired = expire_old_alerts()
+    logger.info("tick: complete — swept=%d claims, expired=%d alerts", swept, expired)
     return {"claims_swept": swept, "alerts_expired": expired}
 
 
@@ -1498,6 +1536,7 @@ def get_pending(instance_id: str | None = None) -> PendingResult:
         }
     """
     instance_id = instance_id or get_instance_id()
+    logger.debug("pending: checking for instance=%s", instance_id)
     unseen = get_unseen_alerts()
 
     # Claim and collect deliverable alerts
@@ -1507,6 +1546,12 @@ def get_pending(instance_id: str | None = None) -> PendingResult:
         if claim_alert(alert["id"], instance_id):
             deliverable.append(alert)
             claimed_ids.add(alert["id"])
+
+    logger.info(
+        "pending: %d unseen alerts, %d claimed for delivery",
+        len(unseen),
+        len(deliverable),
+    )
 
     # Stamp delivery receipts on claimed alerts
     if claimed_ids:
@@ -1520,6 +1565,11 @@ def get_pending(instance_id: str | None = None) -> PendingResult:
             _atomic_write(_alerts_file(), {"alerts": alerts})
 
     session_crons, suppressed_crons = get_session_crons()
+    logger.debug(
+        "pending: %d session crons active, %d suppressed",
+        len(session_crons),
+        len(suppressed_crons),
+    )
 
     return {
         "alerts": deliverable,
@@ -1552,11 +1602,18 @@ def get_session_crons() -> tuple[list[SchedulerItem], list[SuppressedCron]]:
         if only_during and not is_within_work_hours(only_during, now):
             reason = f"outside work hours ({only_during})"
             suppressed_crons.append(SuppressedCron(item=item, reason=reason))
+            logger.debug("cron suppressed: %s — %s", item.get("message", "")[:40], reason)
         elif idle_back_off_str and is_idle(idle_back_off_str, now):
             reason = f"session idle (threshold: {idle_back_off_str})"
             suppressed_crons.append(SuppressedCron(item=item, reason=reason))
+            logger.debug("cron suppressed: %s — %s", item.get("message", "")[:40], reason)
         else:
             session_crons.append(item)
+    logger.debug(
+        "session_crons: %d active, %d suppressed",
+        len(session_crons),
+        len(suppressed_crons),
+    )
     return session_crons, suppressed_crons
 
 

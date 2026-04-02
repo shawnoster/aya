@@ -13,6 +13,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
+from typing import NoReturn
 
 import typer
 from rich.console import Console
@@ -169,7 +170,7 @@ def _emit_error(
     message: str,
     context: dict[str, object] | None = None,
     exit_code: int = 1,
-) -> None:
+) -> NoReturn:
     """Emit an error — structured JSON on stderr in non-TTY mode, Rich-formatted otherwise."""
     if not sys.stderr.isatty():
         payload: dict[str, object] = {"error": {"code": code, "message": message}}
@@ -499,8 +500,7 @@ def dispatch(
 
         if seed:
             if not opener:
-                err.print("[red]--opener required for seed packets.[/red]")
-                raise typer.Exit(1)
+                _emit_error(ErrorCode.INVALID_ARGUMENT, "--opener required for seed packets.")
             packet = Packet.as_seed(
                 from_did=local.did,
                 to_did=to_did,
@@ -952,12 +952,6 @@ def pair(
     if label is not None:
         err.print("[yellow]Warning: --label is deprecated, use --peer instead[/yellow]")
         peer = label
-    if instance is not None and as_ != "default":
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --as and --instance together. Use --as only.",
-            exit_code=2,
-        )
     if instance is not None and as_ != "default":
         _emit_error(
             ErrorCode.INVALID_ARGUMENT,

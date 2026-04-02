@@ -1825,8 +1825,8 @@ class TestDeprecationWarnings:
         """--instance on receive emits a deprecation warning to stderr."""
 
         async def mock_fetch(*args, **kwargs):
-            return
-            yield  # pragma: no cover — makes this an async generator
+            if False:  # pragma: no cover
+                yield
 
         with patch("aya.cli.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
@@ -1850,8 +1850,8 @@ class TestDeprecationWarnings:
         """--instance on inbox emits a deprecation warning to stderr."""
 
         async def mock_fetch(*args, **kwargs):
-            return
-            yield  # pragma: no cover — makes this an async generator
+            if False:  # pragma: no cover
+                yield
 
         with patch("aya.cli.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch

@@ -147,7 +147,7 @@ def _assert_valid_ulid(id_: str) -> None:
 
 
 def _normalize_ingested_ids(raw: object) -> list[dict[str, str]]:
-    """Coerce legacy string entries to the ``{id, ingested_at}`` dict format.
+    """Coerce legacy string entries to the ``{id, ingested_at, from_did?}`` dict format.
 
     Older profiles stored bare packet-ID strings in ``ingested_ids``.  On
     first load after the migration, those strings are converted to dicts with
@@ -199,7 +199,8 @@ class Profile:
     trusted_keys: dict[str, TrustedKey] = field(default_factory=dict)
     default_relays: list[str] = field(default_factory=lambda: list(_DEFAULT_RELAYS))
     last_checked: dict[str, str] = field(default_factory=dict)  # relay → ISO timestamp
-    ingested_ids: list[dict[str, str]] = field(default_factory=list)  # {id, ingested_at} — dedup
+    # {id, ingested_at, from_did?} — dedup
+    ingested_ids: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def default_relay(self) -> str:

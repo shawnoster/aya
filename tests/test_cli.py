@@ -1763,6 +1763,113 @@ class TestDeprecationWarnings:
         assert "deprecated" in stderr
         assert "--as" in stderr
 
+    def test_send_instance_warns(self, profile_with_trusted: Path, tmp_path: Path) -> None:
+        """--instance on send emits a deprecation warning to stderr."""
+        # Create a packet file to send
+        p = Profile.load(profile_with_trusted)
+        local = p.instances["default"]
+        home_key = p.trusted_keys["home"]
+        pkt = Packet(
+            **{"from": local.did, "to": home_key.did},
+            intent="deprecation test",
+            content="test",
+        )
+        packet_file = tmp_path / "packet.json"
+        packet_file.write_text(pkt.to_json())
+
+        mock_publish = AsyncMock(return_value="a" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    str(packet_file),
+                    "--instance",
+                    "default",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" in stderr
+        assert "--as" in stderr
+
+    def test_dispatch_instance_warns(self, profile_with_trusted: Path) -> None:
+        """--instance on dispatch emits a deprecation warning to stderr."""
+        mock_publish = AsyncMock(return_value="b" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "deprecation test",
+                    "--instance",
+                    "default",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+                input="test content\n",
+            )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" in stderr
+        assert "--as" in stderr
+
+    def test_receive_instance_warns(self, profile_with_instance: Path) -> None:
+        """--instance on receive emits a deprecation warning to stderr."""
+
+        async def mock_fetch(*args, **kwargs):
+            if False:  # pragma: no cover
+                yield
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = mock_fetch
+            result = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--quiet",
+                    "--instance",
+                    "default",
+                    "--profile",
+                    str(profile_with_instance),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" in stderr
+        assert "--as" in stderr
+
+    def test_inbox_instance_warns(self, profile_with_instance: Path) -> None:
+        """--instance on inbox emits a deprecation warning to stderr."""
+
+        async def mock_fetch(*args, **kwargs):
+            if False:  # pragma: no cover
+                yield
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = mock_fetch
+            result = runner.invoke(
+                app,
+                [
+                    "inbox",
+                    "--instance",
+                    "default",
+                    "--profile",
+                    str(profile_with_instance),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        stderr = result.stderr or ""
+        assert "deprecated" in stderr
+        assert "--as" in stderr
+
 
 # ── ack ───────────────────────────────────────────────────────────────────────
 
@@ -1790,7 +1897,7 @@ class TestAck:
             intent="seed from home",
         )
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso})
+        profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": home.did})
 
         profile_path = tmp_path / "profile.json"
         profile.save(profile_path)
@@ -1907,3 +2014,71 @@ class TestAck:
                 ["ack", packet_id, "--profile", str(profile_path)],
             )
         assert result.exit_code != 0
+
+    def test_ack_routes_to_correct_sender_with_multiple_peers(self, tmp_path: Path) -> None:
+        """With two trusted peers, ack routes to the peer that sent the packet (via from_did)."""
+        from datetime import UTC, datetime
+
+        local = Identity.generate("default")
+        peer_a = Identity.generate("peer_a")
+        peer_b = Identity.generate("peer_b")
+
+        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile.instances["default"] = local
+        profile.trusted_keys["peer_a"] = TrustedKey(
+            did=peer_a.did, label="peer_a", nostr_pubkey=peer_a.nostr_public_hex
+        )
+        profile.trusted_keys["peer_b"] = TrustedKey(
+            did=peer_b.did, label="peer_b", nostr_pubkey=peer_b.nostr_public_hex
+        )
+
+        # Ingest a packet from peer_a
+        pkt = Packet(**{"from": peer_a.did, "to": local.did}, intent="seed from A")
+        now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": peer_a.did})
+
+        profile_path = tmp_path / "profile.json"
+        profile.save(profile_path)
+
+        mock_publish = AsyncMock(return_value="a" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                ["ack", pkt.id, "thanks", "--profile", str(profile_path)],
+            )
+        assert result.exit_code == 0, result.output
+        ack_pkt: Packet = mock_publish.call_args[0][0]
+        assert ack_pkt.to_did == peer_a.did, "ACK must route to the original sender (peer_a)"
+
+    def test_ack_falls_back_without_from_did(self, tmp_path: Path) -> None:
+        """Old-style ingested entry (no from_did) falls back to sole trusted peer logic."""
+        from datetime import UTC, datetime
+
+        local = Identity.generate("default")
+        peer = Identity.generate("peer")
+
+        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile.instances["default"] = local
+        profile.trusted_keys["peer"] = TrustedKey(
+            did=peer.did, label="peer", nostr_pubkey=peer.nostr_public_hex
+        )
+
+        # Old-style entry without from_did
+        pkt = Packet(**{"from": peer.did, "to": local.did}, intent="old seed")
+        now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso})
+
+        profile_path = tmp_path / "profile.json"
+        profile.save(profile_path)
+
+        mock_publish = AsyncMock(return_value="b" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                ["ack", pkt.id, "got it", "--profile", str(profile_path)],
+            )
+        assert result.exit_code == 0, result.output
+        ack_pkt: Packet = mock_publish.call_args[0][0]
+        assert ack_pkt.to_did == peer.did

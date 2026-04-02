@@ -153,6 +153,79 @@ async def test_send_tool():
 
 
 # ---------------------------------------------------------------------------
+# aya_inbox
+# ---------------------------------------------------------------------------
+
+
+async def test_inbox_tool(tmp_path):
+    """aya_inbox returns a list of packets (empty when relay yields nothing)."""
+    from aya.identity import Identity, Profile, TrustedKey
+
+    local = Identity.generate("default")
+    home = Identity.generate("home")
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.instances["default"] = local
+    profile.trusted_keys["home"] = TrustedKey(
+        did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
+    )
+    profile_path = tmp_path / "profile.json"
+    profile.save(profile_path)
+
+    async def mock_fetch(*args, **kwargs):
+        if False:  # pragma: no cover
+            yield
+
+    with (
+        patch("aya.paths.PROFILE_PATH", profile_path),
+        patch("aya.relay.RelayClient") as mock_cls,
+    ):
+        mock_cls.return_value.fetch_pending = mock_fetch
+        result = await call_tool("aya_inbox", {"instance": "default"})
+
+    payload = json.loads(result[0].text)
+    assert isinstance(payload, list)
+
+
+# ---------------------------------------------------------------------------
+# aya_ack
+# ---------------------------------------------------------------------------
+
+
+async def test_ack_tool(tmp_path):
+    """aya_ack sends an ACK packet and returns confirmation."""
+    from datetime import UTC, datetime
+
+    from aya.identity import Identity, Profile, TrustedKey
+    from aya.packet import Packet
+
+    local = Identity.generate("default")
+    home = Identity.generate("home")
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.instances["default"] = local
+    profile.trusted_keys["home"] = TrustedKey(
+        did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
+    )
+    pkt = Packet(**{"from": home.did, "to": local.did}, intent="test")
+    now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": home.did})
+    profile_path = tmp_path / "profile.json"
+    profile.save(profile_path)
+
+    mock_publish = AsyncMock(return_value="ack" * 21 + "aa")
+    with (
+        patch("aya.paths.PROFILE_PATH", profile_path),
+        patch("aya.relay.RelayClient") as mock_cls,
+    ):
+        mock_cls.return_value.publish = mock_publish
+        result = await call_tool("aya_ack", {"packet_id": pkt.id})
+
+    payload = json.loads(result[0].text)
+    assert payload["in_reply_to"] == pkt.id
+    assert "packet_id" in payload
+    mock_publish.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # unknown tool
 # ---------------------------------------------------------------------------
 

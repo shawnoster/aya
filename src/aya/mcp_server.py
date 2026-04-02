@@ -143,6 +143,11 @@ _TOOLS: list[types.Tool] = [
                     "description": "Short reply message (default: 'acknowledged').",
                     "default": "acknowledged",
                 },
+                "instance": {
+                    "type": "string",
+                    "description": "Local identity to act as (default: 'default').",
+                    "default": "default",
+                },
             },
             "required": ["packet_id"],
             "additionalProperties": False,
@@ -190,6 +195,8 @@ def _resolve_instance(profile: Any, instance: str) -> Any:
 
 def _resolve_did(to: str, profile: Any) -> tuple[str, str]:
     if to.startswith("did:"):
+        if not profile.is_trusted(to):
+            raise ValueError(f"DID '{to}' is not in trusted_keys. Use a label or pair first.")
         return to, to
     key = profile.trusted_keys.get(to)
     if key:
@@ -402,8 +409,7 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
         to_did = tk.did
         recipient_nostr_pub = tk.nostr_pubkey
 
-    # Pick the first available instance as the sender
-    local = next(iter(profile.instances.values()))
+    local = _resolve_instance(profile, arguments.get("instance", "default"))
 
     ack_packet = Packet(
         **{"from": local.did, "to": to_did},

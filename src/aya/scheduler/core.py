@@ -66,7 +66,7 @@ def _dt_now(tz: object) -> datetime:
     dt_cls = getattr(pkg, "datetime", None) if pkg else None
     if dt_cls is None or dt_cls is datetime:
         return datetime.now(tz)  # type: ignore[arg-type]
-    return dt_cls.now(tz)  # type: ignore[union-attr]
+    return dt_cls.now(tz)  # type: ignore[no-any-return]
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────

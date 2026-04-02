@@ -148,15 +148,49 @@ console = Console()
 err = Console(stderr=True)
 
 
+# ── Structured error codes ──────────────────────────────────────────────────
+
+
+class ErrorCode:
+    PROFILE_NOT_FOUND = "PROFILE_NOT_FOUND"
+    INSTANCE_NOT_FOUND = "INSTANCE_NOT_FOUND"
+    RELAY_UNREACHABLE = "RELAY_UNREACHABLE"
+    SIGNATURE_INVALID = "SIGNATURE_INVALID"
+    PACKET_NOT_FOUND = "PACKET_NOT_FOUND"
+    PEER_NOT_TRUSTED = "PEER_NOT_TRUSTED"
+    PAIR_FAILED = "PAIR_FAILED"
+    INVALID_ARGUMENT = "INVALID_ARGUMENT"
+    AMBIGUOUS_PREFIX = "AMBIGUOUS_PREFIX"
+    DISPATCH_FAILED = "DISPATCH_FAILED"
+
+
+def _emit_error(
+    code: str,
+    message: str,
+    context: dict[str, object] | None = None,
+    exit_code: int = 1,
+) -> None:
+    """Emit an error — structured JSON on stderr in non-TTY mode, Rich-formatted otherwise."""
+    if not sys.stderr.isatty():
+        payload: dict[str, object] = {"error": {"code": code, "message": message}}
+        if context:
+            payload["error"]["context"] = context  # type: ignore[index]
+        err.out(json.dumps(payload))
+    else:
+        err.print(f"[red]{message}[/red]")
+    raise typer.Exit(exit_code)
+
+
 DEFAULT_PROFILE = PROFILE_PATH
 
 
 def _load_profile(profile_path: Path) -> Profile:
     if not profile_path.exists():
-        err.print(
-            f"[red]Profile not found at {profile_path}.[/red]\nRun [bold]aya init[/bold] first."
+        _emit_error(
+            ErrorCode.PROFILE_NOT_FOUND,
+            f"Profile not found at {profile_path}. Run 'aya init' first.",
+            {"path": str(profile_path)},
         )
-        raise typer.Exit(1)
     return Profile.load(profile_path)
 
 
@@ -186,15 +220,16 @@ def _resolve_instance(p: Profile, instance: str, *, quiet: bool = False) -> Iden
     if not quiet:
         if available:
             names = ", ".join(available)
-            err.print(
-                f"[red]Instance '{instance}' not found.[/red] "
-                f"Available instances: [cyan]{names}[/cyan].\n"
-                f"Use [bold]--as {available[0]}[/bold] "
-                f"or run: [bold]aya init --label {instance}[/bold]"
+            _emit_error(
+                ErrorCode.INSTANCE_NOT_FOUND,
+                f"Instance '{instance}' not found. Available: {names}.",
+                {"instance": instance, "available": available},
             )
         else:
-            err.print(
-                f"[red]Instance '{instance}' not found.[/red] Run [bold]aya init[/bold] first."
+            _emit_error(
+                ErrorCode.INSTANCE_NOT_FOUND,
+                f"Instance '{instance}' not found. Run 'aya init' first.",
+                {"instance": instance},
             )
     raise typer.Exit(1)
 
@@ -270,14 +305,16 @@ def trust(
 ) -> None:
     """Add a DID to your trusted keys list."""
     if label is not None and peer is not None:
-        err.print("[red]Cannot use --peer and --label together. Use --peer only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --peer and --label together. Use --peer only.",
+            exit_code=2,
+        )
     if label is not None:
         err.print("[yellow]Warning: --label is deprecated, use --peer instead[/yellow]")
         peer = label
     if peer is None:
-        err.print("[red]Missing option '--peer'.[/red]")
-        raise typer.Exit(2)
+        _emit_error(ErrorCode.INVALID_ARGUMENT, "Missing option '--peer'.", exit_code=2)
     p = _load_profile(profile)
     p.trusted_keys[peer] = TrustedKey(
         did=did,
@@ -316,8 +353,11 @@ def pack(
 ) -> None:
     """Pack a knowledge packet ready to send."""
     if instance is not None and as_ != "default":
-        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --as and --instance together. Use --as only.",
+            exit_code=2,
+        )
     if instance is not None:
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
@@ -329,8 +369,7 @@ def pack(
 
     if seed:
         if not opener:
-            err.print("[red]--opener required for seed packets.[/red]")
-            raise typer.Exit(1)
+            _emit_error(ErrorCode.INVALID_ARGUMENT, "--opener required for seed packets.")
         packet = Packet.as_seed(
             from_did=local.did,
             to_did=to_did,
@@ -383,8 +422,11 @@ def send(
 ) -> None:
     """Send a packet to a Nostr relay."""
     if instance is not None and as_ != "default":
-        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --as and --instance together. Use --as only.",
+            exit_code=2,
+        )
     if instance is not None:
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
@@ -440,8 +482,11 @@ def dispatch(
 ) -> None:
     """Pack and send in one step — the natural 'pack for home' flow."""
     if instance is not None and as_ != "default":
-        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --as and --instance together. Use --as only.",
+            exit_code=2,
+        )
     if instance is not None:
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
@@ -507,10 +552,11 @@ def dispatch(
             event_id = await client.publish(signed, recipient_nostr_pub, encrypt=not no_encrypt)
         except Exception:
             logger.exception("Relay publish failed during dispatch")
-            err.print(
-                "[yellow]Dispatch failed — event could not be published to relay(s).[/yellow]"
+            _emit_error(
+                ErrorCode.DISPATCH_FAILED,
+                "Dispatch failed — event could not be published to relay(s).",
+                {"relay": relay_urls[0] if relay_urls else None},
             )
-            raise typer.Exit(1) from None
 
         relay_count = len(relay_urls)
         relay_display = (
@@ -560,22 +606,25 @@ def ack(
 
         # Resolve full packet ID from ingested_ids (prefix match, min 8 chars)
         if len(packet_id) < 8:
-            err.print("[red]Packet ID prefix must be at least 8 characters.[/red]")
-            raise typer.Exit(1)
+            _emit_error(
+                ErrorCode.INVALID_ARGUMENT,
+                "Packet ID prefix must be at least 8 characters.",
+                {"packet_id": packet_id},
+            )
         ingested_ids = [entry["id"] for entry in p.ingested_ids]
         matched = [pid for pid in ingested_ids if pid.startswith(packet_id)]
         if not matched:
-            err.print(
-                f"[red]Packet ID '{packet_id}' not found in ingested_ids.[/red]\n"
-                "Only ingested packets can be acknowledged."
+            _emit_error(
+                ErrorCode.PACKET_NOT_FOUND,
+                f"Packet ID '{packet_id}' not found in ingested_ids.",
+                {"packet_id": packet_id},
             )
-            raise typer.Exit(1)
         if len(matched) > 1:
-            err.print(
-                f"[red]Ambiguous prefix '{packet_id}' — matches {len(matched)} packets:[/red]\n"
-                + "\n".join(f"  {pid}" for pid in matched)
+            _emit_error(
+                ErrorCode.AMBIGUOUS_PREFIX,
+                f"Ambiguous prefix '{packet_id}' — matches {len(matched)} packets.",
+                {"packet_id": packet_id, "matches": len(matched)},
             )
-            raise typer.Exit(1)
 
         full_packet_id = matched[0]
 
@@ -702,8 +751,11 @@ def receive(
 ) -> None:
     """Poll for pending packets and surface them for review."""
     if instance is not None and as_ != "default":
-        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --as and --instance together. Use --as only.",
+            exit_code=2,
+        )
     if instance is not None:
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
@@ -834,8 +886,11 @@ def inbox(
 ) -> None:
     """List pending packets without ingesting."""
     if instance is not None and as_ != "default":
-        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --as and --instance together. Use --as only.",
+            exit_code=2,
+        )
     if instance is not None:
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
@@ -889,23 +944,31 @@ def pair(
 ) -> None:
     """Pair two instances with a short-lived code — no manual DID exchange."""
     if label is not None and peer is not None:
-        err.print("[red]Cannot use --peer and --label together. Use --peer only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --peer and --label together. Use --peer only.",
+            exit_code=2,
+        )
     if label is not None:
         err.print("[yellow]Warning: --label is deprecated, use --peer instead[/yellow]")
         peer = label
     if instance is not None and as_ != "default":
-        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --as and --instance together. Use --as only.",
+            exit_code=2,
+        )
     if instance is not None and as_ != "default":
-        err.print("[red]Cannot use --as and --instance together. Use --as only.[/red]")
-        raise typer.Exit(2)
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Cannot use --as and --instance together. Use --as only.",
+            exit_code=2,
+        )
     if instance is not None:
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
     if peer is None:
-        err.print("[red]Missing option '--peer'.[/red]")
-        raise typer.Exit(2)
+        _emit_error(ErrorCode.INVALID_ARGUMENT, "Missing option '--peer'.", exit_code=2)
     p = _load_profile(profile)
     local = _resolve_instance(p, as_)
 

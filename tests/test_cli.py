@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import typer
+from rich.console import Console
 from typer.testing import CliRunner
 
 from aya.cli import app
@@ -2303,3 +2305,92 @@ class TestDryRun:
         output_data = json.loads(result.output)
         assert output_data["action"] == "initiate_pairing"
         assert output_data["peer_label"] == "work"
+
+
+# ── TestStructuredErrors ────────────────────────────────────────────────────
+
+
+class TestStructuredErrors:
+    """Structured JSON errors on stderr when not a TTY."""
+
+    def test_profile_not_found_json_error(self, tmp_path: Path) -> None:
+        """Non-TTY stderr emits JSON with PROFILE_NOT_FOUND code."""
+        bad_path = tmp_path / "nonexistent.json"
+        result = runner.invoke(app, ["inbox", "--profile", str(bad_path)])
+        assert result.exit_code == 1
+        # CliRunner captures stderr; parse JSON from output
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "PROFILE_NOT_FOUND"
+        assert str(bad_path) in payload["error"]["message"]
+        assert payload["error"]["context"]["path"] == str(bad_path)
+
+    def test_profile_not_found_tty_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TTY stderr emits Rich-formatted text, not JSON."""
+        import io
+
+        from aya.cli import ErrorCode, _emit_error
+
+        fake_stderr = io.StringIO()
+        fake_stderr.isatty = lambda: True  # type: ignore[attr-defined]
+        monkeypatch.setattr("aya.cli.sys.stderr", fake_stderr)
+
+        # _emit_error writes to the module-level `err` Console, which
+        # resolves sys.stderr lazily — so we also redirect the Console's
+        # output to our fake stream for capture.
+        monkeypatch.setattr("aya.cli.err", Console(file=fake_stderr))
+
+        with pytest.raises(typer.Exit):
+            _emit_error(
+                ErrorCode.PROFILE_NOT_FOUND,
+                "Profile not found at /tmp/x. Run 'aya init' first.",
+                {"path": "/tmp/x"},
+            )
+        output = fake_stderr.getvalue()
+        # Should NOT be valid JSON — Rich text instead
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(output)
+        assert "Profile not found" in output
+
+    def test_instance_not_found_json_error(self, profile_with_multiple_instances: Path) -> None:
+        """Non-TTY stderr emits JSON with INSTANCE_NOT_FOUND code."""
+        result = runner.invoke(
+            app,
+            ["inbox", "--as", "nosuch", "--profile", str(profile_with_multiple_instances)],
+        )
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "INSTANCE_NOT_FOUND"
+        assert payload["error"]["context"]["instance"] == "nosuch"
+
+    def test_packet_not_found_json_error(self, profile_with_instance: Path) -> None:
+        """Non-TTY stderr emits JSON with PACKET_NOT_FOUND code for unknown ack ID."""
+        fake_id = "01AAAAAA00000000000000ZZZZ"
+        result = runner.invoke(
+            app,
+            ["ack", fake_id, "--profile", str(profile_with_instance)],
+        )
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "PACKET_NOT_FOUND"
+        assert payload["error"]["context"]["packet_id"] == fake_id
+
+    def test_invalid_argument_json_error(self, profile_with_instance: Path) -> None:
+        """Non-TTY stderr emits JSON with INVALID_ARGUMENT for --as/--instance conflict."""
+        result = runner.invoke(
+            app,
+            [
+                "inbox",
+                "--as",
+                "foo",
+                "--instance",
+                "bar",
+                "--profile",
+                str(profile_with_instance),
+            ],
+        )
+        assert result.exit_code == 2
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "INVALID_ARGUMENT"
+        assert "--as and --instance" in payload["error"]["message"]

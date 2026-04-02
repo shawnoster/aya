@@ -164,6 +164,7 @@ class ErrorCode:
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     AMBIGUOUS_PREFIX = "AMBIGUOUS_PREFIX"
     DISPATCH_FAILED = "DISPATCH_FAILED"
+    PAIR_TIMEOUT = "PAIR_TIMEOUT"
 
 
 def _want_json_errors() -> bool:
@@ -923,7 +924,7 @@ def receive(
             now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
             if auto_ingest and trusted:
                 _assert_valid_ulid(packet.id)
-                _ingest(packet)
+                _ingest(packet, quiet=format_ == OutputFormat.JSON)
                 p.ingested_ids.append(
                     {
                         "id": packet.id,
@@ -947,7 +948,7 @@ def receive(
             )
             if ingest:
                 _assert_valid_ulid(packet.id)
-                _ingest(packet)
+                _ingest(packet, quiet=format_ == OutputFormat.JSON)
                 p.ingested_ids.append(
                     {
                         "id": packet.id,
@@ -1139,6 +1140,16 @@ def pair(
         request_event_id = asyncio.run(publish_pair_request(local, local.label, code_h, relay_urls))
 
         # Show the code — user reads this aloud or types it on the other machine
+        if format_ == OutputFormat.JSON:
+            _output_json(
+                {
+                    "status": "awaiting_peer",
+                    "pairing_code": pairing_code,
+                    "local_did": local.did,
+                    "peer_label": peer,
+                    "relay": relay_urls[0] if relay_urls else None,
+                }
+            )
         if format_ != OutputFormat.JSON:
             console.print(
                 Panel.fit(
@@ -1163,7 +1174,7 @@ def pair(
 
         if trusted is None:
             if format_ == OutputFormat.JSON:
-                _emit_error("PAIR_TIMEOUT", "Pairing timed out")
+                _emit_error(ErrorCode.PAIR_TIMEOUT, "Pairing timed out")
             console.print(
                 "[bold yellow]Pairing timed out.[/bold yellow] "
                 "Run [bold]aya pair[/bold] again for a new code."
@@ -1839,30 +1850,33 @@ def _resolve_nostr_pubkey(did: str, profile: Profile) -> str | None:
     return None
 
 
-def _ingest(packet: Packet) -> None:
+def _ingest(packet: Packet, *, quiet: bool = False) -> None:
     """
     Ingest a packet into the active assistant context.
     In Phase 1 this prints to stdout for the assistant to pick up.
     Phase 3+ will pipe directly into the Claude session context.
+    When quiet=True, side effects run but console output is suppressed.
     """
-    console.print(f"\n[bold]Ingesting:[/bold] {packet.intent}")
+    if not quiet:
+        console.print(f"\n[bold]Ingesting:[/bold] {packet.intent}")
 
     if packet.content_type == "application/aya-seed":
         seed = packet.content if isinstance(packet.content, dict) else {}
-        console.print(
-            Panel(
-                f"[bold]Opening question:[/bold]\n{seed.get('opener', '')}\n\n"
-                f"[bold]Context:[/bold]\n{seed.get('context_summary', '')}\n\n"
-                + (
-                    "[bold]Open questions:[/bold]\n"
-                    + "\n".join(f"  • {q}" for q in seed.get("open_questions", []))
-                    if seed.get("open_questions")
-                    else ""
-                ),
-                title="Conversation Seed",
-                border_style="cyan",
+        if not quiet:
+            console.print(
+                Panel(
+                    f"[bold]Opening question:[/bold]\n{seed.get('opener', '')}\n\n"
+                    f"[bold]Context:[/bold]\n{seed.get('context_summary', '')}\n\n"
+                    + (
+                        "[bold]Open questions:[/bold]\n"
+                        + "\n".join(f"  • {q}" for q in seed.get("open_questions", []))
+                        if seed.get("open_questions")
+                        else ""
+                    ),
+                    title="Conversation Seed",
+                    border_style="cyan",
+                )
             )
-        )
         # Persist seed as an unseen alert so it surfaces via `aya schedule pending`
         # on the next session start, even if ingested via the async SessionStart hook
         # (where stdout is not captured by Claude).
@@ -1876,13 +1890,14 @@ def _ingest(packet: Packet) -> None:
             packet_id=packet.id,
         )
     else:
-        console.print(
-            Panel(
-                str(packet.content),
-                title=packet.intent,
-                subtitle=f"[dim]{packet.id[:8]} · {packet.sent_at[:10]}[/dim]",
+        if not quiet:
+            console.print(
+                Panel(
+                    str(packet.content),
+                    title=packet.intent,
+                    subtitle=f"[dim]{packet.id[:8]} · {packet.sent_at[:10]}[/dim]",
+                )
             )
-        )
 
 
 # ── Config commands ───────────────────────────────────────────────────────────

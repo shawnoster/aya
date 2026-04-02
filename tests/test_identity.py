@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from ulid import ULID
 
-from aya.identity import Identity, Profile, TrustedKey, _assert_valid_ulid
+from aya.identity import Identity, Profile, TrustedKey, _assert_valid_ulid, _normalize_ingested_ids
 
 
 class TestIdentityGeneration:
@@ -321,3 +321,28 @@ class TestTruncatedUlidMigration:
 
         p = Profile.load(profile_path)
         assert p.ingested_ids == [], "Invalid bare-string ULID must be dropped on load"
+
+
+# ── _normalize_ingested_ids: from_did preservation ──────────────────────────
+
+
+class TestNormalizeIngestedIdsFromDid:
+    """Verify _normalize_ingested_ids preserves/omits from_did correctly."""
+
+    def test_preserves_from_did_when_present(self) -> None:
+        """Entries with from_did must retain that field after normalization."""
+        valid_id = str(ULID())
+        raw = [
+            {"id": valid_id, "ingested_at": "2026-03-30T06:00:00Z", "from_did": "did:key:z6MkFoo"},
+        ]
+        result = _normalize_ingested_ids(raw)
+        assert len(result) == 1
+        assert result[0]["from_did"] == "did:key:z6MkFoo"
+
+    def test_old_entries_without_from_did_preserved(self) -> None:
+        """Entries without from_did must pass through without adding the field."""
+        valid_id = str(ULID())
+        raw = [{"id": valid_id, "ingested_at": "2026-03-30T06:00:00Z"}]
+        result = _normalize_ingested_ids(raw)
+        assert len(result) == 1
+        assert "from_did" not in result[0]

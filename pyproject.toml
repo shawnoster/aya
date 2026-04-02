@@ -13,6 +13,7 @@ dependencies = [
     "rich>=14",
     "base58>=2",
     "coincurve>=20.0.0,<21",  # 21.0.0 has no cp314 wheel; source build fails on cffi 2.0.0 (see #101)
+    "mcp>=1.0",
 ]
 
 [project.scripts]
@@ -124,6 +125,13 @@ known-first-party = ["aya"]
 ]
 "src/aya/scheduler/time_utils.py" = [
     "PLC0415",  # deferred import of storage to break circular dependency
+]
+"src/aya/mcp_server.py" = [
+    "PLC0415",  # deferred imports keep server startup lean
+    "ARG005",   # lambda adapter for status handler ignores args intentionally
+]
+"src/aya/cli.py" = [
+    "PLC0415",  # deferred import of mcp_server avoids pulling heavy deps at CLI startup
 ]
 "src/aya/status.py" = [
     "RUF001",   # EN dashes intentional in time-range parsing strings

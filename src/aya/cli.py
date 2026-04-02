@@ -564,41 +564,51 @@ def ack(
 
         full_packet_id = matched[0]
 
-        # Determine the sender's DID — look through trusted keys for a packet
-        # that arrived from a known peer.  Since we don't store per-packet
-        # sender metadata in ingested_ids, we must find the original sender
-        # via the relay or trusted keys.  As a best-effort, look up a single
-        # trusted key (the common case for cross-instance ACK) or require the
-        # user to specify.
-        #
-        # Strategy: if there is exactly one trusted peer with a Nostr pubkey,
-        # use them.  If there are multiple, the user must disambiguate with
-        # a DID or peer label via --to (future enhancement).  For now emit a
-        # helpful error when ambiguous.
-        trusted_with_nostr = [
-            (label, tk) for label, tk in p.trusted_keys.items() if tk.nostr_pubkey
-        ]
+        # Look up the sender's DID from the ingested_ids entry (stored since #132).
+        entry = next((e for e in p.ingested_ids if e["id"] == full_packet_id), None)
+        sender_did = entry.get("from_did") if entry else None
 
-        if not trusted_with_nostr:
-            err.print(
-                "[red]No trusted peers with a Nostr pubkey found.[/red]\n"
-                "Pair with the sender first: [bold]aya pair[/bold]"
-            )
-            raise typer.Exit(1)
+        to_label: str | None = None
+        to_key: TrustedKey | None = None
+        to_did: str | None = None
+        recipient_nostr_pub: str | None = None
 
-        if len(trusted_with_nostr) > 1:
-            # Can't auto-resolve; surface a helpful message.
-            names = ", ".join(lbl for lbl, _ in trusted_with_nostr)
-            err.print(
-                "[red]Multiple trusted peers — cannot determine ACK recipient.[/red]\n"
-                f"Available: [cyan]{names}[/cyan]\n"
-                "[dim]Support for --to <peer> will be added in a future release.[/dim]"
-            )
-            raise typer.Exit(1)
+        if sender_did:
+            for label, tk in p.trusted_keys.items():
+                if tk.did == sender_did and tk.nostr_pubkey:
+                    to_label, to_key = label, tk
+                    to_did = tk.did
+                    recipient_nostr_pub = tk.nostr_pubkey
+                    break
+            else:
+                # sender_did found but not in trusted_keys or no nostr_pubkey
+                sender_did = None  # fall through to existing logic
 
-        to_label, to_key = trusted_with_nostr[0]
-        to_did = to_key.did
-        recipient_nostr_pub = to_key.nostr_pubkey  # guaranteed non-None above
+        if not sender_did:
+            # Fallback: pick the sole trusted peer with a Nostr pubkey (pre-#132 entries).
+            trusted_with_nostr = [
+                (label, tk) for label, tk in p.trusted_keys.items() if tk.nostr_pubkey
+            ]
+
+            if not trusted_with_nostr:
+                err.print(
+                    "[red]No trusted peers with a Nostr pubkey found.[/red]\n"
+                    "Pair with the sender first: [bold]aya pair[/bold]"
+                )
+                raise typer.Exit(1)
+
+            if len(trusted_with_nostr) > 1:
+                names = ", ".join(lbl for lbl, _ in trusted_with_nostr)
+                err.print(
+                    "[red]Multiple trusted peers — cannot determine ACK recipient.[/red]\n"
+                    f"Available: [cyan]{names}[/cyan]\n"
+                    "[dim]Support for --to <peer> will be added in a future release.[/dim]"
+                )
+                raise typer.Exit(1)
+
+            to_label, to_key = trusted_with_nostr[0]
+            to_did = to_key.did
+            recipient_nostr_pub = to_key.nostr_pubkey  # guaranteed non-None above
 
         reply_text = message if message else "acknowledged"
 
@@ -752,7 +762,13 @@ def receive(
             if auto_ingest and trusted:
                 _assert_valid_ulid(packet.id)
                 _ingest(packet)
-                p.ingested_ids.append({"id": packet.id, "ingested_at": now_iso})
+                p.ingested_ids.append(
+                    {
+                        "id": packet.id,
+                        "ingested_at": now_iso,
+                        "from_did": packet.from_did,
+                    }
+                )
                 continue
 
             ingest = yes or typer.confirm(
@@ -762,7 +778,13 @@ def receive(
             if ingest:
                 _assert_valid_ulid(packet.id)
                 _ingest(packet)
-                p.ingested_ids.append({"id": packet.id, "ingested_at": now_iso})
+                p.ingested_ids.append(
+                    {
+                        "id": packet.id,
+                        "ingested_at": now_iso,
+                        "from_did": packet.from_did,
+                    }
+                )
                 sender_nostr_pub = _resolve_nostr_pubkey(packet.from_did, p)
                 if sender_nostr_pub:
                     await client.send_receipt(packet, sender_nostr_pub)

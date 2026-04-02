@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -377,6 +378,7 @@ def send(
     instance: str = typer.Option(
         None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Send a packet to a Nostr relay."""
@@ -391,6 +393,11 @@ def send(
 
     relay_urls = [relay] if relay else p.default_relays
     packet = Packet.from_json(packet_file.read_text())
+
+    if dry_run:
+        _output_json(json.loads(packet.to_json()))
+        raise typer.Exit(0)
+
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
     # Resolve recipient's Nostr pubkey
@@ -428,6 +435,7 @@ def dispatch(
     no_encrypt: bool = typer.Option(
         False, "--no-encrypt", help="Send plaintext (debug or private-relay mode)"
     ),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Pack and send in one step — the natural 'pack for home' flow."""
@@ -479,6 +487,10 @@ def dispatch(
             packet.encrypted = True
 
         signed = packet.sign(local)
+
+        if dry_run:
+            _output_json(json.loads(signed.to_json()))
+            return
 
         relay_urls = [relay] if relay else p.default_relays
         recipient_nostr_pub = _resolve_nostr_pubkey(signed.to_did, p)
@@ -535,6 +547,9 @@ def ack(
         "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
     ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show ACK packet without publishing"
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Acknowledge a received seed packet — sends a reply back to the sender."""
@@ -624,6 +639,10 @@ def ack(
             in_reply_to=full_packet_id,
         )
         signed = ack_packet.sign(local)
+
+        if dry_run:
+            _output_json(json.loads(signed.to_json()))
+            return
 
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
@@ -863,6 +882,9 @@ def pair(
         None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show pairing intent without publishing"
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """Pair two instances with a short-lived code — no manual DID exchange."""
@@ -888,6 +910,18 @@ def pair(
     local = _resolve_instance(p, as_)
 
     relay_urls = [relay] if relay else p.default_relays
+
+    if dry_run:
+        summary = {
+            "action": "join_pairing" if code else "initiate_pairing",
+            "local_did": local.did,
+            "peer_label": peer,
+            "relay": relay_urls[0] if relay_urls else None,
+        }
+        if code:
+            summary["code"] = code
+        _output_json(summary)
+        raise typer.Exit(0)
 
     if code:
         # ── Joiner mode ──────────────────────────────────────────────
@@ -964,8 +998,20 @@ def schedule_remind(
     message: str = typer.Option(..., "--message", "-m", help="Reminder message"),
     due: str = typer.Option(..., "--due", "-d", help="When: 'tomorrow 9am', 'in 2 hours', ISO8601"),
     tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show reminder without saving"),
 ) -> None:
     """Add a one-shot reminder."""
+    if dry_run:
+        due_dt = parse_due(due)
+        preview = {
+            "type": "reminder",
+            "status": "pending",
+            "message": message,
+            "tags": [t.strip() for t in tag.split(",") if t.strip()] if tag else [],
+            "due_at": due_dt.isoformat(),
+        }
+        _output_json(preview)
+        raise typer.Exit(0)
     item = add_reminder(message, due, tag)
     due_dt = parse_due(due)
     console.print(
@@ -985,8 +1031,37 @@ def schedule_watch(
     ),
     interval: int = typer.Option(30, "--interval", "-i", help="Poll interval minutes"),
     remove_when: str = typer.Option("", help="Auto-remove: merged_or_closed"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show watch without saving"),
 ) -> None:
     """Add a condition-based watch."""
+    # Validate provider/target before dry-run output
+    if provider == "github-pr":
+        if not re.match(r"([^/]+)/([^#]+)#(\d+)", target):
+            err.print("[red]Format: owner/repo#123[/red]")
+            raise typer.Exit(1)
+    elif provider not in ("jira-query", "jira-ticket"):
+        err.print(f"[red]Unknown provider: {provider}[/red]")
+        raise typer.Exit(1)
+
+    if dry_run:
+        preview = {
+            "type": "watch",
+            "status": "active",
+            "message": message,
+            "tags": [t.strip() for t in tag.split(",") if t.strip()] if tag else [],
+            "provider": provider,
+            "target": target,
+            "condition": condition
+            or {
+                "github-pr": "approved_or_merged",
+                "jira-query": "new_results",
+                "jira-ticket": "status_changed",
+            }.get(provider, ""),
+            "poll_interval_minutes": interval,
+            "remove_when": remove_when,
+        }
+        _output_json(preview)
+        raise typer.Exit(0)
     try:
         item = add_watch(provider, target, message, tag, condition, interval, remove_when)
     except ValueError as exc:
@@ -1013,8 +1088,29 @@ def schedule_recurring(
         "--only-during",
         help="Only fire within this time window, e.g. '08:00-18:00'",
     ),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show cron without saving"),
 ) -> None:
     """Add a persistent recurring session job (session_required cron)."""
+    # Validate cron expression before dry-run output
+    parts = cron.strip().split()
+    if len(parts) != 5:
+        err.print(f"[red]Invalid cron expression (expected 5 fields): {cron}[/red]")
+        raise typer.Exit(1)
+
+    if dry_run:
+        preview = {
+            "type": "recurring",
+            "status": "active",
+            "message": message,
+            "tags": [t.strip() for t in tag.split(",") if t.strip()] if tag else [],
+            "session_required": True,
+            "cron": cron,
+            "prompt": prompt,
+            "idle_back_off": idle_back_off,
+            "only_during": only_during,
+        }
+        _output_json(preview)
+        raise typer.Exit(0)
     try:
         item = add_recurring(message, cron, prompt, tag, idle_back_off, only_during)
     except ValueError as exc:

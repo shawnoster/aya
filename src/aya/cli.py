@@ -194,6 +194,45 @@ def _emit_error(
     raise typer.Exit(exit_code)
 
 
+# ── Idempotency helpers ────────────────────────────────────────────────────
+
+
+def _check_idempotency(key: str) -> dict | None:
+    """Check if an idempotency key was already used. Returns cached result or None."""
+    from aya.paths import SENT_CACHE
+
+    if not SENT_CACHE.exists():
+        return None
+    try:
+        cache = json.loads(SENT_CACHE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    entry = cache.get(key)
+    if entry and datetime.fromisoformat(entry["sent_at"]) > datetime.now(UTC) - timedelta(hours=24):
+        return entry
+    return None
+
+
+def _record_idempotency(key: str, packet_id: str, event_id: str) -> None:
+    """Record a sent packet for idempotency dedup."""
+    from aya.paths import SENT_CACHE
+
+    try:
+        cache = json.loads(SENT_CACHE.read_text()) if SENT_CACHE.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        cache = {}
+    cache[key] = {
+        "packet_id": packet_id,
+        "event_id": event_id,
+        "sent_at": datetime.now(UTC).isoformat(),
+    }
+    # Prune entries older than 24 hours
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    cache = {k: v for k, v in cache.items() if datetime.fromisoformat(v["sent_at"]) > cutoff}
+    SENT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    SENT_CACHE.write_text(json.dumps(cache, indent=2))
+
+
 DEFAULT_PROFILE = PROFILE_PATH
 
 
@@ -472,6 +511,12 @@ def send(
         None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
+    idempotency_key: str = typer.Option(
+        None,
+        "--idempotency-key",
+        "-k",
+        help="Dedup key — if already sent within 24h, return cached result",
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
@@ -488,6 +533,25 @@ def send(
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
     format_ = resolve_format(format_)
+
+    if idempotency_key:
+        cached = _check_idempotency(idempotency_key)
+        if cached:
+            if format_ == OutputFormat.JSON:
+                _output_json(
+                    {
+                        "packet_id": cached["packet_id"],
+                        "event_id": cached["event_id"],
+                        "cached": True,
+                    }
+                )
+                raise typer.Exit(0)
+            console.print(
+                f"[dim]Already sent (cached) — packet {cached['packet_id'][:8]},"
+                f" event {cached['event_id'][:8]}[/dim]"
+            )
+            return
+
     p = _load_profile(profile)
     local = _resolve_instance(p, as_)
 
@@ -503,6 +567,10 @@ def send(
     # Resolve recipient's Nostr pubkey
     recipient_nostr_pub = _resolve_nostr_pubkey(packet.to_did, p)
     event_id = asyncio.run(client.publish(packet, recipient_nostr_pub, encrypt=packet.encrypted))
+
+    if idempotency_key:
+        _record_idempotency(idempotency_key, packet.id, event_id)
+
     relay_count = len(relay_urls)
     relay_display = relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
 
@@ -541,6 +609,12 @@ def dispatch(
         False, "--no-encrypt", help="Send plaintext (debug or private-relay mode)"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
+    idempotency_key: str = typer.Option(
+        None,
+        "--idempotency-key",
+        "-k",
+        help="Dedup key — if already sent within 24h, return cached result",
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
@@ -557,6 +631,24 @@ def dispatch(
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
     format_ = resolve_format(format_)
+
+    if idempotency_key:
+        cached = _check_idempotency(idempotency_key)
+        if cached:
+            if format_ == OutputFormat.JSON:
+                _output_json(
+                    {
+                        "packet_id": cached["packet_id"],
+                        "event_id": cached["event_id"],
+                        "cached": True,
+                    }
+                )
+                raise typer.Exit(0)
+            console.print(
+                f"[dim]Already sent (cached) — packet {cached['packet_id'][:8]},"
+                f" event {cached['event_id'][:8]}[/dim]"
+            )
+            return
 
     async def _run() -> None:
         p = _load_profile(profile)
@@ -624,6 +716,9 @@ def dispatch(
                 {"relay": relay_urls[0] if relay_urls else None},
             )
 
+        if idempotency_key:
+            _record_idempotency(idempotency_key, signed.id, event_id)
+
         relay_count = len(relay_urls)
         relay_display = (
             relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
@@ -674,6 +769,12 @@ def ack(
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show ACK packet without publishing"
     ),
+    idempotency_key: str = typer.Option(
+        None,
+        "--idempotency-key",
+        "-k",
+        help="Dedup key — if already sent within 24h, return cached result",
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
@@ -681,6 +782,24 @@ def ack(
 ) -> None:
     """Acknowledge a received seed packet — sends a reply back to the sender."""
     format_ = resolve_format(format_)
+
+    if idempotency_key:
+        cached = _check_idempotency(idempotency_key)
+        if cached:
+            if format_ == OutputFormat.JSON:
+                _output_json(
+                    {
+                        "packet_id": cached["packet_id"],
+                        "event_id": cached["event_id"],
+                        "cached": True,
+                    }
+                )
+                raise typer.Exit(0)
+            console.print(
+                f"[dim]Already sent (cached) — packet {cached['packet_id'][:8]},"
+                f" event {cached['event_id'][:8]}[/dim]"
+            )
+            return
 
     async def _run() -> None:
         p = _load_profile(profile)
@@ -782,6 +901,9 @@ def ack(
         except Exception:
             err.print("[yellow]Could not reach relay — ack failed.[/yellow]")
             raise typer.Exit(1) from None
+
+        if idempotency_key:
+            _record_idempotency(idempotency_key, signed.id, event_id)
 
         # Mark any matching seed alert as seen (best-effort)
         try:

@@ -2636,3 +2636,278 @@ class TestPacketPersistence:
         monkeypatch.setenv("AYA_FORMAT", "json")
         result = runner.invoke(app, ["show", "00000000unknown"])
         assert result.exit_code != 0
+
+
+# ── Idempotency ─────────────────────────────────────────────────────────────
+
+
+class TestIdempotency:
+    """Tests for --idempotency-key dedup on send, dispatch, and ack."""
+
+    def test_send_idempotency_key_dedup(
+        self, profile_with_trusted: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Second send with same key returns cached result without calling publish."""
+        monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
+        monkeypatch.setenv("AYA_FORMAT", "json")
+
+        # Reload paths with patched env
+        import importlib
+
+        import aya.paths
+
+        importlib.reload(aya.paths)
+
+        p = Profile.load(profile_with_trusted)
+        local = p.instances["default"]
+        home_key = p.trusted_keys["home"]
+
+        pkt = Packet(
+            **{"from": local.did, "to": home_key.did},
+            intent="idempotent test",
+            content="hello",
+        )
+        packet_file = tmp_path / "packet.json"
+        packet_file.write_text(pkt.to_json())
+
+        mock_publish = AsyncMock(return_value="e" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            # First send
+            result1 = runner.invoke(
+                app,
+                [
+                    "send",
+                    str(packet_file),
+                    "--idempotency-key",
+                    "key-1",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result1.exit_code == 0, result1.output
+        data1 = json.loads(result1.output)
+        assert "cached" not in data1
+        mock_publish.assert_awaited_once()
+
+        # Second send with same key — should be cached
+        mock_publish2 = AsyncMock(return_value="f" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls2:
+            mock_cls2.return_value.publish = mock_publish2
+            result2 = runner.invoke(
+                app,
+                [
+                    "send",
+                    str(packet_file),
+                    "--idempotency-key",
+                    "key-1",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result2.exit_code == 0, result2.output
+        data2 = json.loads(result2.output)
+        assert data2["cached"] is True
+        assert data2["event_id"] == "e" * 64
+        mock_publish2.assert_not_awaited()
+
+    def test_send_different_key_sends(
+        self, profile_with_trusted: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Different idempotency keys both trigger publish."""
+        monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
+        monkeypatch.setenv("AYA_FORMAT", "json")
+
+        import importlib
+
+        import aya.paths
+
+        importlib.reload(aya.paths)
+
+        p = Profile.load(profile_with_trusted)
+        local = p.instances["default"]
+        home_key = p.trusted_keys["home"]
+
+        pkt = Packet(
+            **{"from": local.did, "to": home_key.did},
+            intent="test",
+            content="hello",
+        )
+        packet_file = tmp_path / "packet.json"
+        packet_file.write_text(pkt.to_json())
+
+        for key_name in ("key-a", "key-b"):
+            mock_publish = AsyncMock(return_value="a" * 64)
+            with patch("aya.cli.RelayClient") as mock_cls:
+                mock_cls.return_value.publish = mock_publish
+                result = runner.invoke(
+                    app,
+                    [
+                        "send",
+                        str(packet_file),
+                        "--idempotency-key",
+                        key_name,
+                        "--profile",
+                        str(profile_with_trusted),
+                    ],
+                )
+            assert result.exit_code == 0, result.output
+            mock_publish.assert_awaited_once()
+
+    def test_dispatch_idempotency_key(
+        self, profile_with_trusted: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Dispatch with --idempotency-key dedup works the same as send."""
+        monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
+        monkeypatch.setenv("AYA_FORMAT", "json")
+
+        import importlib
+
+        import aya.paths
+
+        importlib.reload(aya.paths)
+
+        mock_publish = AsyncMock(return_value="d" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result1 = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "test dispatch",
+                    "--idempotency-key",
+                    "dispatch-key-1",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+                input="dispatch content\n",
+            )
+        assert result1.exit_code == 0, result1.output
+        data1 = json.loads(result1.output)
+        assert "cached" not in data1
+        mock_publish.assert_awaited_once()
+
+        # Second dispatch with same key — cached
+        mock_publish2 = AsyncMock(return_value="e" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls2:
+            mock_cls2.return_value.publish = mock_publish2
+            result2 = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "test dispatch",
+                    "--idempotency-key",
+                    "dispatch-key-1",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+                input="dispatch content\n",
+            )
+        assert result2.exit_code == 0, result2.output
+        data2 = json.loads(result2.output)
+        assert data2["cached"] is True
+        mock_publish2.assert_not_awaited()
+
+    def test_idempotency_cache_expires(
+        self, profile_with_trusted: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cache entries older than 24h are treated as expired — publish fires again."""
+        aya_home = tmp_path / "aya_home"
+        monkeypatch.setenv("AYA_HOME", str(aya_home))
+        monkeypatch.setenv("AYA_FORMAT", "json")
+
+        import importlib
+
+        import aya.paths
+
+        importlib.reload(aya.paths)
+
+        # Write an expired cache entry manually
+        aya_home.mkdir(parents=True, exist_ok=True)
+        expired_time = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+        cache = {
+            "expired-key": {
+                "packet_id": "old_packet_id",
+                "event_id": "old_event_id",
+                "sent_at": expired_time,
+            }
+        }
+        (aya_home / "sent_cache.json").write_text(json.dumps(cache))
+
+        p = Profile.load(profile_with_trusted)
+        local = p.instances["default"]
+        home_key = p.trusted_keys["home"]
+
+        pkt = Packet(
+            **{"from": local.did, "to": home_key.did},
+            intent="after expiry",
+            content="hello",
+        )
+        packet_file = tmp_path / "packet.json"
+        packet_file.write_text(pkt.to_json())
+
+        mock_publish = AsyncMock(return_value="n" * 64)
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = mock_publish
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    str(packet_file),
+                    "--idempotency-key",
+                    "expired-key",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert "cached" not in data  # should not be cached — expired
+        mock_publish.assert_awaited_once()
+
+    def test_send_without_key_always_sends(
+        self, profile_with_trusted: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without --idempotency-key, every send calls publish."""
+        monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
+        monkeypatch.setenv("AYA_FORMAT", "json")
+
+        import importlib
+
+        import aya.paths
+
+        importlib.reload(aya.paths)
+
+        p = Profile.load(profile_with_trusted)
+        local = p.instances["default"]
+        home_key = p.trusted_keys["home"]
+
+        pkt = Packet(
+            **{"from": local.did, "to": home_key.did},
+            intent="no key test",
+            content="hello",
+        )
+        packet_file = tmp_path / "packet.json"
+        packet_file.write_text(pkt.to_json())
+
+        for _ in range(2):
+            mock_publish = AsyncMock(return_value="a" * 64)
+            with patch("aya.cli.RelayClient") as mock_cls:
+                mock_cls.return_value.publish = mock_publish
+                result = runner.invoke(
+                    app,
+                    [
+                        "send",
+                        str(packet_file),
+                        "--profile",
+                        str(profile_with_trusted),
+                    ],
+                )
+            assert result.exit_code == 0, result.output
+            mock_publish.assert_awaited_once()

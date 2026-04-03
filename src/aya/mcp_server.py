@@ -66,6 +66,10 @@ _TOOLS: list[types.Tool] = [
                     "description": "Local identity to act as (default: 'default').",
                     "default": "default",
                 },
+                "idempotency_key": {
+                    "type": "string",
+                    "description": "Dedup key — if already sent within 24h, return cached result.",
+                },
             },
             "required": ["to", "intent", "content"],
             "additionalProperties": False,
@@ -147,6 +151,10 @@ _TOOLS: list[types.Tool] = [
                     "type": "string",
                     "description": "Local identity to act as (default: 'default').",
                     "default": "default",
+                },
+                "idempotency_key": {
+                    "type": "string",
+                    "description": "Dedup key — if already sent within 24h, return cached result.",
                 },
             },
             "required": ["packet_id"],
@@ -269,6 +277,20 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
+    from aya.cli import _check_idempotency, _record_idempotency
+
+    idempotency_key = arguments.get("idempotency_key")
+    if idempotency_key:
+        cached = _check_idempotency(idempotency_key)
+        if cached:
+            return _text(
+                {
+                    "packet_id": cached["packet_id"],
+                    "event_id": cached["event_id"],
+                    "cached": True,
+                }
+            )
+
     instance = arguments.get("instance", "default")
     to = arguments["to"]
     intent = arguments["intent"]
@@ -297,6 +319,9 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
     relay_urls = profile.default_relays
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
     event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
+
+    if idempotency_key:
+        _record_idempotency(idempotency_key, signed.id, event_id)
 
     return _text({"packet_id": signed.id, "event_id": event_id})
 
@@ -377,6 +402,20 @@ async def _handle_schedule_watch(arguments: dict[str, Any]) -> list[types.TextCo
 
 
 async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
+    from aya.cli import _check_idempotency, _record_idempotency
+
+    idempotency_key = arguments.get("idempotency_key")
+    if idempotency_key:
+        cached = _check_idempotency(idempotency_key)
+        if cached:
+            return _text(
+                {
+                    "packet_id": cached["packet_id"],
+                    "event_id": cached["event_id"],
+                    "cached": True,
+                }
+            )
+
     packet_id = arguments["packet_id"]
     message = arguments.get("message", "acknowledged")
 
@@ -442,6 +481,9 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
     relay_urls = profile.default_relays
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
     event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
+
+    if idempotency_key:
+        _record_idempotency(idempotency_key, signed.id, event_id)
 
     return _text({"packet_id": signed.id, "event_id": event_id, "in_reply_to": full_packet_id})
 

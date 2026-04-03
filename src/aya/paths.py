@@ -28,5 +28,8 @@ ACTIVITY_FILE = AYA_HOME / "activity.json"
 LOCK_FILE = AYA_HOME / ".scheduler.lock"
 CLAIMS_DIR = AYA_HOME / "claims"
 
+# ── idempotency cache ─────────────────────────────────────────────────────
+SENT_CACHE = AYA_HOME / "sent_cache.json"
+
 # ── ingested packets ───────────────────────────────────────────────────────
 PACKETS_DIR = AYA_HOME / "packets"

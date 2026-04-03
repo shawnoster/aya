@@ -372,10 +372,11 @@ def write_session_lock(instance_id: str | None = None) -> None:
     # Atomic write — safe for concurrent readers
     fd, tmp = tempfile.mkstemp(dir=str(lock_path.parent), suffix=".tmp")
     try:
-        os.write(fd, content.encode())
-        os.fsync(fd)
-        os.close(fd)
-        fd = -1
+        with os.fdopen(fd, "wb") as f:
+            fd = -1
+            f.write(content.encode())
+            f.flush()
+            os.fsync(f.fileno())
         Path(tmp).replace(lock_path)
     except BaseException:
         if fd >= 0:
@@ -387,7 +388,10 @@ def write_session_lock(instance_id: str | None = None) -> None:
 
 
 def clear_session_lock(instance_id: str | None = None) -> bool:
-    """Remove session lock if it belongs to this instance.
+    """Remove session lock, optionally scoped to a specific instance.
+
+    When ``instance_id`` is provided, only clears the lock if it belongs
+    to that instance. When omitted, clears the lock unconditionally.
 
     The primary cleanup mechanism is stale detection: ``is_session_active()``
     checks whether ``activity.json`` has been updated within the last 15

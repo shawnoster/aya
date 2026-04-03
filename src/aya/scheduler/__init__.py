@@ -32,6 +32,10 @@ from .types import (
     PROVIDER_JIRA_QUERY,
     PROVIDER_JIRA_TICKET,
     SCHEDULER_SCHEMA_VERSION,
+    SEVERITY_ACTIONABLE,
+    SEVERITY_HEARTBEAT,
+    SEVERITY_INFO,
+    SEVERITY_ORDER,
     STATUS_ACTIVE,
     STATUS_DELIVERED,
     STATUS_DISMISSED,
@@ -44,6 +48,7 @@ from .types import (
     TYPE_WATCH,
     AlertDetails,
     AlertItem,
+    AlertSeverity,
     ClaimData,
     GithubPrConfig,
     GithubPrState,
@@ -93,14 +98,18 @@ from .storage import (
     _new_id,
     _parse_tags,
     _scheduler_file,
+    _session_lock_file,
     claim_alert,
+    clear_session_lock,
     get_instance_id,
     get_unseen_alerts,
+    is_session_active,
     load_alerts,
     load_items,
     save_alerts,
     save_items,
     sweep_stale_claims,
+    write_session_lock,
 )
 
 # ── providers ────────────────────────────────────────────────────────────────
@@ -126,6 +135,7 @@ from .providers import (
 from .display import (
     _create_alert,
     _display_items,
+    _format_ago,
     _format_watch_alert,
     _items_of_type,
     _items_with_status,
@@ -138,6 +148,7 @@ from .display import (
 
 # ── core operations ──────────────────────────────────────────────────────────
 from .core import (
+    _passes_severity_filter,
     add_recurring,
     add_reminder,
     add_seed_alert,
@@ -170,6 +181,7 @@ _LAZY_ATTRS: dict[str, Any] = {
     "ACTIVITY_FILE": _activity_file,
     "LOCK_FILE": lambda: _lock_file(),  # noqa: PLW0108 — forward ref
     "CLAIMS_DIR": lambda: _claims_dir(),  # noqa: PLW0108 — forward ref
+    "SESSION_LOCK_FILE": lambda: _session_lock_file(),  # noqa: PLW0108 — forward ref
     "LOCAL_TZ": _get_local_tz,
 }
 
@@ -203,10 +215,15 @@ __all__ = [
     "CONDITION_MERGED",
     "CONDITION_NEW_RESULTS",
     "CONDITION_STATUS_CHANGED",
+    "SEVERITY_ACTIONABLE",
+    "SEVERITY_INFO",
+    "SEVERITY_HEARTBEAT",
+    "SEVERITY_ORDER",
     # TypedDicts
     "SchedulerItem",
     "AlertItem",
     "AlertDetails",
+    "AlertSeverity",
     "ClaimData",
     "GithubPrConfig",
     "JiraQueryConfig",
@@ -224,6 +241,7 @@ __all__ = [
     "ACTIVITY_FILE",
     "LOCK_FILE",
     "CLAIMS_DIR",
+    "SESSION_LOCK_FILE",
     "LOCAL_TZ",
     # Core functions
     "add_reminder",
@@ -255,6 +273,11 @@ __all__ = [
     "claim_alert",
     "sweep_stale_claims",
     "get_instance_id",
+    "write_session_lock",
+    "clear_session_lock",
+    "is_session_active",
+    "_session_lock_file",
+    "_passes_severity_filter",
     # Display
     "show_alerts",
     "_display_items",
@@ -283,6 +306,7 @@ __all__ = [
     "_get_local_tz",
     "_parse_time_component",
     "_create_alert",
+    "_format_ago",
     "_format_watch_alert",
     "_evaluate_auto_remove",
     "_get_jira_credentials",

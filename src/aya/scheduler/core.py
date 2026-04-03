@@ -6,7 +6,7 @@ import logging
 import re
 import sys
 from datetime import datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 from .display import _create_alert, _format_watch_alert
 from .providers import _evaluate_auto_remove, poll_watch
@@ -23,6 +23,7 @@ from .storage import (
     claim_alert,
     get_instance_id,
     get_unseen_alerts,
+    is_session_active,
     load_alerts,
     load_items,
     sweep_stale_claims,
@@ -37,8 +38,11 @@ from .time_utils import (
     parse_work_hours,
 )
 from .types import (
+    SEVERITY_ACTIONABLE,
+    SEVERITY_ORDER,
     AlertDetails,
     AlertItem,
+    AlertSeverity,
     GithubPrConfig,
     JiraQueryConfig,
     JiraTicketConfig,
@@ -423,20 +427,42 @@ def run_poll(quiet: bool = False) -> None:
             _atomic_write(_alerts_file(), _alerts_data(alerts))
 
 
-def run_tick(quiet: bool = False) -> dict[str, int]:
+def run_tick(quiet: bool = False) -> dict[str, Any]:
     """Run one scheduler tick — poll watches, check reminders, sweep stale claims.
 
     This is the canonical entry point for system cron:
         */5 * * * * aya schedule tick --quiet
 
-    Returns a summary dict: {"watches_checked": N, "alerts_generated": N, "claims_swept": N}
+    When an active REPL session is detected (via session lock + recent
+    activity), polling is skipped entirely — no new alerts are created.
+    The REPL pulls existing pending alerts at natural breakpoints via
+    ``aya schedule pending``.
+
+    Returns a summary dict: {"claims_swept": N, "alerts_expired": N, "session_active": bool}
     """
-    logger.info("tick: starting poll cycle")
-    run_poll(quiet=quiet)
+    result: dict[str, Any] = {}
+    session_active = is_session_active()
+
+    if session_active:
+        if not quiet:
+            logger.info("Active session detected — skipping poll, delivery via REPL")
+        result["polls_skipped"] = True
+    else:
+        logger.info("tick: starting poll cycle")
+        run_poll(quiet=quiet)
+
     swept = sweep_stale_claims()
     expired = expire_old_alerts()
-    logger.info("tick: complete — swept=%d claims, expired=%d alerts", swept, expired)
-    return {"claims_swept": swept, "alerts_expired": expired}
+    result["claims_swept"] = swept
+    result["alerts_expired"] = expired
+    result["session_active"] = session_active
+    logger.info(
+        "tick: complete — swept=%d claims, expired=%d alerts, session_active=%s",
+        swept,
+        expired,
+        session_active,
+    )
+    return result
 
 
 def expire_old_alerts(max_age_days: int = _ALERT_MAX_AGE_DAYS) -> int:
@@ -458,13 +484,42 @@ def expire_old_alerts(max_age_days: int = _ALERT_MAX_AGE_DAYS) -> int:
 # ── pending ──────────────────────────────────────────────────────────────────
 
 
-def get_pending(instance_id: str | None = None) -> PendingResult:
+def _passes_severity_filter(
+    alert: AlertItem, min_severity: AlertSeverity = SEVERITY_ACTIONABLE
+) -> bool:
+    """Return True if an alert's severity meets the minimum threshold.
+
+    Severity ordering: actionable > info > heartbeat.
+    An alert passes if its severity index <= min_severity index
+    (lower index = higher priority).
+    """
+    alert_sev = alert.get("severity", SEVERITY_ACTIONABLE)
+    try:
+        alert_idx = SEVERITY_ORDER.index(alert_sev)
+    except ValueError:
+        alert_idx = 0  # unknown severity treated as actionable
+    try:
+        min_idx = SEVERITY_ORDER.index(min_severity)
+    except ValueError:
+        min_idx = 0
+    return alert_idx <= min_idx
+
+
+def get_pending(
+    instance_id: str | None = None,
+    min_severity: AlertSeverity = SEVERITY_ACTIONABLE,
+) -> PendingResult:
     """Get pending items for a session — alerts to deliver + session crons to register.
 
     This is the SessionStart hook entry point:
         aya schedule pending --format text
 
     Claims each alert it returns so other sessions don't re-deliver.
+
+    Args:
+        instance_id: Override instance identifier (default: auto-detect).
+        min_severity: Minimum severity to include. ``"actionable"`` (default)
+            returns only actionable alerts. ``"heartbeat"`` returns everything.
 
     Returns:
         {
@@ -476,13 +531,15 @@ def get_pending(instance_id: str | None = None) -> PendingResult:
         }
     """
     instance_id = instance_id or get_instance_id()
-    logger.debug("pending: checking for instance=%s", instance_id)
+    logger.debug("pending: checking for instance=%s, min_severity=%s", instance_id, min_severity)
     unseen = get_unseen_alerts()
 
-    # Claim and collect deliverable alerts
+    # Claim and collect deliverable alerts (filtered by severity)
     deliverable = []
     claimed_ids: set[str] = set()
     for alert in unseen:
+        if not _passes_severity_filter(alert, min_severity):
+            continue
         if claim_alert(alert["id"], instance_id):
             deliverable.append(alert)
             claimed_ids.add(alert["id"])

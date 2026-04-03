@@ -337,3 +337,114 @@ def _detect_harness() -> str:
 def get_instance_id() -> str:
     """Return a unique instance identifier: {harness}-{pid}."""
     return f"{_detect_harness()}-{os.getpid()}"
+
+
+# ── session lock ────────────────────────────────────────────────────────────
+
+_SESSION_LOCK_STALE_MINUTES = 15
+
+
+def _session_lock_file() -> Path:
+    """Return the session lock file path."""
+    pkg = _get_package_globals()
+    if "SESSION_LOCK_FILE" in pkg and pkg["SESSION_LOCK_FILE"] is not None:
+        val = pkg["SESSION_LOCK_FILE"]
+        if isinstance(val, Path):
+            return val
+    return _paths.AYA_HOME / "session.lock"
+
+
+def write_session_lock(instance_id: str | None = None) -> None:
+    """Write a session lock indicating an active REPL session.
+
+    Called alongside activity recording so the lock stays fresh
+    as long as the session is active.
+    """
+    instance_id = instance_id or get_instance_id()
+    lock_path = _session_lock_file()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(
+        {
+            "instance_id": instance_id,
+            "locked_at": datetime.now(_get_local_tz()).isoformat(),
+        }
+    )
+    # Atomic write — safe for concurrent readers
+    fd, tmp = tempfile.mkstemp(dir=str(lock_path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            fd = -1
+            f.write(content.encode())
+            f.flush()
+            os.fsync(f.fileno())
+        Path(tmp).replace(lock_path)
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        with suppress(OSError):
+            Path(tmp).unlink(missing_ok=True)
+        raise
+    logger.debug("session lock: written for %s", instance_id)
+
+
+def clear_session_lock(instance_id: str | None = None) -> bool:
+    """Remove session lock, optionally scoped to a specific instance.
+
+    When ``instance_id`` is provided, only clears the lock if it belongs
+    to that instance. When omitted, clears the lock unconditionally.
+
+    The primary cleanup mechanism is stale detection: ``is_session_active()``
+    checks whether ``activity.json`` has been updated within the last 15
+    minutes, so crashed or abandoned sessions are automatically treated as
+    inactive without explicit cleanup.
+
+    This function exists for explicit cleanup in future SessionEnd hooks,
+    where the REPL can proactively clear the lock on graceful shutdown
+    rather than waiting for the staleness timeout.
+
+    Returns True if lock was cleared, False if it didn't exist or
+    belonged to another instance.
+    """
+    lock_path = _session_lock_file()
+    if not lock_path.exists():
+        return False
+    try:
+        data = json.loads(lock_path.read_text())
+        if instance_id and data.get("instance_id") != instance_id:
+            return False
+        lock_path.unlink(missing_ok=True)
+        logger.debug("session lock: cleared for %s", instance_id)
+        return True
+    except (json.JSONDecodeError, OSError):
+        lock_path.unlink(missing_ok=True)
+        return True
+
+
+def is_session_active() -> bool:
+    """Return True if a REPL session is currently active.
+
+    A session is active when the lock file exists AND activity.json
+    last_activity_at is within _SESSION_LOCK_STALE_MINUTES minutes
+    (stale lock protection for REPL crashes).
+    """
+    lock_path = _session_lock_file()
+    if not lock_path.exists():
+        return False
+
+    # Validate the lock isn't stale by checking activity
+    from .time_utils import get_last_activity
+
+    last_activity = get_last_activity()
+    if last_activity is None:
+        return False
+
+    now = datetime.now(_get_local_tz())
+    stale_threshold = timedelta(minutes=_SESSION_LOCK_STALE_MINUTES)
+    is_active = (now - last_activity) < stale_threshold
+    logger.debug(
+        "session lock: exists=%s, last_activity=%s, active=%s",
+        True,
+        last_activity.isoformat() if last_activity else "never",
+        is_active,
+    )
+    return is_active

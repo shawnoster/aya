@@ -32,14 +32,18 @@ _DEDUP_SECONDS = 300  # 5 minutes
 
 # ── state persistence ────────────────────────────────────────────────────────
 
-_LOG_LOCK_FILE = LOG_STATE_FILE.parent / ".log.lock"
+
+def _log_lock_file() -> Path:
+    """Derive lock path from LOG_STATE_FILE at call time (monkeypatch-safe)."""
+    return LOG_STATE_FILE.parent / ".log.lock"
 
 
 @contextmanager
 def _log_lock(*, shared: bool = False) -> Iterator[int]:
     """Acquire an advisory lock scoped to log state (not the scheduler)."""
-    _LOG_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(_LOG_LOCK_FILE), os.O_RDWR | os.O_CREAT)
+    lock_path = _log_lock_file()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT)
     try:
         fcntl.flock(fd, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
         yield fd

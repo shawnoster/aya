@@ -6,7 +6,7 @@ import logging
 import re
 import sys
 from datetime import datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 from .display import _create_alert, _format_watch_alert
 from .providers import _evaluate_auto_remove, poll_watch
@@ -427,7 +427,7 @@ def run_poll(quiet: bool = False) -> None:
             _atomic_write(_alerts_file(), _alerts_data(alerts))
 
 
-def run_tick(quiet: bool = False) -> dict[str, int]:
+def run_tick(quiet: bool = False) -> dict[str, Any]:
     """Run one scheduler tick — poll watches, check reminders, sweep stale claims.
 
     This is the canonical entry point for system cron:
@@ -439,21 +439,29 @@ def run_tick(quiet: bool = False) -> dict[str, int]:
 
     Returns a summary dict: {"claims_swept": N, "alerts_expired": N, "session_active": bool}
     """
+    result: dict[str, Any] = {}
     session_active = is_session_active()
-    if session_active:
-        logger.info("tick: active session detected — alerts will be created but delivery deferred")
 
-    logger.info("tick: starting poll cycle")
-    run_poll(quiet=quiet)
+    if session_active:
+        if not quiet:
+            logger.info("Active session detected — skipping poll, delivery via REPL")
+        result["polls_skipped"] = True
+    else:
+        logger.info("tick: starting poll cycle")
+        run_poll(quiet=quiet)
+
     swept = sweep_stale_claims()
     expired = expire_old_alerts()
+    result["claims_swept"] = swept
+    result["alerts_expired"] = expired
+    result["session_active"] = session_active
     logger.info(
         "tick: complete — swept=%d claims, expired=%d alerts, session_active=%s",
         swept,
         expired,
         session_active,
     )
-    return {"claims_swept": swept, "alerts_expired": expired, "session_active": session_active}
+    return result
 
 
 def expire_old_alerts(max_age_days: int = _ALERT_MAX_AGE_DAYS) -> int:

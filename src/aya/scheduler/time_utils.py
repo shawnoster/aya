@@ -218,10 +218,13 @@ def is_within_work_hours(only_during: str, now: datetime | None = None) -> bool:
 def record_activity(now: datetime | None = None) -> None:
     """Record the current time as the last-known user activity.
 
-    Writes ``{"last_activity_at": "<ISO timestamp>"}`` to the activity file.
+    Writes ``{"last_activity_at": "<ISO timestamp>"}`` to the activity file
+    and refreshes the session lock so that ``is_session_active()`` reflects
+    the active REPL.
+
     Safe to call from any hook or command that indicates user presence.
     """
-    from .storage import _activity_file, _atomic_write, _file_lock
+    from .storage import _activity_file, _atomic_write, _file_lock, write_session_lock
 
     if now is None:
         now = datetime.now(_get_local_tz())
@@ -229,7 +232,10 @@ def record_activity(now: datetime | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock():
         _atomic_write(path, {"last_activity_at": now.isoformat()})
-    logger.debug("activity: recorded at %s", now.isoformat())
+    # Refresh session lock alongside activity — keeps lock fresh as long as
+    # the REPL is alive, and goes stale naturally via the 15-min check.
+    write_session_lock()
+    logger.debug("activity: recorded at %s (session lock refreshed)", now.isoformat())
 
 
 def get_last_activity() -> datetime | None:

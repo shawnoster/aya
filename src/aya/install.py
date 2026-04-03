@@ -83,6 +83,36 @@ CANONICAL_HOOKS: dict[str, list[dict[str, Any]]] = {
                 }
             ],
         },
+        {
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "aya log auto 2>/dev/null || true",
+                    "async": True,
+                }
+            ],
+        },
+        {
+            "matcher": "Write",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "aya log auto 2>/dev/null || true",
+                    "async": True,
+                }
+            ],
+        },
+        {
+            "matcher": "Edit",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "aya log auto 2>/dev/null || true",
+                    "async": True,
+                }
+            ],
+        },
     ],
 }
 

@@ -2552,8 +2552,6 @@ class TestPacketPersistence:
         """Set up a packets directory and patch PACKETS_DIR to point to it."""
         packets = tmp_path / "packets"
         packets.mkdir()
-        monkeypatch.setattr("aya.cli.PACKETS_DIR", packets, raising=False)
-        # Also patch in paths module for imports within cli
         import aya.paths
 
         monkeypatch.setattr(aya.paths, "PACKETS_DIR", packets)

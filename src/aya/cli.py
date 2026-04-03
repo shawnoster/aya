@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -1932,23 +1932,28 @@ def _ingest(packet: Packet, *, quiet: bool = False) -> None:
                 )
             )
 
-    # Persist packet content for later retrieval
-    from aya.paths import PACKETS_DIR
+    # Persist packet content for later retrieval (best-effort — never break ingest)
+    try:
+        from aya.paths import PACKETS_DIR
 
-    PACKETS_DIR.mkdir(parents=True, exist_ok=True)
-    PACKETS_DIR.chmod(0o700)
-    packet_file = PACKETS_DIR / f"{packet.id}.json"
-    packet_file.write_text(packet.to_json())
-    packet_file.chmod(0o600)
+        PACKETS_DIR.mkdir(parents=True, exist_ok=True)
+        with suppress(OSError):
+            PACKETS_DIR.chmod(0o700)
+        packet_file = PACKETS_DIR / f"{packet.id}.json"
+        packet_file.write_text(packet.to_json())
+        with suppress(OSError):
+            packet_file.chmod(0o600)
 
-    # Prune old packets (>7 days based on file mtime)
-    cutoff = datetime.now(UTC).timestamp() - 7 * 86400
-    for old in PACKETS_DIR.glob("*.json"):
-        try:
-            if old.stat().st_mtime < cutoff:
-                old.unlink(missing_ok=True)
-        except FileNotFoundError:
-            continue
+        # Prune old packets (>7 days based on file mtime)
+        cutoff = datetime.now(UTC).timestamp() - 7 * 86400
+        for old in PACKETS_DIR.glob("*.json"):
+            try:
+                if old.stat().st_mtime < cutoff:
+                    old.unlink(missing_ok=True)
+            except OSError:
+                continue
+    except Exception:
+        logger.debug("Failed to persist packet %s", packet.id, exc_info=True)
 
 
 # ── show ──────────────────────────────────────────────────────────────────────
@@ -2015,6 +2020,8 @@ def packets(
     from aya.paths import PACKETS_DIR
 
     format_ = resolve_format(format_)
+    if limit < 1:
+        limit = 20
 
     if not PACKETS_DIR.exists():
         if format_ == OutputFormat.JSON:
@@ -2025,9 +2032,13 @@ def packets(
 
     from aya.packet import Packet
 
-    files = sorted(PACKETS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)[
-        :limit
-    ]
+    def _safe_mtime(f: Path) -> float:
+        try:
+            return f.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    files = sorted(PACKETS_DIR.glob("*.json"), key=_safe_mtime, reverse=True)[:limit]
     items: list[dict[str, str]] = []
     for f in files:
         try:

@@ -153,6 +153,52 @@ async def test_send_tool():
     mock_publish.assert_awaited_once()
 
 
+async def test_send_tool_with_in_reply_to(tmp_path):
+    """aya_send with in_reply_to sets the field on the published packet."""
+    from aya.identity import Identity, Profile, TrustedKey
+
+    fake_identity = Identity.generate("default")
+    peer_identity = Identity.generate("peer")
+    fake_profile = Profile(
+        alias="Test",
+        ship_mind_name="",
+        user_name="Tester",
+        instances={"default": fake_identity},
+        trusted_keys={
+            "peer": TrustedKey(
+                did=peer_identity.did,
+                label="peer",
+                nostr_pubkey=peer_identity.nostr_public_hex,
+            ),
+        },
+        ingested_ids=[],
+        default_relays=["wss://relay.example.com"],
+        last_checked={},
+    )
+
+    mock_publish = AsyncMock(return_value="def456eventid")
+
+    with (
+        patch("aya.mcp_server._load_profile", return_value=fake_profile),
+        patch("aya.relay.RelayClient.publish", mock_publish),
+    ):
+        result = await call_tool(
+            "aya_send",
+            {
+                "to": "peer",
+                "intent": "reply-test",
+                "content": "This is a reply",
+                "in_reply_to": "01JABC1234PARENT00000000000",
+            },
+        )
+
+    payload = json.loads(result[0].text)
+    assert "packet_id" in payload
+    # Verify the published packet has in_reply_to set
+    published_packet = mock_publish.call_args[0][0]
+    assert published_packet.in_reply_to == "01JABC1234PARENT00000000000"
+
+
 # ---------------------------------------------------------------------------
 # aya_inbox
 # ---------------------------------------------------------------------------

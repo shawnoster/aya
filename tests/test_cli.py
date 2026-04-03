@@ -844,9 +844,7 @@ class TestDispatch:
         assert captured_packet is not None
         assert captured_packet.in_reply_to == "01JABC1234PARENT00000"
 
-    def test_dispatch_in_reply_to_json(
-        self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_dispatch_in_reply_to_json(self, profile_with_trusted: Path) -> None:
         """--in-reply-to with --format json includes in_reply_to in output."""
 
         async def _capture_publish(signed, *a, **kw):

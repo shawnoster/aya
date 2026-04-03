@@ -733,6 +733,11 @@ def dispatch(
             )
 
         if in_reply_to:
+            if len(in_reply_to) < 8:
+                _emit_error(
+                    ErrorCode.INVALID_ARGUMENT,
+                    "Packet ID for --in-reply-to must be at least 8 characters.",
+                )
             packet.in_reply_to = in_reply_to
 
         # Mark the packet encrypted before signing so the flag is covered by the signature.

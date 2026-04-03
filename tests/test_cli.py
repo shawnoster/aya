@@ -1433,6 +1433,34 @@ class TestReceive:
         assert untrusted_entry["ingested"] is False
         assert untrusted_entry["skipped"] is True
 
+    def test_receive_auto_ingest_prints_summary(
+        self, profile_with_sender: Path, sender: Identity
+    ) -> None:
+        """receive --auto-ingest must print a text summary showing ingested count."""
+        p = Profile.load(profile_with_sender)
+        packet = self._signed_packet(sender, p.instances["default"].did)
+
+        async def mock_fetch(*args, **kwargs):
+            yield packet
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = mock_fetch
+            mock_cls.return_value.send_receipt = AsyncMock()
+            result = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "text",
+                    "--profile",
+                    str(profile_with_sender),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Ingested 1 of 1" in result.output
+
 
 # ── inbox ─────────────────────────────────────────────────────────────────────
 

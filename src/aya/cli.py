@@ -1040,6 +1040,12 @@ def receive(
     if instance is not None:
         err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
         as_ = instance
+    if skip_untrusted and not auto_ingest and not yes:
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "--skip-untrusted requires --auto-ingest or --yes for non-interactive use.",
+            exit_code=2,
+        )
     format_ = resolve_format(format_)
 
     async def _run() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
@@ -192,6 +193,102 @@ def _emit_error(
     else:
         err.print(f"[red]{message}[/red]")
     raise typer.Exit(exit_code)
+
+
+# ── Idempotency helpers ────────────────────────────────────────────────────
+
+
+def _idempotency_key_hash(key: str) -> str:
+    """Hash the idempotency key so raw secrets aren't stored on disk."""
+    import hashlib
+
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _check_idempotency(key: str) -> dict | None:
+    """Check if an idempotency key was already used. Returns cached result or None."""
+    from aya.paths import SENT_CACHE
+
+    if not SENT_CACHE.exists():
+        return None
+    hashed = _idempotency_key_hash(key)
+    try:
+        with SENT_CACHE.open() as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            raw = json.loads(f.read())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    entry = raw.get(hashed)
+    if not isinstance(entry, dict):
+        return None
+    try:
+        if datetime.fromisoformat(entry["sent_at"]) > datetime.now(UTC) - timedelta(hours=24):
+            return entry
+    except (KeyError, ValueError, TypeError):
+        return None
+    return None
+
+
+def _record_idempotency(key: str, packet_id: str, event_id: str) -> None:
+    """Record a sent packet for idempotency dedup. Atomic write with file lock."""
+    import tempfile
+
+    from aya.paths import SENT_CACHE
+
+    hashed = _idempotency_key_hash(key)
+    SENT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with SENT_CACHE.open("a+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            try:
+                raw = json.loads(f.read() or "{}")
+                cache = raw if isinstance(raw, dict) else {}
+            except json.JSONDecodeError:
+                cache = {}
+
+            cache[hashed] = {
+                "packet_id": packet_id,
+                "event_id": event_id,
+                "sent_at": datetime.now(UTC).isoformat(),
+            }
+            # Prune entries older than 24 hours
+            cutoff = datetime.now(UTC) - timedelta(hours=24)
+            pruned: dict[str, object] = {}
+            for k, v in cache.items():
+                if not isinstance(v, dict):
+                    continue
+                try:
+                    if datetime.fromisoformat(str(v.get("sent_at", ""))) > cutoff:
+                        pruned[k] = v
+                except (ValueError, TypeError):
+                    continue
+            cache = pruned
+
+            # Atomic write: temp file → Path.replace
+            fd, tmp = tempfile.mkstemp(dir=str(SENT_CACHE.parent), suffix=".tmp")
+            try:
+                encoded = json.dumps(cache, indent=2).encode()
+                total = 0
+                while total < len(encoded):
+                    written = os.write(fd, encoded[total:])
+                    total += written
+                os.fsync(fd)
+                os.close(fd)
+                Path(tmp).replace(SENT_CACHE)
+                with suppress(OSError):
+                    SENT_CACHE.chmod(0o600)
+            except Exception:
+                with suppress(OSError):
+                    os.close(fd)
+                with suppress(OSError):
+                    Path(tmp).unlink()
+                raise
+    except OSError:
+        logger.debug("Failed to record idempotency key %s", key, exc_info=True)
 
 
 DEFAULT_PROFILE = PROFILE_PATH
@@ -472,6 +569,12 @@ def send(
         None, "--instance", help="[deprecated] Use --as instead", hidden=True
     ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
+    idempotency_key: str = typer.Option(
+        None,
+        "--idempotency-key",
+        "-k",
+        help="Dedup key — if already sent within 24h, return cached result",
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
@@ -498,11 +601,26 @@ def send(
         _output_json(json.loads(packet.to_json()))
         raise typer.Exit(0)
 
+    if idempotency_key:
+        cached = _check_idempotency(idempotency_key)
+        if cached:
+            if format_ == OutputFormat.JSON:
+                _output_json({**cached, "cached": True})
+                raise typer.Exit(0)
+            console.print(
+                f"[dim]Already sent (cached) — packet {cached.get('packet_id', '?')[:8]}[/dim]"
+            )
+            return
+
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
     # Resolve recipient's Nostr pubkey
     recipient_nostr_pub = _resolve_nostr_pubkey(packet.to_did, p)
     event_id = asyncio.run(client.publish(packet, recipient_nostr_pub, encrypt=packet.encrypted))
+
+    if idempotency_key:
+        _record_idempotency(idempotency_key, packet.id, event_id)
+
     relay_count = len(relay_urls)
     relay_display = relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
 
@@ -541,6 +659,12 @@ def dispatch(
         False, "--no-encrypt", help="Send plaintext (debug or private-relay mode)"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
+    idempotency_key: str = typer.Option(
+        None,
+        "--idempotency-key",
+        "-k",
+        help="Dedup key — if already sent within 24h, return cached result",
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
@@ -603,6 +727,17 @@ def dispatch(
             _output_json(json.loads(signed.to_json()))
             return
 
+        if idempotency_key:
+            cached = _check_idempotency(idempotency_key)
+            if cached:
+                if format_ == OutputFormat.JSON:
+                    _output_json({**cached, "cached": True})
+                    return
+                console.print(
+                    f"[dim]Already sent (cached) — packet {cached.get('packet_id', '?')[:8]}[/dim]"
+                )
+                return
+
         relay_urls = [relay] if relay else p.default_relays
         recipient_nostr_pub = _resolve_nostr_pubkey(signed.to_did, p)
         if recipient_nostr_pub is None:
@@ -623,6 +758,9 @@ def dispatch(
                 "Dispatch failed — event could not be published to relay(s).",
                 {"relay": relay_urls[0] if relay_urls else None},
             )
+
+        if idempotency_key:
+            _record_idempotency(idempotency_key, signed.id, event_id)
 
         relay_count = len(relay_urls)
         relay_display = (
@@ -673,6 +811,12 @@ def ack(
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show ACK packet without publishing"
+    ),
+    idempotency_key: str = typer.Option(
+        None,
+        "--idempotency-key",
+        "-k",
+        help="Dedup key — if already sent within 24h, return cached result",
     ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(
@@ -775,6 +919,17 @@ def ack(
             _output_json(json.loads(signed.to_json()))
             return
 
+        if idempotency_key:
+            cached = _check_idempotency(idempotency_key)
+            if cached:
+                if format_ == OutputFormat.JSON:
+                    _output_json({**cached, "cached": True})
+                    return
+                console.print(
+                    f"[dim]Already sent (cached) — ack {cached.get('packet_id', '?')[:8]}[/dim]"
+                )
+                return
+
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
         try:
@@ -782,6 +937,9 @@ def ack(
         except Exception:
             err.print("[yellow]Could not reach relay — ack failed.[/yellow]")
             raise typer.Exit(1) from None
+
+        if idempotency_key:
+            _record_idempotency(idempotency_key, signed.id, event_id)
 
         # Mark any matching seed alert as seen (best-effort)
         try:
@@ -801,7 +959,7 @@ def ack(
         if format_ == OutputFormat.JSON:
             _output_json(
                 {
-                    "ack_packet_id": signed.id,
+                    "packet_id": signed.id,
                     "event_id": event_id,
                     "in_reply_to": full_packet_id,
                     "to": to_label,

@@ -812,6 +812,70 @@ class TestDispatch:
         assert result.exit_code != 0
         assert "Dispatch failed" in result.output
 
+    def test_dispatch_in_reply_to(self, profile_with_trusted: Path) -> None:
+        """--in-reply-to sets in_reply_to on the published packet."""
+        captured_packet = None
+
+        async def _capture_publish(signed, *a, **kw):
+            nonlocal captured_packet
+            captured_packet = signed
+            return "c" * 64
+
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = AsyncMock(side_effect=_capture_publish)
+            result = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "follow-up notes",
+                    "--in-reply-to",
+                    "01JABC1234PARENT00000",
+                    "--profile",
+                    str(profile_with_trusted),
+                    "--format",
+                    "text",
+                ],
+                input="This is a reply.\n",
+            )
+        assert result.exit_code == 0, result.output
+        assert captured_packet is not None
+        assert captured_packet.in_reply_to == "01JABC1234PARENT00000"
+
+    def test_dispatch_in_reply_to_json(
+        self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--in-reply-to with --format json includes in_reply_to in output."""
+
+        async def _capture_publish(signed, *a, **kw):
+            return "d" * 64
+
+        with patch("aya.cli.RelayClient") as mock_client_cls:
+            mock_client_cls.return_value.publish = AsyncMock(side_effect=_capture_publish)
+            result = runner.invoke(
+                app,
+                [
+                    "dispatch",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "threaded reply",
+                    "--in-reply-to",
+                    "01JABC1234PARENT00000",
+                    "--profile",
+                    str(profile_with_trusted),
+                    "--format",
+                    "json",
+                    "--dry-run",
+                ],
+                input="Reply content.\n",
+            )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["in_reply_to"] == "01JABC1234PARENT00000"
+
 
 # ── schedule status ──────────────────────────────────────────────────────────
 

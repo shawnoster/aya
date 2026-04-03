@@ -671,6 +671,7 @@ def dispatch(
     no_encrypt: bool = typer.Option(
         False, "--no-encrypt", help="Send plaintext (debug or private-relay mode)"
     ),
+    in_reply_to: str = typer.Option(None, "--in-reply-to", help="Packet ID this is a reply to"),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
     idempotency_key: str = typer.Option(
         None,
@@ -730,6 +731,9 @@ def dispatch(
                 content=content,
                 conflict_strategy=conflict,
             )
+
+        if in_reply_to:
+            packet.in_reply_to = in_reply_to
 
         # Mark the packet encrypted before signing so the flag is covered by the signature.
         if not no_encrypt:

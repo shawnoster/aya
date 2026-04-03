@@ -70,6 +70,10 @@ _TOOLS: list[types.Tool] = [
                     "type": "string",
                     "description": "Dedup key — if already sent within 24h, return cached result.",
                 },
+                "in_reply_to": {
+                    "type": "string",
+                    "description": "Packet ID this message is a reply to.",
+                },
             },
             "required": ["to", "intent", "content"],
             "additionalProperties": False,
@@ -303,11 +307,14 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
     from aya.packet import ContentType, Packet
     from aya.relay import RelayClient
 
+    in_reply_to = arguments.get("in_reply_to")
+
     packet = Packet(
         **{"from": local.did, "to": to_did},
         intent=intent,
         content_type=ContentType.MARKDOWN,
         content=content,
+        in_reply_to=in_reply_to,
     )
     packet.encrypted = True
     signed = packet.sign(local)

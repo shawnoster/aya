@@ -45,7 +45,9 @@ from aya.relay import RelayClient
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
 from aya.scheduler import (
+    SEVERITY_ACTIONABLE,
     SEVERITY_HEARTBEAT,
+    AlertSeverity,
     _display_items,
     add_recurring,
     add_reminder,
@@ -1797,8 +1799,8 @@ def schedule_pending(
         aya scheduler pending --format text
     """
     format_ = resolve_format(format_)
-    min_severity = SEVERITY_HEARTBEAT if all_severities else None
-    pending = get_pending(min_severity=min_severity) if min_severity else get_pending()
+    min_severity: AlertSeverity = SEVERITY_HEARTBEAT if all_severities else SEVERITY_ACTIONABLE
+    pending = get_pending(min_severity=min_severity)
     if format_ == OutputFormat.JSON:
         _output_json(pending)
     else:

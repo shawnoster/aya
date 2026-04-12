@@ -130,7 +130,6 @@ def add_watch(
             "owner": m.group(1),
             "repo": m.group(2),
             "pr": int(m.group(3)),
-            "branch": "",
         }
         condition = condition or "checks_failed"
         if interval == 30:

@@ -162,8 +162,8 @@ class CiChecksConfig(TypedDict):
 
     owner: str
     repo: str
-    branch: str
     pr: int
+    branch: NotRequired[str]
 
 
 class GithubPrState(TypedDict):

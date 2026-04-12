@@ -116,8 +116,6 @@ def _format_watch_alert(item: SchedulerItem, state: WatchState) -> str:
         if ci_state["failed"]:
             names = ", ".join(ci_state["failed"])
             return f"{base} — FAILED: {names}"
-        if ci_state["pending"]:
-            return f"{base} — still running after timeout"
         return f"{base} — all checks passed"
 
     return base

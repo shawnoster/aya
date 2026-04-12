@@ -269,6 +269,7 @@ _CHANGE_DETECTORS: dict[tuple[str, str], Callable[[Any, Any], bool]] = {
     ("jira-ticket", "status_changed"): _detect_jira_status_changed,
     ("jira-ticket", ""): _detect_json_diff,
     ("ci-checks", "checks_failed"): _detect_ci_checks_failed,
+    ("ci-checks", "checks_complete"): _detect_ci_checks_complete,
     ("ci-checks", ""): _detect_ci_checks_complete,
 }
 

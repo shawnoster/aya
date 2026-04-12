@@ -37,23 +37,38 @@ machine that has run `aya init` with a real label.
 
 ## 1. Check
 
-Poll **and** ingest in one shot. `--auto-ingest` does both — no separate
-`aya inbox` call.
+Poll **and** ingest in one shot. `--auto-ingest` ingests trusted packets
+without prompting; `--skip-untrusted` prevents the command from blocking
+on confirmation for unknown senders (non-interactive safety);
+`--format json` forces structured output regardless of TTY detection
+(default `auto` produces Rich text on a real terminal, which breaks
+JSON parsing downstream).
 
 ```bash
-aya receive --as <local-label> --auto-ingest --quiet
+aya receive --as <local-label> --auto-ingest --skip-untrusted --format json
 ```
 
-For each new packet returned, immediately run verb 2 (Read) inline and
-present the body. Lead with the most recent. Summarize multiple packets;
-don't dump the JSON list to the user.
+For each new packet in the returned `packets` array, immediately run
+verb 2 (Read) inline and present the body. Lead with the most recent.
+Summarize multiple packets; don't dump the JSON list to the user.
 
 If the response is `{"packets": []}`, reply *"Empty."* and stop.
 
-If `aya receive` warns about a verification failure (e.g.
-`InvalidSignature`), surface it explicitly: *"packet `<id>` failed
-verification — not auto-ingested. Inspect with care or ignore."* Do not
-silently re-poll past it.
+**Signature failures** are handled by aya at the `receive` boundary:
+the CLI logs `WARNING:aya.packet:DID-based signature verification
+failed for packet <id>` to **stderr** and *discards* the packet from
+the JSON output. Bad-sig packets do **not** appear with
+`ingested: false` in the receive response. To surface them to the
+user, capture stderr separately:
+
+```bash
+aya receive --as <local-label> --auto-ingest --skip-untrusted --format json 2>/tmp/aya-recv.err
+grep -E "verification failed|InvalidSignature" /tmp/aya-recv.err
+```
+
+If a warning line appears, tell the user: *"packet `<id>` failed
+signature verification and was discarded by aya — sender needs to
+re-dispatch."*
 
 ---
 

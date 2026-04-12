@@ -334,10 +334,11 @@ is a separate thing and doesn't cover relay state.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `aya receive` returns nothing but you expect a packet | Peer hasn't checked their relay yet | Tell user to ping the peer to check |
-| Packet listed but `ingested: false` | Signature verification failed | Flag to user; do not auto-ingest |
+| `aya receive` returns `{"packets": []}` but you expect one | Peer hasn't dispatched yet, or relay propagation lag | Tell user to ping the peer; wait 30s and retry |
+| `WARNING:aya.packet:DID-based signature verification failed for packet <id>` on stderr | Bad signature; packet is **discarded** by aya, never appears in the JSON output (and not as `ingested:false`) | Surface to user; sender must re-dispatch |
 | `aya show <id>` returns `PACKET_NOT_FOUND` | Packet not yet ingested | Run verb 1 (Check) first |
-| `aya dispatch` errors with "no trusted key" | `--to <peer>` label not in profile | Run `aya pair` to connect, or `aya trust <did>` |
+| `aya dispatch` errors with `Unknown recipient '<label>'. Available: ...` | `--to <peer>` not in `trusted_keys` | Run `aya pair` to connect, or `aya trust <did> --peer <label>` |
+| `aya dispatch` errors with `No Nostr pubkey found for recipient. Pair first.` | Trust entry exists but lacks `nostr_pubkey` field | Re-pair via `aya pair` to populate the pubkey |
 | Interactive shell errors before aya runs | Shell function shadowing the binary | Check `declare -F aya`; unset if found |
 | `aya schedule recurring` shows `last_run_at: never` | Hooks don't fire in active sessions | Expected; rely on manual check + immediate-poll |
 | Relay returns HTTP 503 / connection refused | Transient relay outage | aya auto-retries (5 attempts); wait 30s and retry manually |

@@ -204,6 +204,10 @@ class Profile:
     last_checked: dict[str, str] = field(default_factory=dict)  # relay → ISO timestamp
     # {id, ingested_at, from_did?} — dedup
     ingested_ids: list[dict[str, str]] = field(default_factory=list)
+    # Packet IDs explicitly dropped from inbox view (e.g. bad-sig packets,
+    # spam, anything the user wants to ignore permanently). Filtered out of
+    # `aya inbox` listings on every poll.
+    dropped_ids: list[str] = field(default_factory=list)
 
     @property
     def default_relay(self) -> str:
@@ -320,6 +324,7 @@ class Profile:
             default_relays=relays,
             last_checked=aya_data.get("last_checked", {}),
             ingested_ids=_normalize_ingested_ids(aya_data.get("ingested_ids", [])),
+            dropped_ids=[pid for pid in aya_data.get("dropped_ids", []) if isinstance(pid, str)],
         )
 
     def save(self, path: Path) -> None:
@@ -363,6 +368,7 @@ class Profile:
             except (ValueError, AttributeError):
                 pass  # unparseable timestamp — treat as expired
         data["aya"]["ingested_ids"] = pruned
+        data["aya"]["dropped_ids"] = self.dropped_ids
         path.write_text(json.dumps(data, indent=2))
         path.chmod(0o600)  # private keys live here — owner-read only
 

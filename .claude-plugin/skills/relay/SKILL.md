@@ -138,12 +138,41 @@ just unread).
 
 ## 3. Reply
 
-Always thread via `--in-reply-to`. Pull the peer label from the original
-packet's `from_label` field — don't ask the user, they already pointed
-at the packet.
+Always thread via `--in-reply-to`. The recipient comes from the original
+packet — but `aya show --format json` only returns the sender DID in
+`from`, not a human label. Two options:
+
+**Option A** (preferred when packet is still in inbox): resolve via
+`aya inbox --format json`, which includes both `from_did` and
+`from_label`:
 
 ```bash
-aya dispatch --as <local-label> --to <peer-label> \
+PEER_LABEL=$(aya inbox --as <local-label> --format json | python3 -c "
+import sys, json
+data = json.loads(sys.stdin.read())
+packets = data.get('packets', []) if isinstance(data, dict) else data
+for p in packets:
+    if p.get('id', '').startswith('<original-packet-id>'):
+        print(p.get('from_label') or p.get('from_did', ''))
+        break
+")
+```
+
+**Option B** (fallback if packet has cleared the inbox): use the DID
+from `aya show` directly. `aya dispatch --to` accepts a DID as well as
+a label.
+
+```bash
+PEER=$(aya show --format json <original-packet-id> | python3 -c "
+import sys, json
+print(json.loads(sys.stdin.read()).get('from', ''))
+")
+```
+
+Then dispatch:
+
+```bash
+aya dispatch --as <local-label> --to "$PEER_LABEL_OR_DID" \
   --intent "re: <condensed original intent>" \
   --seed \
   --in-reply-to <original-packet-id> \

@@ -2109,8 +2109,8 @@ def _hook_watch_impl(payload: dict) -> int:
     )
     from aya.scheduler.types import AlertDetails, _alerts_data, _scheduler_data
 
-    exit_code = 0
     now = datetime.now().astimezone()
+    rewake_messages: list[str] = []
 
     # ── Step 1: detect git push → create ci-checks watch ────────────────
     command = payload.get("tool_input", {}).get("command", "")
@@ -2123,7 +2123,6 @@ def _hook_watch_impl(payload: dict) -> int:
         alerts = _load_alerts_unlocked()
         items_modified = False
         alerts_modified = False
-        existing_sources = {a["source_item_id"] for a in alerts if not a.get("seen")}
 
         for item in items:
             if item.get("type") != "watch" or item.get("status") != "active":
@@ -2145,7 +2144,7 @@ def _hook_watch_impl(payload: dict) -> int:
             item["last_state"] = new_state
             items_modified = True
 
-            if changed and item["id"] not in existing_sources:
+            if changed:
                 alert_msg = _format_watch_alert(item, new_state)
                 from aya.scheduler.display import _create_alert as create_alert
 
@@ -2157,10 +2156,7 @@ def _hook_watch_impl(payload: dict) -> int:
                 )
                 alerts.append(alert)
                 alerts_modified = True
-
-                # Emit asyncRewake so Claude wakes up
-                rewake_emit(alert_msg)
-                exit_code = 2
+                rewake_messages.append(alert_msg)
 
             from aya.scheduler.providers import _evaluate_auto_remove
 
@@ -2173,7 +2169,11 @@ def _hook_watch_impl(payload: dict) -> int:
         if alerts_modified:
             _atomic_write(_alerts_file(), _alerts_data(alerts))
 
-    return exit_code
+    # ── Step 3: emit single asyncRewake with all changes ────────────────
+    if rewake_messages:
+        rewake_emit(" | ".join(rewake_messages))
+        return 2
+    return 0
 
 
 def _maybe_create_ci_watch() -> None:

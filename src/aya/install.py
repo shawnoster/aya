@@ -34,7 +34,7 @@ CANONICAL_HOOKS: dict[str, list[dict[str, Any]]] = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "aya hook crons",
+                    "command": "aya hook crons --reset",
                     "statusMessage": "Registering crons...",
                 }
             ]
@@ -72,6 +72,15 @@ CANONICAL_HOOKS: dict[str, list[dict[str, Any]]] = {
         },
     ],
     "PostToolUse": [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": "aya hook crons --event PostToolUse 2>/dev/null || true",
+                    "statusMessage": "",
+                }
+            ]
+        },
         {
             "matcher": "Bash",
             "hooks": [

@@ -1989,26 +1989,69 @@ def schedule_uninstall(
 
 
 @hook_app.command("crons")
-def hook_crons() -> None:
-    """Output CronCreate instructions for Claude Code SessionStart hooks.
+def hook_crons(
+    reset: bool = typer.Option(
+        False,
+        "--reset",
+        help=(
+            "Clear the per-session registered-crons tracker before emitting. "
+            "Use at SessionStart so a fresh session re-registers everything."
+        ),
+    ),
+    event: str = typer.Option(
+        "SessionStart",
+        "--event",
+        help=(
+            "Hook event name to use in the emitted hookSpecificOutput JSON. "
+            "Defaults to SessionStart for the SessionStart hook entry; "
+            "PostToolUse hook should pass --event PostToolUse so the "
+            "additionalContext is delivered after the tool result."
+        ),
+    ),
+) -> None:
+    """Output CronCreate instructions for Claude Code hooks.
 
     Reads active session crons from the scheduler and emits a JSON
     hookSpecificOutput block that tells Claude Code to register them
-    via CronCreate.  Exits silently when there are no crons to register.
+    via CronCreate. Exits silently when there are no NEW crons to
+    register.
+
+    Tracks already-registered cron IDs in
+    ``~/.aya/session_registered_crons.json`` so a follow-up call only
+    emits crons that haven't been seen yet in the current session. This
+    is what makes mid-session ``aya schedule recurring`` calls actually
+    fire — the PostToolUse hook re-runs ``aya hook crons`` on the next
+    tool boundary, the new cron isn't in the tracker, and it gets
+    registered just like a SessionStart cron would.
 
     Unlike get_pending(), this does NOT claim alerts — safe to run before
     ``aya schedule pending`` without consuming alerts.
 
     Usage in ~/.claude/settings.json:
-        {"command": "aya hook crons", "statusMessage": "Registering crons..."}
+        SessionStart: ``aya hook crons --reset``
+        PostToolUse:  ``aya hook crons --event PostToolUse``
     """
+    from aya.scheduler import (
+        load_registered_cron_ids,
+        reset_registered_cron_ids,
+        save_registered_cron_ids,
+    )
+
+    if reset:
+        reset_registered_cron_ids()
+
     crons, _suppressed = get_session_crons()
     if not crons:
         return
 
-    # Emit one hookSpecificOutput per cron so each gets its own system
+    already_registered = load_registered_cron_ids()
+    new_crons = [c for c in crons if c.get("id", "") not in already_registered]
+    if not new_crons:
+        return
+
+    # Emit one hookSpecificOutput per new cron so each gets its own system
     # reminder and can't be truncated when multiple crons are bundled.
-    for c in crons:
+    for c in new_crons:
         cid = c.get("id", "")
         schedule = c.get("cron", "")
         prompt = c.get("prompt") or c.get("message") or c.get("description") or ""
@@ -2022,12 +2065,17 @@ def hook_crons() -> None:
             json.dumps(
                 {
                     "hookSpecificOutput": {
-                        "hookEventName": "SessionStart",
+                        "hookEventName": event,
                         "additionalContext": context,
                     }
                 }
             )
         )
+
+    # Persist the IDs we just emitted so the next call (e.g. via the
+    # PostToolUse hook) doesn't double-register them.
+    updated_ids = already_registered | {c.get("id", "") for c in new_crons if c.get("id")}
+    save_registered_cron_ids(updated_ids)
 
 
 # ── ci ────────────────────────────────────────────────────────────────────────

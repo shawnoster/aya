@@ -3259,14 +3259,13 @@ class TestRead:
     def seed_packet(self) -> Packet:
         local = Identity.generate("default")
         home = Identity.generate("home")
-        return Packet(
-            **{"from": home.did, "to": local.did},
+        return Packet.as_seed(
+            from_did=home.did,
+            to_did=local.did,
             intent="seed test",
-            content={
-                "opener": "What's the plan for tomorrow?",
-                "context_summary": "Wrapping up the relay project.",
-                "open_questions": ["who reviews?", "merge target?"],
-            },
+            opener="What's the plan for tomorrow?",
+            context_summary="Wrapping up the relay project.",
+            open_questions=["who reviews?", "merge target?"],
         )
 
     @pytest.fixture
@@ -3335,6 +3334,58 @@ class TestRead:
     def test_prefix_too_short_errors(self, packets_dir: Path) -> None:
         result = runner.invoke(app, ["read", "01XX", "--format", "text"])
         assert result.exit_code != 0
+
+    def test_json_format_preserves_structured_body_for_json_content(
+        self, packets_dir: Path
+    ) -> None:
+        """Non-seed dict content must pass through as a structured object
+        in JSON output mode, not be stringified. Callers that pipe
+        ``aya read --format json | jq`` should get a real object back."""
+        from aya.packet import ContentType
+
+        local = Identity.generate("default")
+        home = Identity.generate("home")
+        pkt = Packet(
+            **{"from": home.did, "to": local.did},
+            intent="structured payload",
+            content_type=ContentType.JSON,
+            content={
+                "event": "deployed",
+                "version": "1.2.3",
+                "checks": ["lint", "test"],
+            },
+        )
+        (packets_dir / f"{pkt.id}.json").write_text(pkt.to_json())
+
+        result = runner.invoke(app, ["read", pkt.id, "--format", "json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        # body is a dict, not a string containing pretty-printed JSON
+        assert isinstance(data["body"], dict)
+        assert data["body"]["event"] == "deployed"
+        assert data["body"]["version"] == "1.2.3"
+        assert data["body"]["checks"] == ["lint", "test"]
+
+    def test_text_format_still_stringifies_json_content(self, packets_dir: Path) -> None:
+        """Text mode output hasn't regressed: non-seed dicts still render as
+        pretty-printed JSON for human reading."""
+        from aya.packet import ContentType
+
+        local = Identity.generate("default")
+        home = Identity.generate("home")
+        pkt = Packet(
+            **{"from": home.did, "to": local.did},
+            intent="structured payload",
+            content_type=ContentType.JSON,
+            content={"event": "deployed", "version": "1.2.3"},
+        )
+        (packets_dir / f"{pkt.id}.json").write_text(pkt.to_json())
+
+        result = runner.invoke(app, ["read", pkt.id, "--format", "text"])
+        assert result.exit_code == 0, result.output
+        # Text mode prints the pretty-printed JSON body
+        assert '"event": "deployed"' in result.output
+        assert '"version": "1.2.3"' in result.output
 
 
 # ── TestDrop ──────────────────────────────────────────────────────────────────
@@ -3536,6 +3587,88 @@ class TestDrop:
         assert result.exit_code == 0, result.output
         assert "Dropped packet" not in result.output
 
+    def test_drop_relay_fetch_times_out(
+        self,
+        profile_with_sender: Path,
+        sender: Identity,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A slow/large relay should not wedge `aya drop` indefinitely.
+
+        Mocks `fetch_pending` as an async generator that sleeps longer
+        than the configured timeout. The command should exit non-zero
+        with a RELAY_TIMEOUT error. Uses a tiny timeout (0.1s) patched
+        onto the cli module so the test is fast.
+        """
+        import asyncio as _asyncio
+
+        monkeypatch.setattr("aya.cli._RELAY_FETCH_TIMEOUT_SECONDS", 0.1)
+
+        async def slow_fetch(*args, **kwargs):
+            # Simulate a relay that keeps sending packets but each one
+            # takes longer than the timeout window. In practice this
+            # could be network latency, a large inbox, or a stalled
+            # subscription.
+            await _asyncio.sleep(2.0)
+            # pragma: no cover — never reached because the timeout fires first
+            if False:  # pragma: no cover
+                yield
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = slow_fetch
+            result = runner.invoke(
+                app,
+                [
+                    "drop",
+                    "01ABCDEFGH",  # prefix not in ingested/dropped — forces relay
+                    "--profile",
+                    str(profile_with_sender),
+                    "--format",
+                    "json",
+                ],
+            )
+
+        assert result.exit_code != 0
+        # Error payload includes the RELAY_TIMEOUT code + timeout duration
+        assert "RELAY_TIMEOUT" in result.output
+        assert "timed out" in result.output
+
+    def test_drop_relay_unreachable(
+        self,
+        profile_with_sender: Path,
+    ) -> None:
+        """An unreachable relay should emit RELAY_UNREACHABLE, not PACKET_NOT_FOUND.
+
+        Mocks `fetch_pending` to raise `RelayUnreachableError` — the error
+        that `RelayClient` raises when all connection retries are exhausted.
+        The command should exit non-zero with RELAY_UNREACHABLE in the output.
+        """
+        from aya.relay import RelayUnreachableError
+
+        async def unreachable_fetch(*args, **kwargs):
+            raise RelayUnreachableError("wss://relay.example.com")
+            if False:  # pragma: no cover
+                yield
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = unreachable_fetch
+            result = runner.invoke(
+                app,
+                [
+                    "drop",
+                    "01ABCDEFGH",  # prefix not in ingested/dropped — forces relay
+                    "--profile",
+                    str(profile_with_sender),
+                    "--format",
+                    "json",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "RELAY_UNREACHABLE" in result.output
+        # Must NOT fall through to PACKET_NOT_FOUND
+        assert "PACKET_NOT_FOUND" not in result.output
+
 
 # ── TestSendSignatureValidation ───────────────────────────────────────────────
 
@@ -3696,3 +3829,41 @@ class TestSendSignatureValidation:
         assert result.exit_code == 0, result.output
         # Signature unchanged — pass-through, not re-signed
         assert captured["packet"].signature == original_sig
+
+    def test_resign_surfaces_console_notice_in_text_mode(
+        self, profile_with_trusted: Path, tmp_path: Path
+    ) -> None:
+        """When aya send re-signs in interactive/text mode, the user
+        should see a visible notice. Silent mutation is surprising."""
+        p = Profile.load(profile_with_trusted)
+        local = p.instances["default"]
+        home_key = p.trusted_keys["home"]
+
+        pkt = Packet(
+            **{"from": local.did, "to": home_key.did},
+            intent="silent resign",
+            content="hello",
+        )
+        assert pkt.signature is None
+        packet_file = tmp_path / "packet.json"
+        packet_file.write_text(pkt.to_json())
+
+        async def fake_publish(packet, *args, **kwargs):
+            return "e" * 64
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.publish = fake_publish
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    str(packet_file),
+                    "--profile",
+                    str(profile_with_trusted),
+                    "--format",
+                    "text",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Re-signed packet" in result.output

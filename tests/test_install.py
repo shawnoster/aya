@@ -38,10 +38,10 @@ class TestIsAyaHookEntry:
         entry = {"hooks": [{"type": "command", "command": "aya hook crons"}]}
         assert _is_aya_hook_entry(entry) is True
 
-    def test_positive_ci_watch(self) -> None:
+    def test_positive_hook_watch(self) -> None:
         entry = {
             "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "aya ci watch 2>/dev/null || true"}],
+            "hooks": [{"type": "command", "command": "aya hook watch 2>/dev/null || true"}],
         }
         assert _is_aya_hook_entry(entry) is True
 
@@ -84,16 +84,33 @@ class TestIsAyaCommand:
 
 
 class TestHasAyaCron:
-    def test_present_by_command(self) -> None:
-        crontab = "*/5 * * * * /home/user/.local/bin/aya schedule tick --quiet\n"
+    def test_present_by_canonical_marker(self) -> None:
+        # Real aya-emitted lines always include CRON_COMMENT.
+        crontab = f"*/5 * * * * /home/user/.local/bin/aya schedule tick --quiet  {CRON_COMMENT}\n"
         assert _has_aya_cron(crontab) is True
 
-    def test_present_by_comment(self) -> None:
+    def test_present_by_marker_only(self) -> None:
+        # Even minimal lines that contain the marker are detected.
         crontab = f"*/10 * * * * /some/path/to/aya tick  {CRON_COMMENT}\n"
         assert _has_aya_cron(crontab) is True
 
-    def test_absent(self) -> None:
+    def test_absent_unrelated_line(self) -> None:
         crontab = "0 * * * * /usr/bin/backup.sh\n"
+        assert _has_aya_cron(crontab) is False
+
+    def test_absent_user_comment_mentioning_aya(self) -> None:
+        # Detection must NOT be substring-matched on "aya schedule tick" —
+        # user comments mentioning the command shouldn't be misclassified
+        # as aya entries (and then stripped on rewrite).
+        crontab = "# reminder: investigate aya schedule tick latency\n"
+        assert _has_aya_cron(crontab) is False
+
+    def test_absent_unmarked_legacy_line(self) -> None:
+        # A bare `aya schedule tick` line without the canonical comment
+        # is NOT detected. This is intentional — back-compat for users
+        # with very old aya entries is sacrificed for safety against
+        # false positives. Such users would need to re-run install.
+        crontab = "*/5 * * * * /usr/local/bin/aya schedule tick --quiet\n"
         assert _has_aya_cron(crontab) is False
 
     def test_empty(self) -> None:
@@ -142,10 +159,31 @@ class TestBuildCronLines:
         assert "*/60" not in lines[0]
 
 
+class TestCanonicalHookEntries:
+    """Lock-in tests for hook entries that have specific async/sync requirements."""
+
+    def test_post_tool_use_hook_crons_is_async(self) -> None:
+        """The PostToolUse `aya hook crons` entry must be async — every tool
+        call would otherwise pay a Python interpreter cold-start, blocking
+        the next tool. The sibling `aya log auto` and `aya hook watch`
+        entries are also async; the crons entry must match."""
+        post_tool_use = CANONICAL_HOOKS["PostToolUse"]
+        crons_entries = [
+            h
+            for entry in post_tool_use
+            for h in entry.get("hooks", [])
+            if "aya hook crons" in h.get("command", "")
+        ]
+        assert len(crons_entries) == 1, "Expected exactly one `aya hook crons` PostToolUse hook"
+        assert crons_entries[0].get("async") is True, (
+            "PostToolUse `aya hook crons` must have `async: True` — see PR review of #198"
+        )
+
+
 class TestParseTickInterval:
     def test_seconds(self) -> None:
         assert parse_tick_interval("30s") == 30
-        assert parse_tick_interval("1s") == 1
+        assert parse_tick_interval("5s") == 5  # minimum
         assert parse_tick_interval("59s") == 59
 
     def test_minutes(self) -> None:
@@ -185,8 +223,17 @@ class TestParseTickInterval:
             parse_tick_interval("-5m")
 
     def test_rejects_above_60m(self) -> None:
-        with pytest.raises(ValueError, match="between 1s and 60m"):
+        with pytest.raises(ValueError, match="at most 60m"):
             parse_tick_interval("2h")
+
+    def test_rejects_below_minimum_seconds(self) -> None:
+        """Sub-5s intervals would generate 12+ crontab lines per minute
+        and spawn a Python interpreter for each; the scheduler tick
+        wasn't designed for that workload. Users who need finer-grained
+        polling should run a long-running daemon instead."""
+        for too_small in ("1s", "2s", "4s"):
+            with pytest.raises(ValueError, match="at least 5s"):
+                parse_tick_interval(too_small)
 
 
 # ── Hook install/uninstall (real files) ──────────────────────────────────────
@@ -337,7 +384,7 @@ class TestInstallCron:
         assert "aya schedule tick" in written[0]
 
     def test_already_present(self, tmp_path: Path) -> None:
-        existing = "*/5 * * * * /usr/local/bin/aya schedule tick --quiet\n"
+        existing = f"*/5 * * * * /usr/local/bin/aya schedule tick --quiet  {CRON_COMMENT}\n"
 
         def mock_run(cmd, **kwargs):
             if cmd == ["crontab", "-l"]:

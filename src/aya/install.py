@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 DEFAULT_TICK_INTERVAL = "5m"  # Conservative default; configurable via --tick-interval
+
+# Minimum supported tick interval in seconds. Sub-5s ticks generate
+# 12+ crontab lines per minute (60 / N), each spawning a Python
+# interpreter; cron wasn't designed for this workload. Users who need
+# genuine sub-5s polling should write a proper long-running daemon
+# instead of abusing the scheduler tick.
+MIN_TICK_SECONDS = 5
+
 CRON_COMMENT = "# aya-scheduler-tick"
 
 CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
@@ -78,6 +86,7 @@ CANONICAL_HOOKS: dict[str, list[dict[str, Any]]] = {
                     "type": "command",
                     "command": "aya hook crons --event PostToolUse 2>/dev/null || true",
                     "statusMessage": "",
+                    "async": True,
                 }
             ]
         },
@@ -86,8 +95,8 @@ CANONICAL_HOOKS: dict[str, list[dict[str, Any]]] = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": "aya ci watch 2>/dev/null || true",
-                    "statusMessage": "Watching CI...",
+                    "command": "aya hook watch 2>/dev/null || true",
+                    "statusMessage": "Checking watches...",
                     "asyncRewake": True,
                 },
                 {
@@ -162,12 +171,16 @@ def _resolve_aya_path() -> str | None:
 def parse_tick_interval(text: str) -> int:
     """Parse a tick-interval string into total seconds.
 
-    Accepts forms like ``"30s"``, ``"1m"``, ``"5m"``, ``"1h"`` (single
-    unit only). Returns the duration in seconds.
+    Accepts forms like ``"5s"``, ``"30s"``, ``"1m"``, ``"5m"``, ``"1h"``
+    (single unit only). Returns the duration in seconds.
 
-    Raises ValueError on bad input or non-positive values, or on values
-    that exceed the supported range (1s … 60m). The upper bound exists
-    because cron's ``*/N`` syntax doesn't generalize cleanly past 60.
+    Raises ValueError on bad input, non-positive values, values below
+    ``MIN_TICK_SECONDS`` (currently 5s), or values above 60m. The lower
+    bound exists because sub-5s intervals generate 12+ crontab entries
+    per minute (each spawning a Python interpreter) — if you genuinely
+    need faster polling, run a long-running daemon instead of abusing
+    the scheduler tick. The upper bound exists because cron's ``*/N``
+    syntax doesn't generalize cleanly past 60.
     """
     text = text.strip().lower()
     if not text:
@@ -196,8 +209,14 @@ def parse_tick_interval(text: str) -> int:
         raise ValueError(f"Tick interval must be positive: {text!r}")
 
     seconds = n * unit_secs
-    if seconds < 1 or seconds > 3600:
-        raise ValueError(f"Tick interval must be between 1s and 60m, got {text!r} ({seconds}s)")
+    if seconds < MIN_TICK_SECONDS:
+        raise ValueError(
+            f"Tick interval must be at least {MIN_TICK_SECONDS}s, got {text!r} "
+            f"({seconds}s). Sub-{MIN_TICK_SECONDS}s intervals spawn too many "
+            "cron subprocesses per minute; use a long-running daemon instead."
+        )
+    if seconds > 3600:
+        raise ValueError(f"Tick interval must be at most 60m, got {text!r} ({seconds}s)")
     return seconds
 
 
@@ -248,12 +267,22 @@ def _get_current_crontab() -> str:
     return result.stdout
 
 
+def _is_aya_cron_line(line: str) -> bool:
+    """True if a crontab line is an aya-managed scheduler-tick entry.
+
+    Detection requires the canonical CRON_COMMENT marker (or its
+    sub-minute offset variant ``CRON_COMMENT-30s``). Substring-matching
+    only on ``"aya schedule tick"`` is too aggressive — it would
+    accidentally strip user comments that mention the command (e.g.
+    ``# reminder: investigate aya schedule tick latency``) when
+    rewriting the crontab.
+    """
+    return CRON_COMMENT in line
+
+
 def _has_aya_cron(crontab_text: str) -> bool:
-    """Check if any line contains an aya tick entry."""
-    for line in crontab_text.splitlines():
-        if "aya schedule tick" in line or CRON_COMMENT in line:
-            return True
-    return False
+    """Check if any line is an aya-managed tick entry."""
+    return any(_is_aya_cron_line(line) for line in crontab_text.splitlines())
 
 
 def _add_cron_entry(
@@ -280,11 +309,7 @@ def _add_cron_entry(
 
     # Strip any existing aya entries (force or no — when force, we replace;
     # when not force, _has_aya_cron above returned True so we don't reach here).
-    surviving = [
-        line
-        for line in current.splitlines()
-        if "aya schedule tick" not in line and CRON_COMMENT not in line
-    ]
+    surviving = [line for line in current.splitlines() if not _is_aya_cron_line(line)]
     new_crontab_parts = surviving + cron_lines
     new_crontab = "\n".join(new_crontab_parts) + "\n"
     if not new_crontab.strip():
@@ -308,11 +333,7 @@ def _remove_cron_entry(dry_run: bool = False) -> bool:
     if dry_run:
         return True
 
-    lines = [
-        line
-        for line in current.splitlines()
-        if "aya schedule tick" not in line and CRON_COMMENT not in line
-    ]
+    lines = [line for line in current.splitlines() if not _is_aya_cron_line(line)]
     new_crontab = "\n".join(lines) + "\n" if lines else ""
 
     if new_crontab.strip():

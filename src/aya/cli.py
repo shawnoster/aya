@@ -24,7 +24,6 @@ from rich.table import Table
 from rich.text import Text
 
 from aya import __version__
-from aya.ci import watch_pr_checks
 from aya.config import get_notebook_path, load_config, set_config_value
 from aya.context import build_context_block
 from aya.identity import Identity, Profile, TrustedKey, _assert_valid_ulid
@@ -40,15 +39,17 @@ from aya.pair import (
 )
 from aya.paths import CONFIG_PATH, PROFILE_PATH
 from aya.profile import ensure_profile
-from aya.relay import RelayClient
+from aya.relay import RelayClient, RelayUnreachableError
 
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
+from aya.rewake import emit as rewake_emit
 from aya.scheduler import (
     SEVERITY_ACTIONABLE,
     SEVERITY_HEARTBEAT,
     AlertSeverity,
     _display_items,
+    _format_watch_alert,
     add_recurring,
     add_reminder,
     add_seed_alert,
@@ -58,12 +59,14 @@ from aya.scheduler import (
     dismiss_item,
     format_pending,
     format_scheduler_status,
+    get_active_watches,
     get_pending,
     get_scheduler_status,
     get_session_crons,
     is_idle,
     list_items,
     parse_due,
+    poll_watch,
     record_activity,
     run_poll,
     run_tick,
@@ -144,15 +147,6 @@ hook_app = typer.Typer(
 )
 app.add_typer(hook_app, name="hook")
 
-# ── CI sub-app ────────────────────────────────────────────────────────────────
-
-ci_app = typer.Typer(
-    name="ci",
-    help="CI integration — watch checks, report failures.",
-    no_args_is_help=True,
-)
-app.add_typer(ci_app, name="ci")
-
 # ── Config sub-app ────────────────────────────────────────────────────────────
 
 config_app = typer.Typer(
@@ -173,6 +167,7 @@ class ErrorCode:
     PROFILE_NOT_FOUND = "PROFILE_NOT_FOUND"
     INSTANCE_NOT_FOUND = "INSTANCE_NOT_FOUND"
     RELAY_UNREACHABLE = "RELAY_UNREACHABLE"
+    RELAY_TIMEOUT = "RELAY_TIMEOUT"
     SIGNATURE_INVALID = "SIGNATURE_INVALID"
     PACKET_NOT_FOUND = "PACKET_NOT_FOUND"
     PEER_NOT_TRUSTED = "PEER_NOT_TRUSTED"
@@ -181,6 +176,15 @@ class ErrorCode:
     AMBIGUOUS_PREFIX = "AMBIGUOUS_PREFIX"
     DISPATCH_FAILED = "DISPATCH_FAILED"
     PAIR_TIMEOUT = "PAIR_TIMEOUT"
+
+
+# Relay fetch timeout in seconds — applies to commands that stream
+# pending packets from the relay for a bounded operation (e.g. aya drop
+# prefix resolution). Large or slow relays shouldn't wedge the CLI
+# indefinitely; after this many seconds, the fetch is abandoned and the
+# caller sees RELAY_TIMEOUT. Chosen to be comfortable for a healthy
+# relay + ~100 packets but short enough to feel interactive.
+_RELAY_FETCH_TIMEOUT_SECONDS = 30
 
 
 def _want_json_errors() -> bool:
@@ -629,6 +633,11 @@ def send(
         if packet.from_did == local.did:
             packet = packet.sign(local)
             logger.info("Re-signed packet %s with local instance key", packet.id)
+            if format_ != OutputFormat.JSON:
+                err.print(
+                    "[dim]Re-signed packet with local instance key "
+                    "(signature was missing or invalid).[/dim]"
+                )
         else:
             _emit_error(
                 ErrorCode.INVALID_ARGUMENT,
@@ -2031,11 +2040,7 @@ def hook_crons(
         SessionStart: ``aya hook crons --reset``
         PostToolUse:  ``aya hook crons --event PostToolUse``
     """
-    from aya.scheduler import (
-        load_registered_cron_ids,
-        reset_registered_cron_ids,
-        save_registered_cron_ids,
-    )
+    from aya.scheduler import register_new_cron_ids, reset_registered_cron_ids
 
     if reset:
         reset_registered_cron_ids()
@@ -2044,10 +2049,20 @@ def hook_crons(
     if not crons:
         return
 
-    already_registered = load_registered_cron_ids()
-    new_crons = [c for c in crons if c.get("id", "") not in already_registered]
-    if not new_crons:
+    # Atomically merge candidate cron IDs into the per-session tracker
+    # under a single file lock. The returned set is the IDs that were
+    # NOT previously in the tracker — i.e. the ones we should emit.
+    # Two concurrent processes racing on the same cron will both call
+    # register_new_cron_ids; only the lock winner sees the IDs as new.
+    # The other gets an empty set back and emits nothing. This prevents
+    # duplicate CronCreate registrations when Claude Code dispatches
+    # parallel tool calls and the PostToolUse hook fires concurrently.
+    candidate_ids = {c.get("id", "") for c in crons if c.get("id")}
+    new_ids = register_new_cron_ids(candidate_ids)
+    if not new_ids:
         return
+
+    new_crons = [c for c in crons if c.get("id", "") in new_ids]
 
     # Emit one hookSpecificOutput per new cron so each gets its own system
     # reminder and can't be truncated when multiple crons are bundled.
@@ -2072,24 +2087,177 @@ def hook_crons(
             )
         )
 
-    # Persist the IDs we just emitted so the next call (e.g. via the
-    # PostToolUse hook) doesn't double-register them.
-    updated_ids = already_registered | {c.get("id", "") for c in new_crons if c.get("id")}
-    save_registered_cron_ids(updated_ids)
-
 
 # ── ci ────────────────────────────────────────────────────────────────────────
 
 
-@ci_app.command("watch")
-def ci_watch() -> None:
-    """Watch CI checks after git push. Reads Claude hook JSON from stdin."""
+@hook_app.command("watch")
+def hook_watch() -> None:
+    """Poll all due scheduler watches and emit asyncRewake on change.
+
+    Replaces the old ``aya ci watch`` command.  Registered as a single
+    PostToolUse asyncRewake hook — handles CI checks, GitHub PR watches,
+    Jira watches, and any future provider.
+
+    On ``git push``, auto-creates a transient ``ci-checks`` watch that
+    polls PR checks and wakes Claude if they fail or time out.
+
+    Reads Claude hook JSON from stdin.
+    """
     try:
         payload = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, ValueError):
         payload = {}
 
-    raise typer.Exit(watch_pr_checks(payload))
+    exit_code = _hook_watch_impl(payload)
+    raise typer.Exit(exit_code)
+
+
+def _hook_watch_impl(payload: dict) -> int:
+    """Core logic for hook watch — testable without typer.Exit."""
+    from aya.scheduler.storage import (
+        _alerts_file,
+        _atomic_write,
+        _file_lock,
+        _load_alerts_unlocked,
+        _load_items_unlocked,
+        _scheduler_file,
+    )
+    from aya.scheduler.types import AlertDetails, _alerts_data, _scheduler_data
+
+    now = datetime.now().astimezone()
+    rewake_messages: list[str] = []
+
+    # ── Step 1: detect git push → create ci-checks watch ────────────────
+    command = payload.get("tool_input", {}).get("command", "")
+    if "git push" in command:
+        _maybe_create_ci_watch()
+
+    # ── Step 2: poll all due watches ────────────────────────────────────
+    with _file_lock():
+        items = _load_items_unlocked()
+        alerts = _load_alerts_unlocked()
+        items_modified = False
+        alerts_modified = False
+
+        for item in items:
+            if item.get("type") != "watch" or item.get("status") != "active":
+                continue
+
+            # Respect poll interval
+            last = item.get("last_checked_at")
+            interval = item.get("poll_interval_minutes", 30)
+            if last:
+                next_check = datetime.fromisoformat(last) + timedelta(minutes=interval)
+                if now < next_check:
+                    continue
+
+            new_state, changed = poll_watch(item)
+            if new_state is None:
+                continue
+
+            item["last_checked_at"] = now.isoformat()
+            item["last_state"] = new_state
+            items_modified = True
+
+            if changed:
+                alert_msg = _format_watch_alert(item, new_state)
+                from aya.scheduler.display import _create_alert as create_alert
+
+                alert = create_alert(
+                    source_item_id=item["id"],
+                    message=alert_msg,
+                    details=AlertDetails(**new_state),  # type: ignore[arg-type]
+                    now=now,
+                )
+                alerts.append(alert)
+                alerts_modified = True
+                rewake_messages.append(alert_msg)
+
+            from aya.scheduler.providers import _evaluate_auto_remove
+
+            if _evaluate_auto_remove(item, new_state):
+                item["status"] = "dismissed"
+                items_modified = True
+
+        if items_modified:
+            _atomic_write(_scheduler_file(), _scheduler_data(items))
+        if alerts_modified:
+            _atomic_write(_alerts_file(), _alerts_data(alerts))
+
+    # ── Step 3: emit single asyncRewake with all changes ────────────────
+    if rewake_messages:
+        rewake_emit(" | ".join(rewake_messages))
+        return 2
+    return 0
+
+
+def _maybe_create_ci_watch() -> None:
+    """If this was a git push to a GitHub PR branch, create a ci-checks watch."""
+    timeout = 15
+
+    def _run_cmd(cmd: list[str]) -> tuple[int, str]:
+        try:
+            result = subprocess.run(  # noqa: S603
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+            return result.returncode, (result.stdout or "").strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return 127, ""
+
+    rc, remote = _run_cmd(["git", "remote", "get-url", "origin"])
+    if rc != 0 or "github.com" not in remote:
+        return
+
+    rc, branch = _run_cmd(["git", "branch", "--show-current"])
+    if rc != 0 or not branch or branch in ("main", "master"):
+        return
+
+    # Parse owner/repo from remote URL
+    m = re.match(r".*github\.com[:/]([^/]+)/([^/.]+)", remote)
+    if not m:
+        return
+    owner, repo = m.group(1), m.group(2)
+
+    # Check if PR exists for this branch
+    rc, pr_num = _run_cmd(
+        [
+            "gh",
+            "pr",
+            "view",
+            branch,
+            "--repo",
+            f"{owner}/{repo}",
+            "--json",
+            "number",
+            "-q",
+            ".number",
+        ]
+    )
+    if rc != 0 or not pr_num:
+        return
+
+    # Check if we already have an active ci-checks watch for this PR
+    existing = get_active_watches()
+    for w in existing:
+        if w.get("provider") != "ci-checks":
+            continue
+        cfg = w.get("watch_config", {})
+        if cfg.get("owner") == owner and cfg.get("repo") == repo and cfg.get("pr") == int(pr_num):
+            return  # already watching
+
+    add_watch(
+        provider="ci-checks",
+        target=f"{owner}/{repo}#{pr_num}",
+        message=f"CI checks on PR #{pr_num} ({owner}/{repo}, branch: {branch})",
+        condition="checks_failed",
+        interval=1,
+        remove_when="checks_complete",
+    )
 
 
 # ── profile ───────────────────────────────────────────────────────────────────
@@ -2447,10 +2615,21 @@ def read(
     from aya.packet import Packet
 
     packet = Packet.from_json(matches[0].read_text())
-    body = _extract_body(packet.content, packet.content_type)
 
     if format_ == OutputFormat.JSON:
-        result: dict[str, object] = {"id": packet.id, "body": body}
+        # In JSON output mode, non-seed dict content (e.g. application/json
+        # packets) is passed through as a structured value rather than
+        # stringified. Callers that ``jq`` or ``python -c 'json.load'`` over
+        # the output get a real object, not a string containing pretty-printed
+        # JSON. Seed-shape dicts still go through _extract_body so the
+        # ``body`` field stays a readable string (opener + context + qs).
+        body_value: object
+        if isinstance(packet.content, dict) and packet.content_type != ContentType.SEED:
+            body_value = packet.content
+        else:
+            body_value = _extract_body(packet.content, packet.content_type)
+
+        result: dict[str, object] = {"id": packet.id, "body": body_value}
         if meta:
             result["from"] = packet.from_did
             result["sent_at"] = packet.sent_at
@@ -2459,6 +2638,8 @@ def read(
         _output_json(result)
         raise typer.Exit(0)
 
+    # Text mode — always render as a string via _extract_body.
+    body = _extract_body(packet.content, packet.content_type)
     if meta:
         console.print(f"[bold]{packet.intent}[/bold]  ·  {packet.id[:12]}")
         console.print(f"[dim]from {packet.from_did[:30]}…  ·  {packet.sent_at[:16]}[/dim]")
@@ -2515,15 +2696,48 @@ def drop(
             return  # unreachable, _emit_error raises
         else:
             # Fall back to the relay for packets that were never ingested
-            # (bad-sig, spam, untrusted senders that aya skipped).
+            # (bad-sig, spam, untrusted senders that aya skipped). Wrap
+            # the stream in asyncio.timeout() so a slow or large relay
+            # can't wedge the command indefinitely — after
+            # _RELAY_FETCH_TIMEOUT_SECONDS we abandon the fetch and
+            # report RELAY_TIMEOUT so the caller can retry with a full
+            # ID or a different --relay.
             relay_urls = [relay] if relay else p.default_relays
             client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
             relay_matches: list[str] = []
-            async for pkt in client.fetch_pending():
-                if pkt.id.startswith(packet_id):
-                    relay_matches.append(pkt.id)
-                    if len(relay_matches) > 1:
-                        break  # ambiguous — stop early
+            try:
+                async with asyncio.timeout(_RELAY_FETCH_TIMEOUT_SECONDS):
+                    async for pkt in client.fetch_pending():
+                        if pkt.id.startswith(packet_id):
+                            relay_matches.append(pkt.id)
+                            if len(relay_matches) > 1:
+                                break  # ambiguous — stop early
+            except TimeoutError:
+                _emit_error(
+                    ErrorCode.RELAY_TIMEOUT,
+                    (
+                        f"Relay fetch timed out after {_RELAY_FETCH_TIMEOUT_SECONDS}s "
+                        f"while resolving prefix '{packet_id}'. The relay may be slow "
+                        f"or the inbox very large — retry with the full packet ID, "
+                        f"or use --relay to point at a different relay."
+                    ),
+                    {
+                        "packet_id": packet_id,
+                        "timeout_seconds": _RELAY_FETCH_TIMEOUT_SECONDS,
+                    },
+                )
+                return  # unreachable
+            except RelayUnreachableError:
+                _emit_error(
+                    ErrorCode.RELAY_UNREACHABLE,
+                    (
+                        f"Could not connect to relay while resolving prefix '{packet_id}'. "
+                        "Check your network connection or use --relay to point at a "
+                        "different relay."
+                    ),
+                    {"packet_id": packet_id},
+                )
+                return  # unreachable
 
             if not relay_matches:
                 _emit_error(

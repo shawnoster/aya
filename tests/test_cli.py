@@ -4001,6 +4001,40 @@ class TestRelayAdd:
         )
         assert result.exit_code == 2, result.output
 
+    def test_add_rejects_bare_scheme(self, profile_with_instance: Path) -> None:
+        """wss:// with no host must not persist (Copilot review catch on #213)."""
+        result = runner.invoke(
+            app,
+            [
+                "relay",
+                "add",
+                "wss://",
+                "--profile",
+                str(profile_with_instance),
+                "--format",
+                "json",
+            ],
+        )
+        assert result.exit_code == 2, result.output
+        reloaded = Profile.load(profile_with_instance)
+        assert "wss://" not in reloaded.default_relays
+
+    def test_add_rejects_internal_whitespace(self, profile_with_instance: Path) -> None:
+        """urlparse accepts 'wss://relay .example' silently; the CLI must not."""
+        result = runner.invoke(
+            app,
+            [
+                "relay",
+                "add",
+                "wss://relay .example",
+                "--profile",
+                str(profile_with_instance),
+                "--format",
+                "json",
+            ],
+        )
+        assert result.exit_code == 2, result.output
+
 
 class TestRelayRemove:
     def test_remove_by_url(self, profile_with_instance: Path) -> None:

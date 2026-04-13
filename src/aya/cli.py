@@ -2889,9 +2889,15 @@ def _load_profile_for_relay(profile_path: Path) -> Profile:
 
 
 def _validate_relay_url(url: str) -> None:
-    """Reject anything that isn't a valid ws:// or wss:// URL with a non-empty host."""
+    """Reject anything that isn't a valid ws:// or wss:// URL with a non-empty host.
+
+    Rejects whitespace anywhere in the URL, not just leading/trailing — urlparse
+    happily accepts 'wss://relay .example' with a space in the netloc, which
+    would later fail at websockets.connect() rather than at the CLI boundary.
+    """
     parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in {"ws", "wss"} or not parsed.hostname or url != url.strip():
+    has_whitespace = any(c.isspace() for c in url)
+    if parsed.scheme not in {"ws", "wss"} or not parsed.hostname or has_whitespace:
         _emit_error(
             ErrorCode.INVALID_ARGUMENT,
             f"Relay URL must be a valid wss:// or ws:// address with a hostname (got {url!r}).",

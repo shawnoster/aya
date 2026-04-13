@@ -81,11 +81,6 @@ class ServiceCredential:
     set_vars: tuple[str, ...]
     missing: tuple[str, ...]
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "required", tuple(self.required))
-        object.__setattr__(self, "set_vars", tuple(self.set_vars))
-        object.__setattr__(self, "missing", tuple(self.missing))
-
 
 @dataclass(frozen=True)
 class CredentialsReport:
@@ -104,9 +99,6 @@ class CredentialsReport:
     lit: int
     partial: int
     dark: int
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "services", tuple(self.services))
 
 
 # ── Check logic ───────────────────────────────────────────────────────────────
@@ -151,18 +143,13 @@ def check_service(
         return ServiceCredential(
             name=name,
             state="lit",
-            required=[],
-            set_vars=[],
-            missing=[],
+            required=(),
+            set_vars=(),
+            missing=(),
         )
 
-    set_vars: list[str] = []
-    missing: list[str] = []
-    for v in required:
-        if _is_set(v, env):
-            set_vars.append(v)
-        else:
-            missing.append(v)
+    set_vars = tuple(v for v in required if _is_set(v, env))
+    missing = tuple(v for v in required if not _is_set(v, env))
 
     if not set_vars:
         state: CredentialState = "dark"
@@ -174,7 +161,7 @@ def check_service(
     return ServiceCredential(
         name=name,
         state=state,
-        required=list(required),
+        required=tuple(required),
         set_vars=set_vars,
         missing=missing,
     )
@@ -196,7 +183,7 @@ def check_credentials(
         A ``CredentialsReport`` aggregating per-service state.
     """
     source = services if services is not None else CANONICAL_SERVICES
-    results = [check_service(name, required, env) for name, required in source.items()]
+    results = tuple(check_service(name, required, env) for name, required in source.items())
 
     lit = sum(1 for r in results if r.state == "lit")
     partial = sum(1 for r in results if r.state == "partial")

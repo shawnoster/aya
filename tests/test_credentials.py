@@ -21,21 +21,21 @@ class TestCheckService:
         env = {"A": "value-a", "B": "value-b"}
         result = check_service("svc", ["A", "B"], env=env)
         assert result.state == "lit"
-        assert result.set_vars == ["A", "B"]
-        assert result.missing == []
+        assert result.set_vars == ("A", "B")
+        assert result.missing == ()
 
     def test_no_vars_set_is_dark(self) -> None:
         result = check_service("svc", ["A", "B"], env={})
         assert result.state == "dark"
-        assert result.set_vars == []
-        assert result.missing == ["A", "B"]
+        assert result.set_vars == ()
+        assert result.missing == ("A", "B")
 
     def test_some_vars_set_is_partial(self) -> None:
         env = {"A": "value-a"}
         result = check_service("svc", ["A", "B", "C"], env=env)
         assert result.state == "partial"
-        assert result.set_vars == ["A"]
-        assert result.missing == ["B", "C"]
+        assert result.set_vars == ("A",)
+        assert result.missing == ("B", "C")
 
     def test_empty_string_counts_as_unset(self) -> None:
         """`export A=` leaves A set to an empty string. We treat that
@@ -44,27 +44,30 @@ class TestCheckService:
         env = {"A": "", "B": "value-b"}
         result = check_service("svc", ["A", "B"], env=env)
         assert result.state == "partial"
-        assert result.set_vars == ["B"]
-        assert result.missing == ["A"]
+        assert result.set_vars == ("B",)
+        assert result.missing == ("A",)
 
     def test_whitespace_only_counts_as_unset(self) -> None:
         """Tokens accidentally set to whitespace are not credentials."""
         env = {"A": "   ", "B": "\t\n"}
         result = check_service("svc", ["A", "B"], env=env)
         assert result.state == "dark"
-        assert result.set_vars == []
+        assert result.set_vars == ()
 
     def test_single_var_service(self) -> None:
         result = check_service("github", ["GITHUB_TOKEN"], env={"GITHUB_TOKEN": "ghp_xxx"})
         assert result.state == "lit"
-        assert result.required == ["GITHUB_TOKEN"]
+        assert result.required == ("GITHUB_TOKEN",)
 
-    def test_required_list_is_copied_not_aliased(self) -> None:
-        """Mutating the returned required list must not affect the caller's list."""
+    def test_required_is_immutable_and_independent_of_caller(self) -> None:
+        """required is stored as an immutable tuple; mutating the caller's
+        input list must not affect the credential, and the tuple itself
+        cannot be mutated."""
         original = ["A", "B"]
         result = check_service("svc", original, env={"A": "v"})
-        result.required.append("C")
-        assert original == ["A", "B"]
+        assert isinstance(result.required, tuple)
+        original.append("C")
+        assert result.required == ("A", "B")
 
     def test_defaults_to_os_environ(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEST_CRED_VAR_42", "set")
@@ -83,9 +86,9 @@ class TestCheckService:
         report it as 'dark' because set_vars is empty, which is wrong."""
         result = check_service("svc", [], env={})
         assert result.state == "lit"
-        assert result.required == []
-        assert result.set_vars == []
-        assert result.missing == []
+        assert result.required == ()
+        assert result.set_vars == ()
+        assert result.missing == ()
 
 
 # ── check_credentials ─────────────────────────────────────────────────────────
@@ -142,8 +145,8 @@ class TestCheckCredentials:
         report = check_credentials(services=services, env=env)
         service = report.services[0]
         assert service.state == "partial"
-        assert service.set_vars == ["ATLASSIAN_EMAIL"]
-        assert service.missing == ["ATLASSIAN_API_TOKEN", "ATLASSIAN_SERVER_URL"]
+        assert service.set_vars == ("ATLASSIAN_EMAIL",)
+        assert service.missing == ("ATLASSIAN_API_TOKEN", "ATLASSIAN_SERVER_URL")
 
     def test_defaults_to_canonical_services_and_os_environ(
         self, monkeypatch: pytest.MonkeyPatch

@@ -29,12 +29,15 @@ from typing import Literal
 # ── Canonical services ────────────────────────────────────────────────────────
 #
 # Each entry maps a service name to the list of environment variables
-# that must be set for that service to be "lit". All vars are required
-# (AND, not OR). If you need OR semantics (e.g. GITHUB_TOKEN *or*
-# GITHUB_PERSONAL_ACCESS_TOKEN), add both canonical names here and let
-# the check report one as missing — the user can set either and at
-# least one of the two paths will show "lit" once user-level overrides
-# land.
+# that must be set for that service to be "lit". All vars in the list
+# are required together (AND, not OR).
+#
+# This model does not currently represent alternative credentials for a
+# single service. For example, `GITHUB_TOKEN` *or*
+# `GITHUB_PERSONAL_ACCESS_TOKEN` cannot be expressed by putting both in
+# the same list, because that would require both to be set. Supporting
+# OR semantics would require a different data model or explicit logic in
+# the readiness check.
 
 CANONICAL_SERVICES: dict[str, list[str]] = {
     "github": ["GITHUB_TOKEN"],
@@ -64,17 +67,24 @@ class ServiceCredential:
         name: canonical service name (``"github"``, ``"atlassian"``, …)
         state: ``"lit"`` if every required env var is set,
                ``"dark"`` if none are set, ``"partial"`` otherwise.
-        required: the full list of env var names this service needs.
-        set_vars: the subset of ``required`` that are currently set
-                  to a non-empty value.
-        missing: the subset of ``required`` that are unset or empty.
+        required: the full immutable tuple of env var names this service
+                  needs.
+        set_vars: the immutable subset of ``required`` that are currently
+                  set to a non-empty value.
+        missing: the immutable subset of ``required`` that are unset or
+                 empty.
     """
 
     name: str
     state: CredentialState
-    required: list[str]
-    set_vars: list[str]
-    missing: list[str]
+    required: tuple[str, ...]
+    set_vars: tuple[str, ...]
+    missing: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "required", tuple(self.required))
+        object.__setattr__(self, "set_vars", tuple(self.set_vars))
+        object.__setattr__(self, "missing", tuple(self.missing))
 
 
 @dataclass(frozen=True)
@@ -82,18 +92,21 @@ class CredentialsReport:
     """Aggregate readiness report across all canonical services.
 
     Attributes:
-        services: per-service readiness, ordered by ``CANONICAL_SERVICES``
-                  iteration order (insertion order, which matches the
-                  source dict — stable and predictable).
+        services: immutable per-service readiness, ordered by
+                  ``CANONICAL_SERVICES`` iteration order (insertion order,
+                  which matches the source dict — stable and predictable).
         lit: count of services in the ``"lit"`` state.
         partial: count of services in the ``"partial"`` state.
         dark: count of services in the ``"dark"`` state.
     """
 
-    services: list[ServiceCredential]
+    services: tuple[ServiceCredential, ...]
     lit: int
     partial: int
     dark: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "services", tuple(self.services))
 
 
 # ── Check logic ───────────────────────────────────────────────────────────────
@@ -143,8 +156,13 @@ def check_service(
             missing=[],
         )
 
-    set_vars = [v for v in required if _is_set(v, env)]
-    missing = [v for v in required if not _is_set(v, env)]
+    set_vars: list[str] = []
+    missing: list[str] = []
+    for v in required:
+        if _is_set(v, env):
+            set_vars.append(v)
+        else:
+            missing.append(v)
 
     if not set_vars:
         state: CredentialState = "dark"

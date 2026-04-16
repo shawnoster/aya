@@ -37,7 +37,7 @@ def _get_jira_credentials() -> tuple[str, str, str]:
 
 # ── watch providers ──────────────────────────────────────────────────────────
 
-_gh_missing_warned = False
+_gh_missing_warned: bool = False
 
 
 def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list[Any] | None:
@@ -63,7 +63,7 @@ def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list[Any] | 
             _gh_missing_warned = True
         return None
     except (subprocess.TimeoutExpired, json.JSONDecodeError) as e:
-        logging.debug("gh command failed: %s", e)
+        logger.debug("gh command failed: %s", e)
         return None
 
 

@@ -3077,7 +3077,9 @@ def relay_status(
     format_ = resolve_format(format_)
     p = _load_profile_for_relay(profile)
 
-    # Instance label
+    # Resolve and validate the requested instance
+    _resolve_instance(p, as_)
+    # Derive display label: use as_ if explicit, otherwise the single registered instance
     instance_label = as_ if as_ != "default" else next(iter(p.instances.keys()), "default")
 
     # Trusted peers

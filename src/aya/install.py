@@ -510,7 +510,8 @@ def install_scheduler(
         except FileNotFoundError:
             result.errors.append(
                 "crontab not found — skipping cron install. "
-                "On WSL, start the cron service with: sudo service cron start"
+                "Install cron/crontab and ensure the 'crontab' executable is on PATH. "
+                "On WSL, you may also need to start the service: sudo service cron start"
             )
         except subprocess.CalledProcessError as exc:
             result.errors.append(f"crontab failed: {exc}")

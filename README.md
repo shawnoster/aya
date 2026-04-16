@@ -29,6 +29,10 @@ uv sync
 # uv tool install .
 ```
 
+> **Python 3.14 note:** coincurve 21.0.0 does not ship a cp314 wheel and
+> the source build fails on cffi 2.0.0. Use Python 3.12 or 3.13 until
+> this is resolved upstream. Pin with: `uv tool install --python 3.12 ...`
+
 ## Quick start
 
 ```bash

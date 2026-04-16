@@ -1,15 +1,15 @@
 ---
 name: aya-send
 description: >
-  Pack and dispatch a packet to another machine. Invoke when the user says
-  "send this to home", "send this to work", "pack for home", "dispatch to work",
+  Pack and send a packet to another machine. Invoke when the user says
+  "send this to home", "send this to work", "pack for home", "send to work",
   "send context", or wants to share files/notes with another instance.
 argument-hint: "<recipient> [message or intent]"
 ---
 
 # Send
 
-Pack and dispatch a packet to another aya instance in one guided step.
+Pack and send a packet to another aya instance in one guided step.
 
 ---
 
@@ -30,7 +30,7 @@ Pack and dispatch a packet to another aya instance in one guided step.
 
 5. **Determine the local identity.** Run `aya status` and read the identity name. Use that as the `--as` value.
 
-6. **Confirm before sending.** Show the user what will be dispatched:
+6. **Confirm before sending.** Show the user what will be sended:
 
    ```
    Sending to: {recipient}
@@ -45,11 +45,11 @@ Pack and dispatch a packet to another aya instance in one guided step.
 
    ```bash
    # Content packet
-   aya dispatch --as {identity} --to {recipient} \
+   aya send --as {identity} --to {recipient} \
      --intent "{intent}" --files {files}
 
    # Seed packet
-   aya dispatch --as {identity} --to {recipient} --seed \
+   aya send --as {identity} --to {recipient} --seed \
      --intent "{intent}" --opener "{question}"
    ```
 
@@ -63,4 +63,4 @@ Pack and dispatch a packet to another aya instance in one guided step.
 - If the user says "ask work to investigate X", that's a seed packet to `work`.
 - Keep intents short and descriptive — they're metadata, not the content.
 - Packets expire after 7 days by default.
-- The recipient must be a trusted/paired instance. If dispatch fails with an unknown recipient, suggest running `aya pair`.
+- The recipient must be a trusted/paired instance. If send fails with an unknown recipient, suggest running `aya pair`.

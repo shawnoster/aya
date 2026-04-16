@@ -30,7 +30,7 @@ Pack and send a packet to another aya instance in one guided step.
 
 5. **Determine the local identity.** Run `aya status` and read the identity name. Use that as the `--as` value.
 
-6. **Confirm before sending.** Show the user what will be sended:
+6. **Confirm before sending.** Show the user what will be sent:
 
    ```
    Sending to: {recipient}
@@ -41,7 +41,7 @@ Pack and send a packet to another aya instance in one guided step.
 
    Wait for confirmation.
 
-7. **Dispatch.** Run the appropriate command:
+7. **Send.** Run the appropriate command:
 
    ```bash
    # Content packet

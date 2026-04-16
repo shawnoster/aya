@@ -260,7 +260,7 @@ decision" or "Continue reading list research".
 
 **Show draft before sending:** "Here's what I'd send — look right?"
 
-### Step 3 — Dispatch
+### Step 3 — Send
 
 ### Type guide
 

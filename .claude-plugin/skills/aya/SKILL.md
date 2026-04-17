@@ -14,6 +14,26 @@ Manage the aya assistant toolkit — identity, pairing, health, updates, and wat
 
 ---
 
+## Tool surface
+
+When the aya MCP server is connected, prefer the `aya_*` tools listed
+inline with each verb below. Fall back to the CLI when any of these apply:
+
+- The MCP server isn't connected (no `aya_*` tools in the available set).
+- The operation has no MCP equivalent — most of Setup (`aya init`,
+  `aya schedule install`, `aya schedule recurring`), all of Pair,
+  Refresh (`uv tool` commands), and `aya schedule dismiss`.
+- The operation needs flags the MCP tool doesn't expose — e.g.
+  `aya_schedule_watch` has no `--remove-when`, `-i`, or `--condition`,
+  so Watch setup is CLI-preferred.
+
+MCP tools that act on a local identity (e.g. `aya_relay_status`,
+`aya_send`, `aya_receive`) take `instance=<label>` where the CLI takes
+`--as <label>`. Tools like `aya_status`, `aya_schedule_watch`, and
+`aya_config_show` don't take an identity argument.
+
+---
+
 ## 0. Route intent
 
 ### Explicit subcommands
@@ -47,9 +67,19 @@ Manage the aya assistant toolkit — identity, pairing, health, updates, and wat
 
 Full first-run bootstrap: identity, hooks, relay polling, and optional pairing.
 
+Setup is **mostly CLI-only** — no MCP tools cover `aya init`,
+`aya schedule install`, or `aya schedule recurring`. Only the initial
+"check current state" step has an MCP equivalent.
+
 ### Steps
 
-1. **Check current state.** Run `aya status` to see what's already configured. If aya is fully set up (identity exists, hooks installed), report that and ask if the user wants to re-pair or reconfigure anything. Don't re-run setup unnecessarily.
+1. **Check current state.**
+   - **MCP:** `aya_status()` — returns systems/alerts/watches summary.
+   - **CLI:** `aya status`.
+
+   If aya is fully set up (identity exists, hooks installed), report
+   that and ask if the user wants to re-pair or reconfigure anything.
+   Don't re-run setup unnecessarily.
 
 2. **Initialize identity.** If no instance exists:
 
@@ -125,7 +155,8 @@ Full first-run bootstrap: identity, hooks, relay polling, and optional pairing.
 
 ## 2. Pair
 
-Walk through pairing this aya instance with another machine.
+Pair is **CLI-only** (no `aya_pair` MCP tool). Walk through pairing this
+aya instance with another machine.
 
 ### Steps
 
@@ -183,11 +214,14 @@ Run a full aya readiness check and surface anything actionable.
 
 ### Steps
 
-1. **Run status:**
+1. **Run status.**
+   - **MCP (preferred):** `aya_status()` — returns the same structured
+     payload directly, no TTY/format concerns.
+   - **CLI fallback:**
 
-   ```bash
-   aya status -f json
-   ```
+     ```bash
+     aya status -f json
+     ```
 
 2. **Parse and present.** Render in this order, skipping empty sections:
 
@@ -216,13 +250,17 @@ Run a full aya readiness check and surface anything actionable.
 
 3. **Offer next steps** if there are alerts:
    - "Want me to triage these alerts?" → run `/relay check`
-   - "Want to dismiss any?" → `aya schedule dismiss {id}`
+   - "Want to dismiss any?" → `aya schedule dismiss {id}` (CLI-only; no
+     MCP equivalent).
 
 ---
 
 ## 4. Refresh
 
-Uninstall the current aya installation and reinstall the latest version from GitHub, with verification.
+Refresh is **CLI-only** — `uv tool` installer commands and
+`aya schedule install` have no MCP equivalents. Uninstall the current
+aya installation and reinstall the latest version from GitHub, with
+verification.
 
 Run these commands in sequence:
 
@@ -293,12 +331,22 @@ Add a watch on a GitHub PR (or other target) with sensible defaults.
 
 5. **Create the watch.**
 
-   ```bash
-   aya schedule watch {provider} {target} \
-     -m "{message}" \
-     --remove-when merged_or_closed \
-     -i {interval}
-   ```
+   `aya_schedule_watch` exists as an MCP tool but exposes only
+   `provider`/`target`/`message` — it cannot set `--remove-when`, the
+   poll interval, or a condition. Use MCP only for a minimal default
+   watch; use CLI when the watch needs auto-remove, a custom interval,
+   or a condition (the common case for GitHub PRs):
+
+   - **MCP (minimal watch):** `aya_schedule_watch(provider="{provider}",
+     target="{target}", message="{message}")`.
+   - **CLI (preferred for PR watches with auto-remove + interval):**
+
+     ```bash
+     aya schedule watch {provider} {target} \
+       -m "{message}" \
+       --remove-when merged_or_closed \
+       -i {interval}
+     ```
 
 6. **Confirm.** Report the watch ID and that it's active.
 

@@ -82,9 +82,13 @@ Full first-run bootstrap: identity, hooks, relay polling, and optional pairing.
 
    ```bash
    aya schedule recurring -m "health-break" -c "*/20 * * * *" \
-     -p "Deliver a health break reminder. Suggest standing up, stretching, getting water, and walking for at least 2 minutes. Keep it warm, brief, and varied — two sentences max." \
+     -p "Deliver a health break reminder in the Ship Mind voice. Output ONLY the reminder message itself — no preamble, no confirmation afterward. Suggest standing up, stretching, getting water, and walking for at least 2 minutes. Warm, brief, varied — two sentences max." \
      --idle-back-off 10m
    ```
+
+   **Output style rule for all session crons:**
+   - Progress/logging crons: prompt must end with "Output nothing. Silence is correct."
+   - Reminder/health crons: prompt must include "Output ONLY the reminder message itself — no preamble, no confirmation afterward."
 
 6. **Wire up the plugin.** Check if the user's shell profile already has a claude alias with `--plugin-dir`. If not, suggest adding:
 

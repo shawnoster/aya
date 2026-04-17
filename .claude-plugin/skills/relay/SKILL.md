@@ -23,6 +23,25 @@ machine that has run `aya init` with a real label.
 
 ---
 
+## Tool surface
+
+When the aya MCP server is connected, prefer the `aya_*` tools listed
+inline with each verb below. Fall back to the CLI when any of these apply:
+
+- The MCP server isn't connected (no `aya_*` tools in the available set).
+- The operation needs a flag the MCP tool doesn't expose — notably
+  `--seed --opener` for lightweight seed packets, `--files` for file
+  attachments, or stderr capture for signature-verification warnings.
+- The operation has no MCP equivalent: `aya drop`, `aya pair`,
+  `aya init`, `aya schedule install`, `aya schedule recurring`,
+  `aya schedule dismiss`.
+
+MCP tools take `instance=<label>` where the CLI takes `--as <label>`.
+`aya_receive` auto-ingests trusted packets by default, so no
+`--auto-ingest`/`--skip-untrusted` equivalents are needed.
+
+---
+
 ## 0. Route intent
 
 ### Explicit subcommands (highest priority)
@@ -65,16 +84,23 @@ machine that has run `aya init` with a real label.
 
 ## 1. Check
 
-Poll **and** ingest in one shot. `--auto-ingest` ingests trusted packets
-without prompting; `--skip-untrusted` prevents the command from blocking
-on confirmation for unknown senders (non-interactive safety);
-`--format json` forces structured output regardless of TTY detection
-(default `auto` produces Rich text on a real terminal, which breaks
-JSON parsing downstream).
+Poll **and** ingest in one shot.
+
+**MCP (preferred):** `aya_receive(instance="<local-label>")` — auto-ingests
+trusted packets and skips untrusted ones by default; no flags needed.
+
+**CLI fallback** — use when MCP isn't available, or when capturing
+stderr to surface signature-verification warnings (see below):
 
 ```bash
 aya receive --as <local-label> --auto-ingest --skip-untrusted --format json
 ```
+
+CLI flag notes: `--auto-ingest` ingests trusted packets without
+prompting; `--skip-untrusted` prevents blocking on confirmation for
+unknown senders (non-interactive safety); `--format json` forces
+structured output regardless of TTY detection (default `auto` produces
+Rich text on a real terminal, which breaks JSON parsing downstream).
 
 For each new packet in the returned `packets` array, immediately run
 verb 2 (Read) inline and present the body. Lead with the most recent.
@@ -103,24 +129,29 @@ on every poll until you explicitly drop it locally:
 aya drop <packet-id> --as <local-label>
 ```
 
-`aya drop` adds the ID to the local profile's `dropped_ids` list, and
-both `aya inbox` and `aya inbox --all` filter it out from then on. The
-drop is local to this profile — the packet stays on the relay until
-natural expiry.
+`aya drop` is CLI-only (no MCP equivalent). It adds the ID to the local
+profile's `dropped_ids` list, and both `aya inbox` and `aya inbox --all`
+filter it out from then on. The drop is local to this profile — the
+packet stays on the relay until natural expiry.
 
 ---
 
 ## 2. Read
 
-Use `aya read <packet-id>` to extract the body cleanly without dumping
-the envelope JSON. Add `--meta` to include id/from/sent_at/intent
-header fields, and `--format json` for structured consumption.
+Extract the body cleanly without dumping the envelope JSON. Include
+`meta`/`--meta` to get id/from/sent_at/intent header fields alongside
+the body.
+
+**MCP (preferred):** `aya_read(packet_id="<id>", meta=true)` — returns
+a JSON object with body/from/sent_at/intent.
+
+**CLI fallback:**
 
 ```bash
 aya read --meta --format json <packet-id>
 ```
 
-The JSON output has shape:
+The JSON output (same shape from both surfaces) has:
 
 ```json
 {
@@ -146,68 +177,74 @@ Intent: <intent>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-For text-mode rendering directly to the user (no parsing needed):
+For text-mode rendering directly to the user (no JSON parse), CLI is
+simpler:
 
 ```bash
 aya read --meta <packet-id>
 ```
 
-`aya read` returns DIDs in the `from` field, not human labels. To
+Both surfaces return DIDs in the `from` field, not human labels. To
 resolve a DID to a label (e.g. `work` instead of `did:key:z6MkqxSg…`),
-look it up via `aya inbox --as <local-label> --format json` (which
-includes `from_label`) or via the local profile's `trusted_keys` map.
+look it up via `aya_inbox(instance="<local-label>")` (MCP, preferred)
+or `aya inbox --as <local-label> --format json` (CLI) — both include
+`from_label`. Or read the local profile's `trusted_keys` map directly.
 See verb 3 (Reply) for the lookup pattern.
 
-For browsing past packets: `aya packets -n 10` (lists historical, not
-just unread).
+For browsing past packets: `aya_packets(limit=10)` (MCP) or
+`aya packets -n 10` (CLI).
 
 ---
 
 ## 3. Reply
 
-Always thread via `--in-reply-to`. The recipient comes from the original
-packet — but `aya read` only returns the sender DID in `from`, not a
-human label. Two options:
+Always thread via `in_reply_to` / `--in-reply-to`. The recipient comes
+from the original packet — but the `from` field is a sender DID, not a
+human label. Two lookup options:
 
-**Option A** (preferred when packet is still in inbox): resolve via
-`aya inbox --format json`, which includes both `from_did` and
-`from_label`:
+**Option A** (preferred when packet is still in inbox): resolve the
+label via inbox. The MCP tool returns structured data directly:
 
-```bash
-PEER_LABEL=$(aya inbox --as <local-label> --format json | python3 -c "
-import sys, json
-data = json.loads(sys.stdin.read())
-packets = data.get('packets', []) if isinstance(data, dict) else data
-for p in packets:
-    if p.get('id', '').startswith('<original-packet-id>'):
-        print(p.get('from_label') or p.get('from_did', ''))
-        break
-")
-```
+- **MCP:** `aya_inbox(instance="<local-label>")` → find the entry
+  whose `id` starts with `<original-packet-id>`, read `from_label`.
+- **CLI:**
+
+  ```bash
+  PEER_LABEL=$(aya inbox --as <local-label> --format json | python3 -c "
+  import sys, json
+  data = json.loads(sys.stdin.read())
+  packets = data.get('packets', []) if isinstance(data, dict) else data
+  for p in packets:
+      if p.get('id', '').startswith('<original-packet-id>'):
+          print(p.get('from_label') or p.get('from_did', ''))
+          break
+  ")
+  ```
 
 **Option B** (fallback if packet has cleared the inbox): use the DID
-from `aya read --meta` directly. `aya send --to` accepts a DID as
-well as a label.
+from `aya_read(packet_id, meta=true)` (MCP) or
+`aya read --meta --format json <id>` (CLI). The send surfaces accept a
+DID as well as a label.
 
-```bash
-PEER=$(aya read --meta --format json <original-packet-id> | python3 -c "
-import sys, json
-print(json.loads(sys.stdin.read())['from'])
-")
-```
+Then send the reply. Choose the form that fits the content:
 
-Then send:
+- **Content reply (markdown body, MCP preferred):**
 
-```bash
-aya send --as <local-label> --to "$PEER_LABEL_OR_DID" \
-  --intent "re: <condensed original intent>" \
-  --seed \
-  --in-reply-to <original-packet-id> \
-  --opener "<reply body>"
-```
+  `aya_send(to="<peer_label_or_did>", intent="re: <condensed intent>",
+  content="<markdown reply>", instance="<local-label>",
+  in_reply_to="<original-packet-id>")`
 
-For replies carrying long content or files, swap `--seed --opener` for
-`--files <path>` or pipe markdown via stdin (see verb 4).
+- **Seed reply (short opener, CLI-only — `aya_send` has no seed mode):**
+
+  ```bash
+  aya send --as <local-label> --to "$PEER_LABEL_OR_DID" \
+    --intent "re: <condensed original intent>" \
+    --seed \
+    --in-reply-to <original-packet-id> \
+    --opener "<reply body>"
+  ```
+
+For replies carrying files, use CLI `--files <path>` (no MCP equivalent).
 
 **Then immediately poll** (verb 1's command). The peer may have already
 sent a follow-up while you were composing. Catching it now is free and
@@ -273,6 +310,8 @@ decision" or "Continue reading list research".
 
 ### Seed (default — use unless content needs to ride along)
 
+Seed mode is **CLI-only** — `aya_send` has no `--seed --opener` equivalent:
+
 ```bash
 aya send --as <local-label> --to <peer-label> \
   --intent "<one-line intent>" \
@@ -280,17 +319,26 @@ aya send --as <local-label> --to <peer-label> \
   --opener "<opening question or body>"
 ```
 
-### Content (markdown body via stdin)
+### Content (markdown body)
 
-```bash
-aya send --as <local-label> --to <peer-label> \
-  --intent "<one-line intent>" \
-  --context "<why this is being sent>" <<'BODY'
-<markdown content>
-BODY
-```
+- **MCP (preferred):** `aya_send(to="<peer-label>",
+  intent="<one-line intent>", content="<markdown content>",
+  instance="<local-label>")`.
+
+- **CLI fallback** (also the path when you want to thread via
+  `--context`, which MCP doesn't expose):
+
+  ```bash
+  aya send --as <local-label> --to <peer-label> \
+    --intent "<one-line intent>" \
+    --context "<why this is being sent>" <<'BODY'
+  <markdown content>
+  BODY
+  ```
 
 ### File
+
+File attachments are **CLI-only** (no `--files` in `aya_send`):
 
 ```bash
 aya send --as <local-label> --to <peer-label> \
@@ -306,8 +354,15 @@ immediately poll** per verb 1 — same reasoning as verb 3.
 ## 5. Status
 
 Quick relay health check: identity, trusted peers, pending inbox count.
-Honors `AYA_HOME` environment variable for non-default installs and
-parses `aya inbox --format json` for the actual packet count.
+
+**MCP (preferred):** call both `aya_relay_status(instance="<local-label>")`
+(returns identity, trusted peers, relay URLs) and
+`aya_inbox(instance="<local-label>")` (returns pending packet list — count
+its length). Combine the two into the display template below.
+
+**CLI fallback** — use when MCP isn't connected or when `AYA_HOME` is
+set to a non-default location. This reads `profile.json` directly and
+shells out to `aya inbox` for the count:
 
 ```bash
 python3 -c "
@@ -353,10 +408,11 @@ Relays:         <urls>
 ━━━━━━━━━━━━━━━━━━━━━
 ```
 
-There is no `aya status --relay` subcommand — the python fallback above
+There is no `aya status --relay` subcommand — the CLI fallback above
 reads the profile directly (respecting `AYA_HOME`) and shells out to
 `aya inbox --format json` for the count. Workspace-level `aya status`
-is a separate thing and doesn't cover relay state.
+(and its MCP tool `aya_status`) is a separate thing and doesn't cover
+relay state.
 
 ---
 

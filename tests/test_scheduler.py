@@ -54,12 +54,14 @@ def _isolate_scheduler(tmp_path, monkeypatch):
 
 class TestGetLocalTz:
     def test_default_timezone(self, monkeypatch):
-        """_get_local_tz returns America/Denver by default."""
+        """_get_local_tz detects system timezone when AYA_TZ is not set."""
         monkeypatch.delenv("AYA_TZ", raising=False)
         # Clear the cache so we get a fresh evaluation
         _get_local_tz.cache_clear()
         tz = _get_local_tz()
-        assert str(tz) == "America/Denver"
+        # Should detect the system timezone, not hardcode Denver
+        assert tz is not None
+        assert str(tz) != ""
 
     def test_custom_timezone(self, monkeypatch):
         """_get_local_tz respects AYA_TZ env var."""
@@ -76,12 +78,14 @@ class TestGetLocalTz:
         assert str(tz) == "UTC"
 
     def test_invalid_timezone_fallback(self, monkeypatch, caplog):
-        """_get_local_tz falls back to America/Denver for invalid timezone."""
+        """_get_local_tz falls back to system timezone for invalid AYA_TZ."""
         monkeypatch.setenv("AYA_TZ", "Invalid/Zone")
         _get_local_tz.cache_clear()
         tz = _get_local_tz()
-        assert str(tz) == "America/Denver"
-        assert "Invalid timezone" in caplog.text
+        # Should fall back to system tz (not Denver), or UTC as last resort
+        assert tz is not None
+        assert str(tz) != "Invalid/Zone"
+        assert "Invalid AYA_TZ" in caplog.text
 
     def test_cache_clears_with_env_var_change(self, monkeypatch):
         """_get_local_tz cache responds to AYA_TZ changes."""

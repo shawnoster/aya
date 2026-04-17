@@ -16,16 +16,62 @@ logger = logging.getLogger(__name__)
 
 @functools.lru_cache(maxsize=1)
 def _get_local_tz() -> ZoneInfo:
-    """Get the local timezone from AYA_TZ env var, with fallback to America/Denver.
+    """Get the local timezone from AYA_TZ env var, with system detection fallback.
+
+    Resolution order:
+    1. AYA_TZ environment variable (explicit override)
+    2. System timezone via datetime.now().astimezone().tzinfo
+    3. UTC as last resort
 
     Caching ensures consistent timezone throughout the session.
     """
-    tz_name = os.environ.get("AYA_TZ", "America/Denver").strip()
+    tz_name = os.environ.get("AYA_TZ", "").strip()
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except KeyError:
+            logging.warning("Invalid AYA_TZ %r; falling back to system timezone", tz_name)
+
+    # Detect system timezone
     try:
-        return ZoneInfo(tz_name)
-    except KeyError:
-        logging.warning("Invalid timezone %r; falling back to America/Denver", tz_name)
-        return ZoneInfo("America/Denver")
+        local_tz = datetime.now().astimezone().tzinfo
+        if local_tz is not None:
+            # Get the IANA name if available (e.g. America/Los_Angeles)
+            tz_key = getattr(local_tz, "key", None)
+            if tz_key:
+                return ZoneInfo(tz_key)
+            # Fall back to using the offset-based tzinfo directly wrapped in ZoneInfo
+            import time
+
+            if time.daylight:
+                tz_name = time.tzname[1] if time.localtime().tm_isdst else time.tzname[0]
+            else:
+                tz_name = time.tzname[0]
+            # tzname gives abbreviations like "PDT" — not valid for ZoneInfo.
+            # Use /etc/localtime or TZ env as IANA source.
+            for src in ("/etc/timezone", "/etc/localtime"):
+                try:
+                    import pathlib
+
+                    p = pathlib.Path(src)
+                    if p.is_symlink():
+                        # /etc/localtime -> ../usr/share/zoneinfo/America/Los_Angeles
+                        resolved = str(p.resolve())
+                        if "zoneinfo/" in resolved:
+                            iana = resolved.split("zoneinfo/", 1)[1]
+                            return ZoneInfo(iana)
+                    elif p.exists() and src == "/etc/timezone":
+                        iana = p.read_text().strip()
+                        if iana:
+                            return ZoneInfo(iana)
+                except Exception:  # noqa: S112
+                    continue
+            # If we got a working tzinfo from astimezone, use it directly
+            return local_tz  # type: ignore[return-value]
+    except Exception:
+        logging.warning("Could not detect system timezone; falling back to UTC")
+
+    return ZoneInfo("UTC")
 
 
 # ── alert expiry constant ────────────────────────────────────────────────────

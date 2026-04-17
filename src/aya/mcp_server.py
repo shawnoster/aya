@@ -236,6 +236,7 @@ _TOOLS: list[types.Tool] = [
             "properties": {
                 "limit": {
                     "type": "integer",
+                    "minimum": 1,
                     "description": "Maximum number of packets to return (default: 20).",
                     "default": 20,
                 },
@@ -662,12 +663,18 @@ async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
     from aya.packet import Packet
     from aya.paths import PACKETS_DIR
 
-    limit = arguments.get("limit", 20)
+    limit = max(int(arguments.get("limit", 20)), 1)
 
     if not PACKETS_DIR.exists():
         return _text([])
 
-    files = sorted(PACKETS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    def _safe_mtime(f: Any) -> float:
+        try:
+            return f.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    files = sorted(PACKETS_DIR.glob("*.json"), key=_safe_mtime, reverse=True)
     files = files[:limit]
 
     summaries = []
@@ -694,12 +701,15 @@ async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextCont
 
     trusted = {label: tk.did for label, tk in profile.trusted_keys.items()}
 
+    relays = profile.default_relays
+    last_checked = {url: ts for url, ts in profile.last_checked.items() if url in relays}
+
     result: dict[str, Any] = {
         "instance": instance,
         "did": local.did,
-        "relays": profile.default_relays,
+        "relays": relays,
         "trusted_keys": trusted,
-        "last_checked": profile.last_checked,
+        "last_checked": last_checked,
     }
     return _text(result)
 

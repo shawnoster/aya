@@ -86,9 +86,10 @@ Full first-run bootstrap: identity, hooks, relay polling, and optional pairing.
      --idle-back-off 10m
    ```
 
-   **Output style rule for all session crons:**
+   **Output style rule for progress/logging and reminder/health session crons:**
    - Progress/logging crons: prompt must end with "Output nothing. Silence is correct."
    - Reminder/health crons: prompt must include "Output ONLY the reminder message itself — no preamble, no confirmation afterward."
+   - `relay-poll` is a special case: it may remain silent when nothing is ingested, but it may surface packet content to the user when packets are received.
 
 6. **Wire up the plugin.** Check if the user's shell profile already has a claude alias with `--plugin-dir`. If not, suggest adding:
 

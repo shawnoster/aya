@@ -36,9 +36,14 @@ inline with each verb below. Fall back to the CLI when any of these apply:
   `aya init`, `aya schedule install`, `aya schedule recurring`,
   `aya schedule dismiss`.
 
-MCP tools take `instance=<label>` where the CLI takes `--as <label>`.
-`aya_receive` auto-ingests trusted packets by default, so no
-`--auto-ingest`/`--skip-untrusted` equivalents are needed.
+MCP tools that act on a local identity (`aya_receive`, `aya_inbox`,
+`aya_send`, `aya_ack`, `aya_relay_status`) take `instance=<label>`
+where the CLI takes `--as <label>`. Other MCP tools (`aya_read`,
+`aya_show`, `aya_packets`, `aya_status`, `aya_schedule_*`,
+`aya_config_*`) don't take an identity argument — they act on local
+state or a specific packet ID. `aya_receive` auto-ingests trusted
+packets by default, so no `--auto-ingest`/`--skip-untrusted`
+equivalents are needed.
 
 ---
 

@@ -27,7 +27,10 @@ inline with each verb below. Fall back to the CLI when any of these apply:
   `aya_schedule_watch` has no `--remove-when`, `-i`, or `--condition`,
   so Watch setup is CLI-preferred.
 
-MCP tools take `instance=<label>` where the CLI takes `--as <label>`.
+MCP tools that act on a local identity (e.g. `aya_relay_status`,
+`aya_send`, `aya_receive`) take `instance=<label>` where the CLI takes
+`--as <label>`. Tools like `aya_status`, `aya_schedule_watch`, and
+`aya_config_show` don't take an identity argument.
 
 ---
 

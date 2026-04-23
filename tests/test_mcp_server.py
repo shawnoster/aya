@@ -291,6 +291,7 @@ async def test_receive_writes_packet_body_to_disk(tmp_path):
     written = packets_dir / f"{signed.id}.json"
     assert written.exists(), "packet body must be persisted to PACKETS_DIR"
     assert Packet.from_json(written.read_text()).intent == "regression check"
+    assert any(entry["id"] == signed.id for entry in profile.ingested_ids)
 
 
 # ---------------------------------------------------------------------------

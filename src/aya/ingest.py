@@ -22,8 +22,8 @@ def ingest(packet: Packet, *, quiet: bool = False) -> None:
     """
     is_seed = packet.content_type == "application/aya-seed"
     seed: dict[str, Any] = (
-        packet.content if isinstance(packet.content, dict) else {}
-    ) if is_seed else {}
+        (packet.content if isinstance(packet.content, dict) else {}) if is_seed else {}
+    )
 
     if not quiet:
         from rich.console import Console

@@ -2440,8 +2440,6 @@ def _resolve_nostr_pubkey(did: str, profile: Profile) -> str | None:
     return None
 
 
-
-
 # ── show ──────────────────────────────────────────────────────────────────────
 
 

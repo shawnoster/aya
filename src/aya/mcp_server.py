@@ -456,7 +456,7 @@ async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
         if trusted:
             _assert_valid_ulid(pkt.id)
             ingest(pkt, quiet=True)
-            # ingest persists best-effort (CLI still prints on failure). Under MCP the
+            # ingest persists best-effort (debug-log on failure). Under MCP the
             # body write is our only record — if it didn't land, leave ingested_ids
             # alone so the next poll retries instead of losing the packet.
             if not (PACKETS_DIR / f"{pkt.id}.json").exists():

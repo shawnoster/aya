@@ -417,6 +417,7 @@ async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
 
     from datetime import UTC, datetime, timedelta
 
+    from aya.cli import _ingest
     from aya.identity import _assert_valid_ulid
     from aya.packet import Packet
     from aya.paths import PROFILE_PATH
@@ -454,6 +455,7 @@ async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
         trusted = profile.is_trusted(pkt.from_did)
         if trusted:
             _assert_valid_ulid(pkt.id)
+            _ingest(pkt, quiet=True)
             profile.ingested_ids.append(
                 {"id": pkt.id, "ingested_at": now_iso, "from_did": pkt.from_did}
             )

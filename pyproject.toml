@@ -126,6 +126,9 @@ known-first-party = ["aya"]
 "src/aya/scheduler/time_utils.py" = [
     "PLC0415",  # deferred import of storage to break circular dependency
 ]
+"src/aya/ingest.py" = [
+    "PLC0415",  # lazy rich/scheduler imports: rich only needed in non-quiet path, scheduler deferred to avoid startup cost
+]
 "src/aya/mcp_server.py" = [
     "PLC0415",  # deferred imports keep server startup lean
     "ARG005",   # lambda adapter for status handler ignores args intentionally

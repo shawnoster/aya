@@ -28,6 +28,7 @@ from aya import __version__
 from aya.config import get_notebook_path, load_config, set_config_value
 from aya.context import build_context_block
 from aya.identity import Identity, Profile, TrustedKey, _assert_valid_ulid
+from aya.ingest import ingest as _ingest
 from aya.install import install_scheduler, uninstall_scheduler
 from aya.packet import ConflictStrategy, ContentType, Packet, human_age
 from aya.pair import (
@@ -53,7 +54,6 @@ from aya.scheduler import (
     _format_watch_alert,
     add_recurring,
     add_reminder,
-    add_seed_alert,
     add_watch,
     check_due,
     dismiss_alert,
@@ -2440,78 +2440,6 @@ def _resolve_nostr_pubkey(did: str, profile: Profile) -> str | None:
     return None
 
 
-def _ingest(packet: Packet, *, quiet: bool = False) -> None:
-    """
-    Ingest a packet: surface it (console/alert) and persist the body to PACKETS_DIR.
-
-    Called by both the CLI receive flow and the MCP ``aya_receive`` handler. Pass
-    ``quiet=True`` to suppress all console output — required when invoked from
-    the MCP stdio path, where stray stdout writes would corrupt JSON-RPC.
-    """
-    if not quiet:
-        console.print(f"\n[bold]Ingesting:[/bold] {packet.intent}")
-
-    if packet.content_type == "application/aya-seed":
-        seed = packet.content if isinstance(packet.content, dict) else {}
-        if not quiet:
-            console.print(
-                Panel(
-                    f"[bold]Opening question:[/bold]\n{seed.get('opener', '')}\n\n"
-                    f"[bold]Context:[/bold]\n{seed.get('context_summary', '')}\n\n"
-                    + (
-                        "[bold]Open questions:[/bold]\n"
-                        + "\n".join(f"  • {q}" for q in seed.get("open_questions", []))
-                        if seed.get("open_questions")
-                        else ""
-                    ),
-                    title="Conversation Seed",
-                    border_style="cyan",
-                )
-            )
-        # Persist seed as an unseen alert so it surfaces via `aya schedule pending`
-        # on the next session start, even if ingested via the async SessionStart hook
-        # (where stdout is not captured by Claude).
-        from_label = packet.from_did[:16]
-        add_seed_alert(
-            intent=packet.intent,
-            opener=seed.get("opener", ""),
-            context_summary=seed.get("context_summary", ""),
-            open_questions=seed.get("open_questions", []),
-            from_label=from_label,
-            packet_id=packet.id,
-        )
-    else:
-        if not quiet:
-            console.print(
-                Panel(
-                    str(packet.content),
-                    title=packet.intent,
-                    subtitle=f"[dim]{packet.id[:8]} · {packet.sent_at[:10]}[/dim]",
-                )
-            )
-
-    # Persist packet content for later retrieval (best-effort — never break ingest)
-    try:
-        from aya.paths import PACKETS_DIR
-
-        PACKETS_DIR.mkdir(parents=True, exist_ok=True)
-        with suppress(OSError):
-            PACKETS_DIR.chmod(0o700)
-        packet_file = PACKETS_DIR / f"{packet.id}.json"
-        packet_file.write_text(packet.to_json())
-        with suppress(OSError):
-            packet_file.chmod(0o600)
-
-        # Prune old packets (>7 days based on file mtime)
-        cutoff = datetime.now(UTC).timestamp() - 7 * 86400
-        for old in PACKETS_DIR.glob("*.json"):
-            try:
-                if old.stat().st_mtime < cutoff:
-                    old.unlink(missing_ok=True)
-            except OSError:
-                continue
-    except Exception:
-        logger.debug("Failed to persist packet %s", packet.id, exc_info=True)
 
 
 # ── show ──────────────────────────────────────────────────────────────────────

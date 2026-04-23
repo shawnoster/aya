@@ -73,7 +73,12 @@ def ingest(packet: Packet, *, quiet: bool = False) -> None:
 
     # Persist packet content for later retrieval (best-effort — never break ingest)
     try:
+        from aya.identity import _assert_valid_ulid
         from aya.paths import PACKETS_DIR
+
+        # Defense-in-depth: packets come from the network. Reject anything that
+        # could escape PACKETS_DIR via path separators before building the path.
+        _assert_valid_ulid(packet.id)
 
         PACKETS_DIR.mkdir(parents=True, exist_ok=True)
         with suppress(OSError):

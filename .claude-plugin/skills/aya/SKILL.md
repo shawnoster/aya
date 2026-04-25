@@ -121,14 +121,14 @@ Setup is **mostly CLI-only** — no MCP tools cover `aya init`,
    - Reminder/health crons: prompt must include "Output ONLY the reminder message itself — no preamble, no confirmation afterward."
    - `relay-poll` is a special case: it may remain silent when nothing is ingested, but it may surface packet content to the user when packets are received.
 
-6. **Wire up the skills.** Two patterns work — pick whichever the workspace already uses:
+6. **Wire up the skills.** Two patterns work — pick whichever the consuming workspace uses (the aya repo itself doesn't ship the wiring):
 
-   - **Symlink pattern (home machine convention).** If the workspace has a `Makefile` with a `link-skills` target (this workspace does), symlink each skill's `SKILL.md` into `~/.claude/commands/`. The home machine wires `dev/skills/{aya,relay}/` as symlinks into `dev/code/aya/.claude-plugin/skills/{aya,relay}/`, then `make link-skills` exposes them as flat slash commands. SessionStart hook keeps the links fresh.
-   - **Plugin-dir alias (portable).** If there's no symlink workflow:
+   - **Symlink pattern.** If the consuming workspace has its own `Makefile` with a `link-skills` target, symlink each skill's `SKILL.md` into `~/.claude/commands/`. Typical wiring: `<workspace>/skills/{aya,relay}/` are symlinks into the aya repo's `.claude-plugin/skills/{aya,relay}/`, and `make link-skills` exposes them as flat slash commands. A SessionStart hook can keep the links fresh.
+   - **Plugin-dir alias (portable, no Makefile needed).** If there's no symlink workflow:
      ```bash
      alias claude='claude --plugin-dir /path/to/aya'
      ```
-     Adjust the path to the local clone. Loads `/aya` and `/relay` under the plugin namespace.
+     Adjust the path to the local aya clone. Loads `/aya` and `/relay` under the plugin namespace.
 
 7. **Offer pairing.** Ask: "Do you want to pair with another machine now?" If yes, hand off to verb 2 (Pair).
 

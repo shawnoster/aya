@@ -9,7 +9,7 @@
   timestamp and used it as the relay query lower bound, which permanently
   excluded packets that had arrived before the cursor but hadn't been
   ingested yet (e.g. when a prior receive crashed). Deduplication now
-  uses the local `ingested_ids` set against the relay's natural 7-day
+  uses the local `ingested_ids` list/dedup cache against the relay's natural 7-day
   TTL window, so unfinished receives can recover on the next run.
 - Pin `coincurve<21` to avoid source build failure on Python 3.14 — coincurve 21.0.0 has a broken
   `hatch_build.py` that looks for cffi's LICENSE file during build, but cffi 2.0.0 changed sdist

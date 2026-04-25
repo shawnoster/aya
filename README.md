@@ -265,7 +265,7 @@ After editing any skill file in the aya repo, run `/reload-plugins` in your sess
 | `aya status` | Workspace readiness check — systems, schedule, focus |
 | `aya mcp-server` | Start the MCP server (stdio transport) for Claude Code |
 | `aya schedule remind` | Add a one-shot reminder |
-| `aya schedule watch` | Add a polling watch (GitHub PR, CI checks, Jira ticket/query) |
+| `aya schedule watch` | Add a polling watch (GitHub PR, Jira ticket/query) |
 | `aya schedule recurring` | Add a persistent recurring session job |
 | `aya schedule activity` | Record user activity — resets the idle back-off timer |
 | `aya schedule is-idle` | Check whether the session is currently idle |

@@ -535,7 +535,7 @@ relay state.
 | `aya send` errors with `Unknown recipient '<label>'. Available: ...` | `--to <peer>` not in `trusted_keys` | Run `aya pair` to connect, or `aya trust <did> --peer <label>` |
 | `aya send` errors with `No Nostr pubkey found for recipient. Pair first.` | Trust entry exists but lacks `nostr_pubkey` field | Re-pair via `aya pair` to populate the pubkey |
 | Interactive shell errors before aya runs | Shell function shadowing the binary | Check `declare -F aya`; unset if found |
-| `aya schedule recurring` shows `last_run_at: never` | `last_run_at` only tracks aya-executed runs; session crons fire via Claude Code's `CronCreate` engine and don't update this field | Expected for session crons. Confirm registration with `aya schedule pending` (lists the SessionStart payload) or check Claude Code's cron list directly |
+| `aya schedule recurring` looks idle or you want to verify a relay polling cron is registered | Session crons are registered via Claude Code's `CronCreate` engine, so there is no recurring-item `last_run_at` field to confirm them | Check the recurring item's real fields (`status`, `cron`), and for session cron registration inspect `~/.aya/session_registered_crons.json` or Claude Code's cron list directly |
 | Relay returns HTTP 503 / connection refused | Transient relay outage | aya auto-retries (5 attempts); wait 30s and retry manually |
 
 ---

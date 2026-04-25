@@ -274,7 +274,7 @@ indefinitely until session ends.
 
 3. **Embed idle checks in cron prompts** — once a cron is registered with
    Claude Code's engine, it fires regardless of aya's idle state. For
-   strict gating, include `aya schedule is-idle --threshold 30m && exit 0`
+   strict gating, include `aya schedule is-idle --threshold 30m || exit 0`
    at the top of the cron's prompt so the *prompt itself* skips the work.
 
 4. **Add `only_during` enforcement to cron prompts** — same pattern:

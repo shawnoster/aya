@@ -233,7 +233,7 @@ aya schedule status
 **A recurring cron isn't firing.**
 
 1. Confirm it's registered: `aya schedule list --type recurring` — status should be `active`.
-2. Confirm it survived the SessionStart filter: `aya schedule list --all` will show suppressed crons under their reasons (`outside work hours (...)`, `session idle (...)`).
+2. Confirm whether it was suppressed at session registration: `aya schedule pending --format json` and inspect `suppressed_crons` for reasons such as `outside work hours (...)` or `session idle (...)`.
 3. If suppressed for idleness, check the activity timestamp: `cat ~/.aya/activity.json | jq .last_activity_at`. A new tool call will refresh it; the next PostToolUse `aya hook crons` will then re-evaluate and register the cron.
 4. Confirm the SessionStart hook order in `~/.claude/settings.json` runs `aya schedule activity` *before* `aya hook crons --reset`. If reordered, the first filter sees the prior session's stale timestamp.
 5. If `--only-during 08:00-18:00` is set and the time is outside that window at session start, the cron is suppressed at registration. Once registered, Claude Code's cron engine fires it regardless of the window — embed `aya schedule is-idle` or a time gate inside the cron's prompt for hard end-of-window stops.

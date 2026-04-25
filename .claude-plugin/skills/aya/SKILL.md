@@ -265,7 +265,7 @@ verification.
 ### Detect install source first
 
 Before reinstalling, check whether the current install is editable from
-a local source clone (the home-instance default per `AGENTS.md`):
+a local source clone (common when developing aya itself):
 
 ```bash
 cat ~/.local/share/uv/tools/aya-ai-assist/uv-receipt.toml 2>/dev/null

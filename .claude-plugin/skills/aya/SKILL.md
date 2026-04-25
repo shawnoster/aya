@@ -279,14 +279,14 @@ run **the GitHub path**.
 
 ### Editable path (local source clone)
 
-When the receipt points at a live local clone — typically
-`/home/shawn/dev/code/aya`:
+When the receipt points at a live local clone, let `<aya-clone>`
+denote the path read from the receipt (e.g. `~/dev/code/aya`):
 
 1. **Pull the clone up to date** (refresh = "get the latest"):
 
    ```bash
-   git -C /home/shawn/dev/code/aya status --porcelain
-   git -C /home/shawn/dev/code/aya pull --ff-only
+   git -C <aya-clone> status --porcelain
+   git -C <aya-clone> pull --ff-only
    ```
 
    If `status --porcelain` shows uncommitted changes, stop and ask the
@@ -296,7 +296,7 @@ When the receipt points at a live local clone — typically
 2. **Reinstall editable** (re-syncs deps from `pyproject.toml`):
 
    ```bash
-   uv tool install --editable /home/shawn/dev/code/aya --reinstall
+   uv tool install --editable <aya-clone> --reinstall
    ```
 
 3. Continue at **Common steps** below.

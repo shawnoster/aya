@@ -113,7 +113,7 @@ Next session start: SessionStart hook re-registers crons fresh
 
 | Mode | Risk | Mitigation |
 |------|------|-----------|
-| **Idle backoff:** Relay poll has `idle_back_off: 30m` | System cron might execute relay poll despite backoff | Verify aya's backoff logic respects system cron ticks (not just session checks) |
+| **Idle backoff (session crons only):** A `aya schedule recurring --idle-back-off 30m` cron is filtered by `get_session_crons()` whenever `aya hook crons` runs (SessionStart + each PostToolUse). Once it passes the filter and Claude Code's cron engine has registered it, that engine fires it on schedule regardless of aya's idle state. | Watches and reminders polled by the system cron's `aya schedule tick` are *not* subject to this filter — they fire on their own interval. | If a session cron must hard-stop when idle, embed `aya schedule is-idle --threshold 30m && exit 0` at the top of its prompt rather than relying on `--idle-back-off`. |
 | **Logging gaps:** System cron execution is silent (no session output) | Job failures go unnoticed | Configure crontab to log: `>> ~/.aya/scheduler.log 2>&1` |
 
 ---

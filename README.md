@@ -54,6 +54,16 @@ aya inbox
 
 Labels can be anything — `home`/`work`, names, machine hostnames. They're local aliases for the keypair on each side.
 
+### Identity flags: `--as`, `--label`, `--peer`
+
+Three flags name *who* you're talking about, and they're easy to confuse:
+
+- **`--label <name>`** — used **only** with `aya init`, names *this* machine's local identity (e.g. `aya init --label alice` registers an instance called `alice` in the local profile).
+- **`--as <name>`** — picks *which local identity* to act as for a command. Defaults to `default`; with multiple instances on a machine, pass `--as alice` to disambiguate.
+- **`--peer <name>`** — names a *remote* identity (the one you've paired with). Used with `aya pair`, `aya trust`, etc.
+
+A few older commands accept `--label` as a deprecated alias for `--peer`. Prefer `--peer` in new scripts. Quick mnemonic: `--label` *creates* a local name, `--as` *selects* one, `--peer` *targets* a remote one.
+
 ## Scheduling
 
 aya has its own scheduler, but Claude Code also has a separate cloud-based automation system called CCR (Claude Code Remote). They solve different problems — knowing which to reach for saves a lot of friction.
@@ -241,28 +251,46 @@ After editing any skill file in the aya repo, run `/reload-plugins` in your sess
 | `aya profile` | Initialize or rotate the persistent assistant profile |
 | `aya pair` | Pair two instances via short-lived relay code |
 | `aya trust` | Manually trust a DID |
-| `aya pack` | Create a signed knowledge packet |
+| `aya pack` | Create a signed knowledge packet (writes file; doesn't publish) |
 | `aya send` | Pack + send in one step (no temp file) |
 | `aya send-raw` | Publish a pre-built packet file to a Nostr relay |
-| `aya inbox` | List pending packets |
-| `aya receive` | Review and ingest packets |
+| `aya inbox` | List pending (un-ingested) packets |
+| `aya receive` | Review and ingest packets from the relay |
+| `aya show` | Show full content of an ingested packet |
+| `aya read` | Read content of a stored packet (with `--meta` for headers) |
+| `aya ack` | Acknowledge a received packet (sends a reply back) |
+| `aya drop` | Delete an ingested packet from local storage |
+| `aya packets` | List stored packets, most recent first |
+| `aya context` | Build a context block from workspace state |
 | `aya status` | Workspace readiness check — systems, schedule, focus |
-| `aya ci` | CI integration — watch checks, report failures |
+| `aya mcp-server` | Start the MCP server (stdio transport) for Claude Code |
 | `aya schedule remind` | Add a one-shot reminder |
-| `aya schedule watch` | Add a polling watch (GitHub PR, Jira ticket/query) |
+| `aya schedule watch` | Add a polling watch (GitHub PR, CI checks, Jira ticket/query) |
 | `aya schedule recurring` | Add a persistent recurring session job |
 | `aya schedule activity` | Record user activity — resets the idle back-off timer |
 | `aya schedule is-idle` | Check whether the session is currently idle |
 | `aya schedule list` | List scheduled items |
 | `aya schedule check` | Check for due reminders and alerts |
-| `aya schedule dismiss` | Dismiss a scheduled item or alert |
-| `aya schedule snooze` | Snooze a reminder |
-| `aya schedule alerts` | Show alerts from background watcher |
-| `aya schedule tick` | One scheduler cycle — poll watches, expire alerts |
-| `aya schedule pending` | Show unclaimed alerts + session crons (SessionStart hook) |
+| `aya schedule dismiss` | Dismiss a scheduled item or alert (prefix match OK) |
+| `aya schedule snooze` | Snooze a reminder until a given time |
+| `aya schedule alerts` | Show alerts from the background watcher |
+| `aya schedule tick` | One scheduler cycle — poll watches, expire alerts (system cron uses this) |
+| `aya schedule poll` | Run one poll cycle of due watches/reminders |
+| `aya schedule pending` | Show unclaimed alerts + session crons (SessionStart hook reads this) |
 | `aya schedule install` | Install scheduler integrations — system crontab + Claude Code hooks |
 | `aya schedule uninstall` | Remove scheduler integrations |
 | `aya schedule status` | Scheduler overview — watches, reminders, deliveries |
+| `aya relay list` | List configured relays |
+| `aya relay add` | Add a relay to the default list |
+| `aya relay remove` | Remove a relay from the default list |
+| `aya relay status` | Show relay health and identity info |
+| `aya config show` | Show the current workspace configuration |
+| `aya config set` | Set a workspace configuration value |
+| `aya log show` | Show daily notes |
+| `aya log append` | Append to daily notes |
+| `aya log auto` | Enable auto-logging of session notes |
+| `aya hook crons` | (Internal — wired by `aya schedule install`) Convert active recurring schedules into Claude Code `CronCreate` instructions |
+| `aya hook watch` | (Internal — wired by `aya schedule install`) Poll due watches and emit `asyncRewake` on change |
 
 ## How it works
 

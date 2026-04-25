@@ -119,9 +119,11 @@ aya persists recurring schedules. Claude Code fires them during sessions. The br
 3. It outputs `hookSpecificOutput` JSON telling Claude Code to call `CronCreate`
 4. Claude Code's native cron system handles the timing from there
 
-Idle back-off: crons with `--idle-back-off 10m` are suppressed if no activity for 10+ minutes. Call `aya schedule activity` from hooks to reset the timer.
+Filtering happens at hook-time, not at fire-time. Both filters below are evaluated each time `aya hook crons` runs (SessionStart, then again after every tool call via PostToolUse), so a cron that's suppressed at session start can still register later in the same session if conditions change. Once registered with Claude Code's cron engine, the cron fires on schedule regardless of aya's current idle/window state.
 
-Work hours: crons with `--only-during 08:00-18:00` only fire within that window.
+**Idle back-off** (`--idle-back-off 10m`): suppresses registration when the last `aya schedule activity` is older than the threshold. The PreToolUse hook calls `aya schedule activity` on every tool use, so an active session won't be considered idle. After being idle, the next tool boundary refreshes activity and the next PostToolUse `hook crons` registers any previously-suppressed crons.
+
+**Work hours** (`--only-during 08:00-18:00`): suppresses registration when the current time is outside the window. Same evaluation cadence as idle — a cron registered at 5:30pm with a 08:00-18:00 window will keep firing after 6pm because Claude Code's cron engine doesn't know about the window. For strict end-of-window stops, embed the check inside the cron's prompt with `aya schedule is-idle` or a time gate.
 
 ## Watch Providers
 
@@ -167,13 +169,32 @@ To remove everything: `aya schedule uninstall`.
 
 ### Hooks installed
 
-| Hook | Event | Purpose |
-|------|-------|---------|
-| `aya schedule activity` | SessionStart, PreToolUse | Resets idle back-off timer on session start and each tool call |
-| `aya hook crons` | SessionStart | Converts aya's recurring schedules into Claude Code CronCreate calls |
-| `aya receive` | SessionStart | Ingests packets from trusted senders in background |
-| `aya schedule pending` | SessionStart | Surfaces due reminders and alerts into session context |
-| `aya hook watch` | PostToolUse (Bash) | Polls all due scheduler watches and wakes agent on change (CI, PR, Jira) |
+`aya schedule install` writes a fixed canonical hook block into
+`~/.claude/settings.json`. Order within each event matters and is preserved:
+
+**SessionStart** (run in order, top-to-bottom):
+
+| # | Command | Purpose |
+|---|---------|---------|
+| 1 | `aya schedule activity` | Reset the idle timer **first** so subsequent SessionStart hooks see a fresh activity timestamp |
+| 2 | `aya hook crons --reset` | Clear the per-session registered-crons tracker, then emit `CronCreate` instructions for every active session cron passing idle/work-hours filters |
+| 3 | `aya receive --quiet --auto-ingest` (async) | Ingest packets from trusted senders in the background |
+| 4 | `aya schedule pending --format text` | Surface due reminders and alerts into session context |
+
+**PreToolUse:**
+
+| Command | Purpose |
+|---------|---------|
+| `aya schedule activity` (async) | Refresh the idle timer on every tool use |
+
+**PostToolUse:**
+
+| Matcher | Command | Purpose |
+|---------|---------|---------|
+| (any) | `aya hook crons --event PostToolUse` (async) | Re-evaluate idle/work-hours filters and register any session crons newly eligible since the last hook run. This is what makes mid-session `aya schedule recurring` calls actually fire. |
+| `Bash` | `aya hook watch` (asyncRewake) | Poll all due scheduler watches; if any condition changed, emit `asyncRewake` so the session wakes after the user's reply |
+
+**Critical: don't reorder the SessionStart hooks.** `activity` must run before `hook crons` or the very first `get_session_crons()` call sees the stale timestamp from the prior session and falsely suppresses idle-back-off crons.
 
 ## Common Patterns
 
@@ -206,3 +227,27 @@ aya schedule status
 - `aya schedule tick --quiet` is the system cron entry point (`*/5 * * * *`), installed via `aya schedule install`.
 - Packets expire after 7 days by default.
 - Trust is explicit — only paired/trusted DIDs are accepted.
+
+## Troubleshooting
+
+**A recurring cron isn't firing.**
+
+1. Confirm it's registered: `aya schedule list --type recurring` — status should be `active`.
+2. Confirm it survived the SessionStart filter: `aya schedule list --all` will show suppressed crons under their reasons (`outside work hours (...)`, `session idle (...)`).
+3. If suppressed for idleness, check the activity timestamp: `cat ~/.aya/activity.json | jq .last_activity_at`. A new tool call will refresh it; the next PostToolUse `aya hook crons` will then re-evaluate and register the cron.
+4. Confirm the SessionStart hook order in `~/.claude/settings.json` runs `aya schedule activity` *before* `aya hook crons --reset`. If reordered, the first filter sees the prior session's stale timestamp.
+5. If `--only-during 08:00-18:00` is set and the time is outside that window at session start, the cron is suppressed at registration. Once registered, Claude Code's cron engine fires it regardless of the window — embed `aya schedule is-idle` or a time gate inside the cron's prompt for hard end-of-window stops.
+
+**A `watch` doesn't seem to be polling.**
+
+1. `aya schedule list --type watch` should show it active.
+2. Confirm the system crontab entry exists: `crontab -l | grep "aya schedule tick"`. If missing, run `aya schedule install`.
+3. Watches fire from the system cron every 5 min by default — they're independent of session activity.
+4. Provider-specific deps: `github-pr` needs `gh` CLI logged in; `jira-*` needs `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`, `ATLASSIAN_SERVER_URL` in the cron environment (system cron has minimal env — set them in the crontab entry or wrap the call in a script that sources them).
+5. For visibility, append `>> ~/.aya/scheduler.log 2>&1` to the cron line and tail it.
+
+**`aya receive` returns nothing but the peer says they sent something.**
+
+1. The peer's packet may not have reached the relay you're polling — confirm both ends share at least one relay: `aya relay list`.
+2. The packet may be encrypted to a different DID. Run `aya inbox --format json` (raw) to see what arrived; if it's there but not ingested, it's likely from an untrusted sender (run `aya receive` interactively without `--auto-ingest` to inspect).
+3. As of v1.36.2 the `since` cursor is gone — earlier versions could "lose" packets that arrived during a crashed receive. Upgrade if you're on an older build.

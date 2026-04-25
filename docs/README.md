@@ -16,6 +16,19 @@ This folder contains architecture and operational guides for aya.
 
 ---
 
+### [packet-schema.md](./packet-schema.md)
+**What it covers:** Packet envelope structure and wire format
+
+- Required and auto-generated fields (`from`, `to`, `intent`, `id`, `version`, `sent_at`, `expires_at`)
+- Content types: `text/markdown` (default), `application/aya-seed`, `application/json`
+- Conflict strategies (`last_write_wins`, `surface_to_user`, `append`, `skip_if_newer`)
+- Signing with ed25519 over canonical JSON; verification by extracting the pubkey from the sender's `did:key`
+- Packet expiry (default 7 days from `sent_at`)
+
+**Read this when:** You're building a packet by hand, debugging a verification failure, or extending the schema.
+
+---
+
 ### [idle-tracking.md](./idle-tracking.md)
 **What it covers:** Activity tracking, session cron suppression logic, design gaps
 
@@ -63,3 +76,5 @@ This folder contains architecture and operational guides for aya.
 **Debugging a scheduler issue?** Check [scheduler-flow-map.md](./scheduler-flow-map.md) for failure modes and debugging steps.
 
 **Self-hosting packet sync?** Follow [self-hosted-relay.md](./self-hosted-relay.md).
+
+**Building or debugging a packet?** See [packet-schema.md](./packet-schema.md) for the field reference and signing rules.

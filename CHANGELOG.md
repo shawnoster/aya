@@ -4,10 +4,24 @@
 
 ### Fixed
 
+- `aya receive` no longer drops pending packets via a stale `since` cursor
+  (#247). The previous behaviour persisted a per-instance "last checked"
+  timestamp and used it as the relay query lower bound, which permanently
+  excluded packets that had arrived before the cursor but hadn't been
+  ingested yet (e.g. when a prior receive crashed). Deduplication now
+  uses the local `ingested_ids` set against the relay's natural 7-day
+  TTL window, so unfinished receives can recover on the next run.
 - Pin `coincurve<21` to avoid source build failure on Python 3.14 — coincurve 21.0.0 has a broken
   `hatch_build.py` that looks for cffi's LICENSE file during build, but cffi 2.0.0 changed sdist
   packaging so that file no longer exists in the expected location (closes #101). The pin will be
   lifted when coincurve ships cp314 wheels or cffi fixes its sdist packaging.
+
+### Changed
+
+- Refactor: packet ingestion logic lifted out of `cli.py` into a shared
+  `aya.ingest` module (#245). Both the CLI `aya receive` command and the
+  MCP `aya_receive` tool now share the same code path. User-facing
+  behaviour is unchanged.
 
 ### Removed
 

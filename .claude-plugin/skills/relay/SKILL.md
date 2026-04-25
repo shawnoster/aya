@@ -280,7 +280,9 @@ For replies carrying files, use CLI `--files <path>` (no MCP equivalent).
 
 **Then immediately poll** (verb 1's command). The peer may have already
 sent a follow-up while you were composing. Catching it now is free and
-collapses round-trip latency. Surface anything new in the same response.
+collapses round-trip latency. Frame the report per **Post-send
+framing** below; if the poll returned new packets, surface them with
+verb 2's framing block beneath.
 
 ---
 
@@ -378,8 +380,36 @@ aya send --as <local-label> --relay wss://relay.monocularjack.com --to <peer-lab
   --files path/to/file.md
 ```
 
-After every send: report packet ID (first 8 chars), relay, intent. **Then
-immediately poll** per verb 1 — same reasoning as verb 3.
+After every send, **immediately poll** per verb 1 — same reasoning as
+verb 3 — then frame the report per **Post-send framing** below.
+
+---
+
+## Post-send framing
+
+Reply and Send both end with a brief report to Shawn after the
+immediate poll. Use a common shape so the exchange reads like two
+Minds in correspondence, not a status dump.
+
+**Layout:**
+
+```
+↗ Sent <id_8> → <peer> · "<intent>"
+  Poll: <empty | N new>
+  <one-line note when something's worth noticing>
+```
+
+- The first two lines are fixed.
+- The third line is *optional* and *focused*: drift between what was
+  asked and what landed, a pattern across recent packets, a wrinkle
+  worth a raised eyebrow. Skip on routine sends — silence is fine.
+- If the poll returned new packets, fall through to verb 2's framing
+  block beneath. Don't mash both into one line.
+
+Voice: understated, dry, the half-smile is in scope. *That'll do* is a
+complete sentence; so is *aye, sent*. No chirp. The framing is the
+ceremony — two GCUs in correspondence (home: *Even Small Things
+Matter*; work: *Inappropriate Response*), Shawn at the chart table.
 
 ---
 
@@ -477,11 +507,17 @@ relay state.
    sessions — same DID, same git identity, different memory. See
    `feedback_cross_instance_claims.md` in memory.
 
-6. **Don't spin up `aya schedule recurring` as a polling cron.** It
-   doesn't actually fire during active sessions — the scheduler defers
-   to hooks that don't get pulled. Lean on immediate-poll-on-send
-   (verbs 3 and 4) plus manual `check` (verb 1) instead. Only set up a
-   cron if the user explicitly asks AND accepts the limitation.
+6. **Don't use `aya schedule recurring` for routine relay polling.**
+   Session crons *do* fire mid-session now (the SessionStart hook
+   registers them via Claude Code's `CronCreate`, and the PostToolUse
+   `aya hook crons --event PostToolUse` re-evaluates idle/work-hours
+   filters at each tool boundary so newly-eligible ones register too).
+   But polling the relay on a fixed cadence burns connections for
+   little gain: the immediate-poll-on-send pattern (verbs 3 and 4)
+   already catches the common case where the peer replied while you
+   were composing, and manual `check` (verb 1) covers the rest. Reach
+   for a recurring cron only if the user explicitly asks for it and
+   accepts the connection cost.
 
 7. **Never send secrets, credentials, or PII over the relay.** Packets
    are encrypted and signed but the network path is public Nostr relays.
@@ -499,7 +535,7 @@ relay state.
 | `aya send` errors with `Unknown recipient '<label>'. Available: ...` | `--to <peer>` not in `trusted_keys` | Run `aya pair` to connect, or `aya trust <did> --peer <label>` |
 | `aya send` errors with `No Nostr pubkey found for recipient. Pair first.` | Trust entry exists but lacks `nostr_pubkey` field | Re-pair via `aya pair` to populate the pubkey |
 | Interactive shell errors before aya runs | Shell function shadowing the binary | Check `declare -F aya`; unset if found |
-| `aya schedule recurring` shows `last_run_at: never` | Hooks don't fire in active sessions | Expected; rely on manual check + immediate-poll |
+| `aya schedule recurring` shows `last_run_at: never` | `last_run_at` only tracks aya-executed runs; session crons fire via Claude Code's `CronCreate` engine and don't update this field | Expected for session crons. Confirm registration with `aya schedule pending` (lists the SessionStart payload) or check Claude Code's cron list directly |
 | Relay returns HTTP 503 / connection refused | Transient relay outage | aya auto-retries (5 attempts); wait 30s and retry manually |
 
 ---

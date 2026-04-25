@@ -201,22 +201,42 @@ Workspace structure (CLAUDE.md, AGENTS.md, skills, hooks) is defined in your wor
 ## Component Map
 
 ```
-aya (CLI + Plugin)
+aya (CLI + Plugin + MCP server)
 ├── Identity
 │   ├── identity.py      — did:key gen, ed25519 + secp256k1 keypairs
-│   └── Profile          — load/save assistant_profile.json
+│   ├── profile.py       — Profile class: instances, trusted_keys, default_relays
+│   ├── credentials.py   — keypair persistence
+│   └── paths.py         — data directory paths (~/.aya/...)
 │
 ├── Sync
 │   ├── packet.py        — JSON envelope, signing, verification
 │   ├── relay.py         — Nostr WebSocket client (kind 5999)
 │   ├── encryption.py    — NIP-44 v2 E2E encryption (ECDH + ChaCha20)
-│   └── pair.py          — short-code pairing via relay
+│   ├── pair.py          — short-code pairing via relay
+│   └── ingest.py        — packet ingestion path shared by CLI + MCP
 │
 ├── Schedule
-│   └── scheduler.py     — reminders, watches, recurring jobs, polling
+│   └── scheduler/
+│       ├── core.py      — reminders, watches, recurring jobs, polling
+│       ├── storage.py   — scheduler.json + alerts.json + activity.json
+│       ├── providers.py — github-pr / ci-checks / jira-ticket / jira-query pollers
+│       ├── time_utils.py — idle detection, work-hours parsing
+│       ├── display.py   — Rich-formatted scheduler views
+│       └── types.py     — SchedulerItem, AlertItem, SuppressedCron
 │
 ├── Status
-│   └── status.py        — workspace readiness check, daily notes parsing
+│   ├── status.py        — workspace readiness check, daily notes parsing
+│   └── context.py       — context-block builder for new sessions
+│
+├── Install
+│   ├── install.py       — system crontab + Claude Code hooks setup
+│   └── log.py           — daily-notes logger (`aya log` subcommands)
+│
+├── MCP
+│   └── mcp_server.py    — MCP server (stdio); aya_send / aya_receive / aya_inbox / etc.
+│
+├── Rewake
+│   └── rewake.py        — asyncRewake plumbing for PostToolUse watch hits
 │
 └── CLI
     └── cli.py           — typer app wiring all subcommands

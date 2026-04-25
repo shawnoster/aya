@@ -256,22 +256,31 @@ indefinitely until session ends.
 
 ## Recommendations
 
-### Short-term (fix the bootstrap)
+### Already shipped
 
-1. **Add `aya schedule activity` as the first SessionStart hook** — ensures
-   a new session always starts with a fresh activity timestamp, preventing
-   stale-idle suppression. ✅ Done (`aya schedule install` places it first
-   in SessionStart and also adds a PreToolUse hook).
+1. **Activity reset at SessionStart** — ✅ `aya schedule install` writes
+   `aya schedule activity` as the first SessionStart hook so every new
+   session begins with a fresh activity timestamp. A PreToolUse hook also
+   refreshes the timer on every tool call. Stale-idle suppression at
+   session start is no longer a real risk in default installs.
 
-### Medium-term (runtime idle checks)
+2. **Re-evaluation at every tool boundary** — ✅ The PostToolUse hook
+   runs `aya hook crons --event PostToolUse`, which re-runs
+   `get_session_crons()` and registers any session crons that have
+   newly become eligible since the last hook fire. Mid-session
+   `aya schedule recurring` calls fire on the next tool boundary.
 
-3. **Embed idle checks in cron prompts** — instead of suppressing
-   registration, register all crons but include `aya schedule is-idle`
-   in the prompt so Claude can skip the action at fire-time.
+### Open: runtime enforcement inside the cron prompt
+
+3. **Embed idle checks in cron prompts** — once a cron is registered with
+   Claude Code's engine, it fires regardless of aya's idle state. For
+   strict gating, include `aya schedule is-idle --threshold 30m && exit 0`
+   at the top of the cron's prompt so the *prompt itself* skips the work.
 
 4. **Add `only_during` enforcement to cron prompts** — same pattern:
    register the cron, but let the prompt check the time window before
-   acting.
+   acting. The `--only-during` flag only filters at registration time;
+   Claude Code's engine has no time-window awareness.
 
 ### Longer-term (architecture)
 

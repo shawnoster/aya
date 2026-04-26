@@ -248,7 +248,6 @@ After editing any skill file in the aya repo, run `/reload-plugins` in your sess
 | ---- | ---- |
 | `aya version` | Show the installed aya version |
 | `aya init` | Generate identity keypair for this instance |
-| `aya profile` | Initialize or rotate the persistent assistant profile |
 | `aya pair` | Pair two instances via short-lived relay code |
 | `aya trust` | Manually trust a DID |
 | `aya pack` | Create a signed knowledge packet (writes file; doesn't publish) |
@@ -275,7 +274,6 @@ After editing any skill file in the aya repo, run `/reload-plugins` in your sess
 | `aya schedule snooze` | Snooze a reminder until a given time |
 | `aya schedule alerts` | Show alerts from the background watcher |
 | `aya schedule tick` | One scheduler cycle — poll watches, expire alerts (system cron uses this) |
-| `aya schedule poll` | Run one poll cycle of due watches/reminders |
 | `aya schedule pending` | Show unclaimed alerts + session crons (SessionStart hook reads this) |
 | `aya schedule install` | Install scheduler integrations — system crontab + Claude Code hooks |
 | `aya schedule uninstall` | Remove scheduler integrations |

@@ -40,7 +40,6 @@ from aya.pair import (
     publish_pair_request,
 )
 from aya.paths import CONFIG_PATH, PROFILE_PATH
-from aya.profile import ensure_profile
 from aya.relay import RelayClient, RelayUnreachableError
 
 # Subcommand modules — imported at top-level; each is only invoked when its
@@ -69,7 +68,6 @@ from aya.scheduler import (
     parse_due,
     poll_watch,
     record_activity,
-    run_poll,
     run_tick,
     show_alerts,
     snooze_item,
@@ -456,8 +454,7 @@ def init(
 @app.command()
 def trust(
     did: str = typer.Argument(help="DID to trust (did:key:z6Mk…)"),
-    peer: str = typer.Option(None, "--peer", help="Name for the remote peer"),
-    label: str = typer.Option(None, "--label", help="[deprecated] Use --peer instead", hidden=True),
+    peer: str = typer.Option(..., "--peer", help="Name for the remote peer"),
     nostr_pubkey: str = typer.Option(
         None,
         help="Nostr pubkey hex (required for send/receive; pairing fills this automatically)",
@@ -468,17 +465,6 @@ def trust(
     ),
 ) -> None:
     """Add a DID to your trusted keys list."""
-    if label is not None and peer is not None:
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --peer and --label together. Use --peer only.",
-            exit_code=2,
-        )
-    if label is not None:
-        err.print("[yellow]Warning: --label is deprecated, use --peer instead[/yellow]")
-        peer = label
-    if peer is None:
-        _emit_error(ErrorCode.INVALID_ARGUMENT, "Missing option '--peer'.", exit_code=2)
     format_ = resolve_format(format_)
     p = _load_profile(profile)
     p.trusted_keys[peer] = TrustedKey(
@@ -516,9 +502,6 @@ def pack(
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
     out: Path = typer.Option(None, help="Write packet JSON to file (default: stdout)"),
     as_: str = typer.Option("default", "--as", help="Local identity to act as"),
-    instance: str = typer.Option(
-        None, "--instance", help="[deprecated] Use --as instead", hidden=True
-    ),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
     ),
@@ -532,15 +515,6 @@ def pack(
     To pack and send in one step: aya send --to <label> --intent "..."
     See also: aya send-raw (send a pre-built packet file)
     """
-    if instance is not None and as_ != "default":
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --as and --instance together. Use --as only.",
-            exit_code=2,
-        )
-    if instance is not None:
-        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
-        as_ = instance
     format_ = resolve_format(format_)
     p = _load_profile(profile)
     local = _resolve_instance(p, as_)
@@ -601,9 +575,6 @@ def send_raw(
     packet_file: Path = typer.Argument(help="Packet JSON file to send"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     as_: str = typer.Option("default", "--as", help="Local identity to act as"),
-    instance: str = typer.Option(
-        None, "--instance", help="[deprecated] Use --as instead", hidden=True
-    ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
     idempotency_key: str = typer.Option(
         None,
@@ -624,15 +595,6 @@ def send_raw(
     See also: aya pack (create a packet without sending)
     """
     logger.debug("send-raw: packet_file=%s, as=%s", packet_file, as_)
-    if instance is not None and as_ != "default":
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --as and --instance together. Use --as only.",
-            exit_code=2,
-        )
-    if instance is not None:
-        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
-        as_ = instance
     format_ = resolve_format(format_)
     p = _load_profile(profile)
     local = _resolve_instance(p, as_)
@@ -724,9 +686,6 @@ def send_cmd(
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
     as_: str = typer.Option("default", "--as", help="Local identity to act as"),
-    instance: str = typer.Option(
-        None, "--instance", help="[deprecated] Use --as instead", hidden=True
-    ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
@@ -753,15 +712,6 @@ def send_cmd(
     publishes to the relay. This is the command most users want.
     """
     logger.debug("send: to=%s, intent=%s, as=%s", to, intent, as_)
-    if instance is not None and as_ != "default":
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --as and --instance together. Use --as only.",
-            exit_code=2,
-        )
-    if instance is not None:
-        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
-        as_ = instance
     format_ = resolve_format(format_)
 
     async def _run() -> None:
@@ -895,9 +845,7 @@ def ack(
     dismiss: bool = typer.Option(
         False, "--dismiss", help="No-action acknowledgment; message defaults to 'acknowledged'"
     ),
-    as_: str = typer.Option(
-        "default", "--as", "--instance", help="Local identity to act as (legacy alias: --instance)"
-    ),
+    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show ACK packet without publishing"
@@ -1079,9 +1027,6 @@ def ack(
 def receive(
     relay: str = typer.Option(None),
     as_: str = typer.Option("default", "--as", help="Local identity to act as"),
-    instance: str = typer.Option(
-        None, "--instance", help="[deprecated] Use --as instead", hidden=True
-    ),
     auto_ingest: bool = typer.Option(False, help="Ingest all trusted packets without prompting"),
     skip_untrusted: bool = typer.Option(
         False,
@@ -1107,15 +1052,6 @@ def receive(
         skip_untrusted,
         quiet,
     )
-    if instance is not None and as_ != "default":
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --as and --instance together. Use --as only.",
-            exit_code=2,
-        )
-    if instance is not None:
-        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
-        as_ = instance
     if skip_untrusted and not auto_ingest and not yes:
         _emit_error(
             ErrorCode.INVALID_ARGUMENT,
@@ -1296,9 +1232,6 @@ def receive(
 def inbox(
     relay: str = typer.Option(None),
     as_: str = typer.Option("default", "--as", help="Local identity to act as"),
-    instance: str = typer.Option(
-        None, "--instance", help="[deprecated] Use --as instead", hidden=True
-    ),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
@@ -1308,15 +1241,6 @@ def inbox(
     profile: Path = typer.Option(DEFAULT_PROFILE),
 ) -> None:
     """List pending packets without ingesting."""
-    if instance is not None and as_ != "default":
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --as and --instance together. Use --as only.",
-            exit_code=2,
-        )
-    if instance is not None:
-        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
-        as_ = instance
     format_ = resolve_format(format_)
 
     async def _run() -> None:
@@ -1360,12 +1284,8 @@ def inbox(
 @app.command()
 def pair(
     code: str = typer.Option(None, help="Pairing code from the other instance (joiner mode)"),
-    peer: str = typer.Option(None, "--peer", help="Name for the remote peer"),
-    label: str = typer.Option(None, "--label", help="[deprecated] Use --peer instead", hidden=True),
+    peer: str = typer.Option(..., "--peer", help="Name for the remote peer"),
     as_: str = typer.Option("default", "--as", help="Local identity to act as"),
-    instance: str = typer.Option(
-        None, "--instance", help="[deprecated] Use --as instead", hidden=True
-    ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show pairing intent without publishing"
@@ -1376,26 +1296,6 @@ def pair(
     ),
 ) -> None:
     """Pair two instances with a short-lived code — no manual DID exchange."""
-    if label is not None and peer is not None:
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --peer and --label together. Use --peer only.",
-            exit_code=2,
-        )
-    if label is not None:
-        err.print("[yellow]Warning: --label is deprecated, use --peer instead[/yellow]")
-        peer = label
-    if instance is not None and as_ != "default":
-        _emit_error(
-            ErrorCode.INVALID_ARGUMENT,
-            "Cannot use --as and --instance together. Use --as only.",
-            exit_code=2,
-        )
-    if instance is not None:
-        err.print("[yellow]Warning: --instance is deprecated, use --as instead[/yellow]")
-        as_ = instance
-    if peer is None:
-        _emit_error(ErrorCode.INVALID_ARGUMENT, "Missing option '--peer'.", exit_code=2)
     format_ = resolve_format(format_)
     p = _load_profile(profile)
     local = _resolve_instance(p, as_)
@@ -1810,21 +1710,6 @@ def schedule_snooze(
     console.print(
         f"💤 Snoozed {item['id'][:8]} until {snooze_until.strftime('%a %b %d, %I:%M %p')}"
     )
-
-
-@schedule_app.command("poll")
-def schedule_poll(
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output on no changes"),
-    format_: OutputFormat = typer.Option(
-        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
-    ),
-) -> None:
-    """Run one poll cycle (legacy — use 'tick' instead)."""
-    format_ = resolve_format(format_)
-    run_poll(quiet=quiet)
-    if format_ == OutputFormat.JSON:
-        _output_json({"status": "ok"})
-        raise typer.Exit(0)
 
 
 @schedule_app.command("tick")
@@ -2278,22 +2163,6 @@ def _maybe_create_ci_watch() -> None:
         interval=1,
         remove_when="checks_complete",
     )
-
-
-# ── profile ───────────────────────────────────────────────────────────────────
-
-
-@app.command()
-def profile(
-    profile_path: Path = typer.Option(DEFAULT_PROFILE, "--profile", help="Path to profile.json"),
-) -> None:
-    """Initialize or rotate the persistent assistant profile."""
-    path = profile_path if str(profile_path) != str(DEFAULT_PROFILE) else PROFILE_PATH
-    p = ensure_profile(path)
-    console.print(f"[green]✓[/green] Profile: [dim]{path}[/dim]")
-    console.print(f"  Alias:     [cyan]{p.get('alias', 'Assistant')}[/cyan]")
-    console.print(f"  Ship Mind: [cyan]{p.get('ship_mind_name', '')}[/cyan]")
-    console.print(f"  Next eval: [dim]{p.get('name_next_reevaluation_at', 'unknown')}[/dim]")
 
 
 # ── status ────────────────────────────────────────────────────────────────────

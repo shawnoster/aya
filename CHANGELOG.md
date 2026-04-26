@@ -4,9 +4,10 @@
 
 ### Removed
 
-- `aya schedule poll` — replaced by `aya schedule tick`, which `run_poll` already
-  delegates to. The command had been documented as legacy since the unified
-  tick refactor; nothing in skills, hooks, or the system crontab calls it.
+- `aya schedule poll` — replaced by `aya schedule tick`, which already calls
+  `run_poll` internally. The command had been documented as legacy since the
+  unified tick refactor; nothing in skills, hooks, or the system crontab
+  calls it.
 - `aya profile` — the persistent assistant profile is created and touched by
   `aya init` and `aya pair`; the inspect-only verb had no callers in skills,
   hooks, or the MCP surface. To inspect a profile, read `~/.aya/profile.json`

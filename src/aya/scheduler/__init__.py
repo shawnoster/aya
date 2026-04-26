@@ -12,7 +12,7 @@ Usage (via CLI):
     aya schedule check   [--format json]
     aya schedule dismiss <id>
     aya schedule snooze  <id> --until "in 1 hour"
-    aya schedule poll    [--quiet]
+    aya schedule tick    [--quiet]
     aya schedule alerts  [--format json]
 """
 

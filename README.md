@@ -62,7 +62,7 @@ Three flags name *who* you're talking about, and they're easy to confuse:
 - **`--as <name>`** — picks *which local identity* to act as for a command. Defaults to `default`; with multiple instances on a machine, pass `--as alice` to disambiguate.
 - **`--peer <name>`** — names a *remote* identity (the one you've paired with). Used with `aya pair`, `aya trust`, etc.
 
-A few older commands accept `--label` as a deprecated alias for `--peer`. Prefer `--peer` in new scripts. Quick mnemonic: `--label` *creates* a local name, `--as` *selects* one, `--peer` *targets* a remote one.
+Quick mnemonic: `--label` *creates* a local name, `--as` *selects* one, `--peer` *targets* a remote one.
 
 ## Scheduling
 

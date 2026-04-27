@@ -81,9 +81,9 @@ aya status
 ```
 
 > **`--as` vs `--label` vs `--peer`** — three flags, three roles:
-> - `--as` is your **local identity** (which keypair to act as). Matches the label from `aya init --label <name>`. Legacy alias: `--instance`.
-> - `--label` is used with `aya init` to **name a new local identity**. (In older versions, `--label` was also used where `--peer` is now; some commands still accept it as a legacy alias.)
-> - `--peer` names a **remote machine** (used in `pair` and `trust`). Preferred over the legacy `--label` alias.
+> - `--as` is your **local identity** (which keypair to act as). Matches the label from `aya init --label <name>`.
+> - `--label` is used with `aya init` to **name a new local identity**.
+> - `--peer` names a **remote machine** (used in `pair` and `trust`).
 >
 > Common label patterns: `home`/`work` (personal setup), first names (sharing with a friend), `laptop`/`desktop`/`server` (by machine).
 

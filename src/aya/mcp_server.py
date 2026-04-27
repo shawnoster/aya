@@ -332,7 +332,7 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
     # Filter dropped packets — same logic as CLI `inbox` so both surfaces agree.
     # Dropped IDs are user-marked-ignore and must never resurface on any surface.
     dropped_set = set(profile.dropped_ids)
-    pending_packets = [
+    new_packets = [
         pkt
         for pkt in all_packets
         if pkt.id not in ingested_set and pkt.id not in dropped_set
@@ -347,7 +347,7 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
             "trusted": profile.is_trusted(pkt.from_did),
             "summary": pkt.summary(),
         }
-        for pkt in pending_packets
+        for pkt in new_packets
     ]
     return _text(summaries)
 

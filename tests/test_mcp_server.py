@@ -240,6 +240,97 @@ async def test_inbox_tool(tmp_path):
     assert isinstance(payload, list)
 
 
+async def test_inbox_filters_dropped_packets(tmp_path):
+    """aya_inbox must not return packets whose IDs are in dropped_ids.
+
+    Regression for surface-drift bug: MCP inbox was missing the dropped_ids
+    filter that CLI inbox already applied, causing `aya drop` to silence CLI
+    but not MCP.
+    """
+    from aya.identity import Identity, Profile, TrustedKey
+    from aya.packet import Packet
+
+    local = Identity.generate("default")
+    sender = Identity.generate("work")
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.instances["default"] = local
+    profile.trusted_keys["work"] = TrustedKey(
+        did=sender.did, label="work", nostr_pubkey=sender.nostr_public_hex
+    )
+    profile_path = tmp_path / "profile.json"
+
+    kept = Packet(**{"from": sender.did, "to": local.did}, intent="kept packet").sign(sender)
+    dropped = Packet(**{"from": sender.did, "to": local.did}, intent="dropped packet").sign(sender)
+
+    # Pre-populate dropped_ids with the second packet's ID.
+    profile.dropped_ids.append(dropped.id)
+    profile.save(profile_path)
+
+    async def mock_fetch(*args, **kwargs):
+        yield kept
+        yield dropped
+
+    with (
+        patch("aya.paths.PROFILE_PATH", profile_path),
+        patch("aya.mcp_server._load_profile", return_value=profile),
+        patch("aya.relay.RelayClient") as mock_cls,
+    ):
+        mock_cls.return_value.fetch_pending = mock_fetch
+        result = await call_tool("aya_inbox", {"instance": "default"})
+
+    payload = json.loads(result[0].text)
+    assert isinstance(payload, list)
+    returned_ids = [p["id"] for p in payload]
+    assert kept.id in returned_ids, "non-dropped packet must appear in inbox"
+    assert dropped.id not in returned_ids, "dropped packet must be filtered from inbox"
+
+
+async def test_inbox_includes_trusted_flag(tmp_path):
+    """aya_inbox summaries must include a 'trusted' boolean field.
+
+    Ensures callers (agents) can distinguish trusted vs untrusted senders
+    without a separate lookup, matching the CLI inbox JSON output.
+    """
+    from aya.identity import Identity, Profile, TrustedKey
+    from aya.packet import Packet
+
+    local = Identity.generate("default")
+    trusted_sender = Identity.generate("friend")
+    untrusted_sender = Identity.generate("stranger")
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.instances["default"] = local
+    profile.trusted_keys["friend"] = TrustedKey(
+        did=trusted_sender.did, label="friend", nostr_pubkey=trusted_sender.nostr_public_hex
+    )
+    profile_path = tmp_path / "profile.json"
+    profile.save(profile_path)
+
+    trusted_pkt = Packet(
+        **{"from": trusted_sender.did, "to": local.did}, intent="trusted msg"
+    ).sign(trusted_sender)
+    untrusted_pkt = Packet(
+        **{"from": untrusted_sender.did, "to": local.did}, intent="untrusted msg"
+    ).sign(untrusted_sender)
+
+    async def mock_fetch(*args, **kwargs):
+        yield trusted_pkt
+        yield untrusted_pkt
+
+    with (
+        patch("aya.paths.PROFILE_PATH", profile_path),
+        patch("aya.mcp_server._load_profile", return_value=profile),
+        patch("aya.relay.RelayClient") as mock_cls,
+    ):
+        mock_cls.return_value.fetch_pending = mock_fetch
+        result = await call_tool("aya_inbox", {"instance": "default"})
+
+    payload = json.loads(result[0].text)
+    by_id = {p["id"]: p for p in payload}
+
+    assert by_id[trusted_pkt.id]["trusted"] is True
+    assert by_id[untrusted_pkt.id]["trusted"] is False
+
+
 # ---------------------------------------------------------------------------
 # aya_receive
 # ---------------------------------------------------------------------------

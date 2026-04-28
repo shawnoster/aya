@@ -329,7 +329,12 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
 
     all_packets = [pkt async for pkt in client.fetch_pending()]
     ingested_set = {entry["id"] for entry in profile.ingested_ids}
-    new_packets = [pkt for pkt in all_packets if pkt.id not in ingested_set]
+    # Filter dropped packets — same logic as CLI `inbox` so both surfaces agree.
+    # Dropped IDs are user-marked-ignore and must never resurface on any surface.
+    dropped_set = set(profile.dropped_ids)
+    new_packets = [
+        pkt for pkt in all_packets if pkt.id not in ingested_set and pkt.id not in dropped_set
+    ]
 
     summaries = [
         {
@@ -337,6 +342,7 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
             "intent": pkt.intent,
             "from": pkt.from_did,
             "sent_at": pkt.sent_at,
+            "trusted": profile.is_trusted(pkt.from_did),
             "summary": pkt.summary(),
         }
         for pkt in new_packets

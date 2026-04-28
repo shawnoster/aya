@@ -47,9 +47,15 @@ link-skills:
 unlink-skills:
 	@for dir in $(SKILLS_DIR)/*/; do \
 		name=$$(basename $$dir); \
+		src=$$dir/SKILL.md; \
 		dest=$(COMMANDS_DIR)/$$name.md; \
 		if [ -L "$$dest" ]; then \
-			rm "$$dest"; \
-			echo "  unlinked $$name"; \
+			target=$$(readlink "$$dest"); \
+			if [ "$$target" = "$$src" ]; then \
+				rm "$$dest"; \
+				echo "  unlinked $$name"; \
+			else \
+				echo "  skipped $$name (symlink points elsewhere: $$target)"; \
+			fi; \
 		fi; \
 	done

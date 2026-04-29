@@ -6,17 +6,57 @@ design and roadmap at `notebook/projects/aya-gateway/README.md`.
 
 ## Status
 
-Phase 0 — bootstrap. `/health` only. Auth, deploy, business routes
-follow in [shawnoster/aya issues with the `gateway` label](https://github.com/shawnoster/aya/issues?q=is%3Aissue+label%3Agateway).
+Phase 1 — bearer-token auth. `/health` is unauthed (liveness probes);
+all other routes require `Authorization: Bearer <token>`. Deploy and
+business routes follow in subsequent issues.
+
+## Auth
+
+All routes except `/health` require an `Authorization: Bearer <token>`
+header. The token is loaded from a secrets file bind-mounted on the
+host at `/run/secrets/gateway.env`.
+
+### Bootstrap (one-time, on the host)
+
+```bash
+# Pull the credential from 1Password and write it to the secrets file.
+# Run this once before starting the container.
+op read 'op://Private/aya-gateway/credential' \
+  | sed 's/^/GATEWAY_BEARER=/' \
+  > /run/secrets/gateway.env
+chmod 600 /run/secrets/gateway.env
+```
+
+The file must contain a single line:
+
+```
+GATEWAY_BEARER=<your-token>
+```
+
+### Rotation
+
+1. Update the credential in 1Password (`op://Private/aya-gateway/credential`).
+2. Regenerate the secrets file on the host:
+   ```bash
+   op read 'op://Private/aya-gateway/credential' \
+     | sed 's/^/GATEWAY_BEARER=/' \
+     > /run/secrets/gateway.env
+   chmod 600 /run/secrets/gateway.env
+   ```
+3. Restart the container to pick up the new token:
+   ```bash
+   docker compose restart
+   ```
 
 ## Quickstart (local dev)
 
 ```bash
 cd gateway
-uv sync
-uv run uvicorn app.main:app --reload --port 8080
+GATEWAY_BEARER=dev-token uv run uvicorn app.main:app --reload --port 8080
 curl localhost:8080/health
 # {"ok":true,"version":"dev"}
+curl -H "Authorization: Bearer dev-token" localhost:8080/
+# future authenticated routes return 200
 ```
 
 Run the test suite:
@@ -31,6 +71,7 @@ uv run mypy app
 
 ```bash
 cd gateway
+# Create the secrets file first (see Bootstrap above), then:
 docker compose up -d --build
 curl localhost:8080/health
 docker compose down
@@ -50,9 +91,11 @@ curl localhost:8080/health
 gateway/
 ├── app/
 │   ├── __init__.py
-│   └── main.py          # FastAPI app + /health
+│   └── main.py          # FastAPI app, /health, bearer-auth dependency
 ├── tests/
-│   └── test_health.py
+│   ├── conftest.py      # sets GATEWAY_BEARER for the test run
+│   ├── test_auth.py     # bearer-token auth tests
+│   └── test_health.py   # /health smoke tests
 ├── Dockerfile           # multi-stage, non-root, Python 3.12
 ├── docker-compose.yml   # bridge networking, restart unless-stopped
 └── pyproject.toml       # fastapi, uvicorn + dev tooling

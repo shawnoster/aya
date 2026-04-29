@@ -1,13 +1,13 @@
-"""aya-gateway HTTP service.
-
-Phase 0 bootstrap: liveness only. Auth, business routes, and deploy
-plumbing land in subsequent issues — see
-`notebook/projects/aya-gateway/README.md` for the full v1 plan.
-"""
+"""aya-gateway HTTP service."""
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def _version() -> str:
@@ -21,7 +21,41 @@ def _version() -> str:
     return os.getenv("GIT_SHA", "dev")
 
 
-app = FastAPI(title="aya-gateway", version=_version())
+def _bearer_token() -> str:
+    """Return GATEWAY_BEARER from the environment.
+
+    Read per-call (not cached) so tests can override it with monkeypatch
+    without reloading the module. In production the value is fixed at
+    container start and never changes.
+    """
+    return os.getenv("GATEWAY_BEARER", "").strip()
+
+
+def _require_bearer(
+    credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),  # noqa: B008
+) -> None:
+    """FastAPI dependency — reject requests that lack a valid bearer token."""
+    if credentials is None or credentials.credentials != _bearer_token():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Fail fast at startup if GATEWAY_BEARER is absent."""
+    if not _bearer_token():
+        raise RuntimeError("GATEWAY_BEARER is not set — refusing to start without a bearer token")
+    yield
+
+
+app = FastAPI(title="aya-gateway", version=_version(), lifespan=_lifespan)
+
+# Router for all authenticated endpoints. Add future routes here.
+authenticated = APIRouter(dependencies=[Depends(_require_bearer)])
+app.include_router(authenticated)
 
 
 @app.get("/health")

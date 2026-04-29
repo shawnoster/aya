@@ -1,6 +1,7 @@
 """Smoke tests for /health."""
 
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 
 from app.main import app
 
@@ -13,7 +14,13 @@ def test_health_returns_ok() -> None:
     assert response.json()["ok"] is True
 
 
-def test_health_returns_version_string() -> None:
+def test_health_defaults_version_to_dev(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.delenv("GIT_SHA", raising=False)
     body = client.get("/health").json()
-    assert isinstance(body["version"], str)
-    assert body["version"]  # non-empty
+    assert body["version"] == "dev"
+
+
+def test_health_uses_git_sha_when_set(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("GIT_SHA", "abc123")
+    body = client.get("/health").json()
+    assert body["version"] == "abc123"

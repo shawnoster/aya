@@ -735,7 +735,7 @@ class TestGetDueReminders:
     def test_returns_past_due_reminders(self):
         from aya.scheduler import get_due_reminders
 
-        past = datetime(2025, 1, 1, 12, 0, tzinfo=LOCAL_TZ)
+        datetime(2025, 1, 1, 12, 0, tzinfo=LOCAL_TZ)
         add_reminder("Old reminder", "2025-01-01T12:00:00")
         now = datetime(2026, 4, 1, 12, 0, tzinfo=LOCAL_TZ)
         due = get_due_reminders(now=now)
@@ -745,7 +745,7 @@ class TestGetDueReminders:
         from aya.scheduler import get_due_reminders
 
         add_reminder("Future reminder", "in 2 hours")
-        now = datetime(2026, 4, 1, 12, 0, tzinfo=LOCAL_TZ)
+        datetime(2026, 4, 1, 12, 0, tzinfo=LOCAL_TZ)
         # "in 2 hours" relative to now is in the past only if we use a very old now
         # Use a future now far ahead to ensure it's not due yet
         due = get_due_reminders(now=datetime(2026, 4, 1, 13, 0, tzinfo=LOCAL_TZ))
@@ -770,7 +770,6 @@ class TestGetDueReminders:
 
     def test_skips_items_with_malformed_timestamps(self):
         """Reminders with bad timestamps are silently skipped."""
-        from aya import scheduler
         from aya.scheduler import get_due_reminders
 
         items = load_items()
@@ -795,7 +794,7 @@ class TestGetUpcomingReminders:
 
         now = datetime(2026, 4, 1, 12, 0, tzinfo=LOCAL_TZ)
         # Create a reminder at now+1h — within 24h window
-        item = add_reminder("Soon", "in 1 hour")
+        add_reminder("Soon", "in 1 hour")
         upcoming = get_upcoming_reminders(now=now)
         # The reminder was added with parse time "in 1 hour" relative to real now
         # so it's in the near future; just verify the function returns a list
@@ -812,8 +811,8 @@ class TestGetUpcomingReminders:
     def test_sorted_by_due_at(self):
         from aya.scheduler import get_upcoming_reminders
 
-        item1 = add_reminder("First", "in 2 hours")
-        item2 = add_reminder("Second", "in 1 hour")
+        add_reminder("First", "in 2 hours")
+        add_reminder("Second", "in 1 hour")
         upcoming = get_upcoming_reminders()
         due_times = [r["due_at"] for r in upcoming]
         assert due_times == sorted(due_times)
@@ -826,7 +825,7 @@ class TestGetUpcomingReminders:
     def test_custom_hours_window(self):
         from aya.scheduler import get_upcoming_reminders
 
-        item = add_reminder("Near future", "in 1 hour")
+        add_reminder("Near future", "in 1 hour")
         now = datetime(2026, 4, 1, 12, 0, tzinfo=LOCAL_TZ)
         # With a tiny window (0 hours) nothing should be "upcoming"
         # This is a bounds check — use the real item as a control
@@ -869,4 +868,3 @@ class TestGetActiveWatches:
         add_reminder("Not a watch", "in 1 hour")
         watches = get_active_watches()
         assert all(w["type"] == "watch" for w in watches)
-

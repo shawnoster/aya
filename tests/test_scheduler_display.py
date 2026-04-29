@@ -577,9 +577,7 @@ class TestShowAlerts:
             "seen": seen,
             "severity": SEVERITY_ACTIONABLE,
         }
-        alerts_file.write_text(
-            json.dumps({"schema_version": 1, "alerts": [alert]})
-        )
+        alerts_file.write_text(json.dumps({"schema_version": 1, "alerts": [alert]}))
         return alert
 
     def test_returns_unseen_alerts(self, tmp_path):
@@ -645,7 +643,7 @@ class TestDismissAlert:
         assert data["alerts"][0]["seen"] is True
 
     def test_dismiss_prefix_match(self, tmp_path):
-        alerts_file = tmp_path / "alerts.json"
+        tmp_path / "alerts.json"
         alert_id = self._setup_alert(tmp_path)
 
         prefix = alert_id[:8]
@@ -667,9 +665,8 @@ class TestDisplayItems:
     from aya.scheduler.display import _display_items
 
     def _reminder(self, due_in_future=True):
-        from datetime import timezone
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         due = now + timedelta(days=1) if due_in_future else now - timedelta(days=365)
         return {
             "id": "01JTEST00000000000000000001",
@@ -742,12 +739,11 @@ class TestDisplayItems:
         assert "github-pr" in captured.out
 
     def test_watch_with_last_checked(self, capsys):
-        from datetime import timezone
 
         from aya.scheduler.display import _display_items
 
         watch = self._watch()
-        watch["last_checked_at"] = datetime(2026, 4, 1, 11, 0, tzinfo=timezone.utc).isoformat()
+        watch["last_checked_at"] = datetime(2026, 4, 1, 11, 0, tzinfo=UTC).isoformat()
         _display_items([watch])
         captured = capsys.readouterr()
         assert "11:00" in captured.out

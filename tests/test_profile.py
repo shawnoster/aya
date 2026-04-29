@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-
-import pytest
 
 from aya.profile import (
     NAME_CANDIDATES,
@@ -20,7 +17,6 @@ from aya.profile import (
     _rotated_name,
     ensure_profile,
 )
-
 
 # ── _iso_z ───────────────────────────────────────────────────────────────────
 
@@ -112,11 +108,7 @@ class TestActivityEntriesLastDays:
         log = tmp_path / "done.md"
         now = datetime(2026, 4, 3, 12, 0, tzinfo=UTC)
         log.write_text(
-            "## 2026-04-03\n"
-            "- reviewed PR\n"
-            "- updated docs\n"
-            "## 2026-04-01\n"
-            "- wrote script\n"
+            "## 2026-04-03\n- reviewed PR\n- updated docs\n## 2026-04-01\n- wrote script\n"
         )
         entries = _activity_entries_last_days(log, now)
         assert "reviewed PR" in entries

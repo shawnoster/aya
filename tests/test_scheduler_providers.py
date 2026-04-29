@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from aya.scheduler.providers import (
     _check_ci_checks,
@@ -33,7 +30,6 @@ from aya.scheduler.types import (
     JiraTicketState,
     SchedulerItem,
 )
-
 
 # ── _get_jira_credentials ────────────────────────────────────────────────────
 
@@ -127,10 +123,12 @@ class TestRunGh:
         prov_mod._gh_missing_warned = False
         import logging
 
-        with caplog.at_level(logging.WARNING, logger="aya.scheduler.providers"):
-            with patch("subprocess.run", side_effect=FileNotFoundError):
-                _run_gh(["api", "/a"])
-                _run_gh(["api", "/b"])
+        with (
+            caplog.at_level(logging.WARNING, logger="aya.scheduler.providers"),
+            patch("subprocess.run", side_effect=FileNotFoundError),
+        ):
+            _run_gh(["api", "/a"])
+            _run_gh(["api", "/b"])
         warning_msgs = [r for r in caplog.records if "not installed" in r.message]
         assert len(warning_msgs) == 1
 
@@ -449,11 +447,17 @@ class TestDetectGithubMerged:
 
 class TestDetectJiraNewResults:
     def test_no_new_issues(self):
-        state: JiraQueryState = {"total": 1, "issues": [{"key": "A-1", "summary": "x", "status": "Open"}]}
+        state: JiraQueryState = {
+            "total": 1,
+            "issues": [{"key": "A-1", "summary": "x", "status": "Open"}],
+        }
         assert _detect_jira_new_results(state, state) is False
 
     def test_new_issue_detected(self):
-        old: JiraQueryState = {"total": 1, "issues": [{"key": "A-1", "summary": "x", "status": "Open"}]}
+        old: JiraQueryState = {
+            "total": 1,
+            "issues": [{"key": "A-1", "summary": "x", "status": "Open"}],
+        }
         new: JiraQueryState = {
             "total": 2,
             "issues": [
@@ -464,7 +468,10 @@ class TestDetectJiraNewResults:
         assert _detect_jira_new_results(new, old) is True
 
     def test_none_last_with_issues_triggers(self):
-        new: JiraQueryState = {"total": 1, "issues": [{"key": "A-1", "summary": "x", "status": "Open"}]}
+        new: JiraQueryState = {
+            "total": 1,
+            "issues": [{"key": "A-1", "summary": "x", "status": "Open"}],
+        }
         assert _detect_jira_new_results(new, None) is True
 
 

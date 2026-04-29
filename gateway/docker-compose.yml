@@ -1,0 +1,17 @@
+services:
+  gateway:
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: aya-gateway:latest
+    container_name: aya-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    networks:
+      - default
+
+networks:
+  default:
+    driver: bridge

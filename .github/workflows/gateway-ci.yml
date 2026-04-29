@@ -1,19 +1,17 @@
-name: CI
+name: Gateway CI
 
 on:
   push:
     branches: [main]
     paths:
-      - "src/**"
-      - "tests/**"
-      - "pyproject.toml"
+      - "gateway/**"
+      - ".github/workflows/gateway-ci.yml"
   pull_request:
     branches: [main]
-    # No path filter on pull_request: the "Lint, type-check, test" job is
-    # a required status check via the Protect main ruleset, and
-    # path-filtered required checks never report on PRs that don't touch
-    # the filtered paths — leaving doc-only PRs blocked indefinitely.
-    # Always running CI on PRs reports the check; uv cache keeps it fast.
+    # No path filter on pull_request — same reasoning as the main aya
+    # workflow: required status checks gated on path filters never
+    # report on PRs that don't touch those paths, blocking unrelated
+    # PRs indefinitely. uv cache keeps this fast.
   workflow_dispatch:
 
 concurrency:
@@ -25,8 +23,11 @@ permissions:
 
 jobs:
   ci:
-    name: Lint, type-check, test
+    name: Gateway lint, type-check, test
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway
 
     steps:
       - uses: actions/checkout@v6
@@ -40,13 +41,13 @@ jobs:
         run: uv sync --all-groups
 
       - name: Lint
-        run: uv run ruff check src tests
+        run: uv run ruff check .
 
       - name: Format check
-        run: uv run ruff format --check src tests
+        run: uv run ruff format --check .
 
       - name: Type check
-        run: uv run mypy src
+        run: uv run mypy app
 
       - name: Tests
         run: uv run pytest

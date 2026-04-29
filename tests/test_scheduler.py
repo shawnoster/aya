@@ -735,7 +735,6 @@ class TestGetDueReminders:
     def test_returns_past_due_reminders(self):
         from aya.scheduler import get_due_reminders
 
-        datetime(2025, 1, 1, 12, 0, tzinfo=LOCAL_TZ)
         add_reminder("Old reminder", "2025-01-01T12:00:00")
         now = datetime(2026, 4, 1, 12, 0, tzinfo=LOCAL_TZ)
         due = get_due_reminders(now=now)
@@ -802,13 +801,24 @@ class TestGetUpcomingReminders:
     def test_returns_reminders_within_window(self):
         from aya.scheduler import get_upcoming_reminders
 
+        # Save a reminder directly with due_at 1h after `now` — well within
+        # the default 24h window — and assert it's actually returned.
         now = datetime(2026, 4, 1, 12, 0, tzinfo=LOCAL_TZ)
-        # Create a reminder at now+1h — within 24h window
-        add_reminder("Soon", "in 1 hour")
+        future_due = datetime(2026, 4, 1, 13, 0, tzinfo=LOCAL_TZ)
+        items = load_items()
+        items.append(
+            {
+                "id": "01JFUT000000000000000000003",
+                "type": "reminder",
+                "status": "pending",
+                "message": "Soon",
+                "due_at": future_due.isoformat(),
+                "created_at": now.isoformat(),
+            }
+        )
+        save_items(items)
         upcoming = get_upcoming_reminders(now=now)
-        # The reminder was added with parse time "in 1 hour" relative to real now
-        # so it's in the near future; just verify the function returns a list
-        assert isinstance(upcoming, list)
+        assert any(r["message"] == "Soon" for r in upcoming)
 
     def test_excludes_overdue_reminders(self):
         from aya.scheduler import get_upcoming_reminders

@@ -669,7 +669,8 @@ class TestDisplayItems:
     def _reminder(self, due_in_future=True):
         from datetime import timezone
 
-        due = datetime(2026, 4, 2, 9, 0, tzinfo=timezone.utc) if due_in_future else datetime(2025, 1, 1, 9, 0, tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        due = now + timedelta(days=1) if due_in_future else now - timedelta(days=365)
         return {
             "id": "01JTEST00000000000000000001",
             "type": TYPE_REMINDER,

@@ -4,17 +4,19 @@ FROM python:3.12-slim AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_LINK_MODE=copy
 
-RUN python -m venv /opt/venv
-ENV PATH=/opt/venv/bin:$PATH
+# uv installs deps from the lockfile so the container matches dev/CI exactly.
+RUN pip install --no-cache-dir uv
 
-# Install runtime dependencies into the venv. Pinned ranges match
-# pyproject.toml; will switch to a lockfile-driven install once we have
-# more than two deps to manage.
-RUN pip install --no-cache-dir \
-    "fastapi>=0.115" \
-    "uvicorn[standard]>=0.32"
+WORKDIR /build
+COPY pyproject.toml uv.lock ./
+
+# --no-install-project: install deps only, not the gateway "package"
+# (app/ is mounted in via the runtime stage, not pip-installed).
+RUN uv sync --frozen --no-dev --no-install-project
 
 
 FROM python:3.12-slim AS runtime

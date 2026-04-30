@@ -115,11 +115,17 @@ Run all `dev box →` commands from this repo's `gateway/` directory.
 
 **1. Generate and store the bearer token**
 
+The existing Auth section reads from `op://Private/aya-gateway/credential`, so
+create an **API Credential** item with the bearer in the `credential`
+field:
+
 ```bash
 # dev box → 1Password
-op item create --category=password \
-  --title="aya-gateway" --vault=Private \
-  password="$(openssl rand -base64 32)"
+op item create --category="API Credential" --vault=Private \
+  --title="aya-gateway" credential="$(openssl rand -base64 32)"
+
+# Verify
+op read 'op://Private/aya-gateway/credential'
 ```
 
 **2. Create the deploy directory on Babar**
@@ -141,36 +147,25 @@ rsync -av --delete \
 
 **4. Write the secrets file on Babar**
 
-The secrets file must live on the host at the path the compose file
-expects. Two ways — pick one:
+The compose file expects the secrets at `/run/secrets/gateway.env` on
+the host. Build the line locally (so `op read` only ever runs on the
+dev box that's signed in) and pipe it over SSH in one shot:
 
 ```bash
-# Option A — write directly on Babar (preferred; token never leaves home network)
 ssh babar 'sudo mkdir -p /run/secrets'
-op read 'op://Private/aya-gateway/password' \
+echo "GATEWAY_BEARER=$(op read 'op://Private/aya-gateway/credential')" \
   | ssh babar 'sudo tee /run/secrets/gateway.env >/dev/null && sudo chmod 600 /run/secrets/gateway.env'
-# Verify the file is shaped right:
+
+# Verify (should show GATEWAY_BEARER=<base64-blob>):
 ssh babar 'sudo cat /run/secrets/gateway.env'
-# Expected: GATEWAY_BEARER=<base64-blob>
-```
-
-If the `op read` writes just the token (not the `GATEWAY_BEARER=` prefix),
-fix it:
-
-```bash
-ssh babar "sudo sed -i 's/^/GATEWAY_BEARER=/' /run/secrets/gateway.env"
 ```
 
 **5. Build and start the container**
 
 ```bash
-ssh babar 'cd /volume1/docker/aya-gateway && \
-  GIT_SHA=$(git -C ~/aya rev-parse --short HEAD 2>/dev/null || echo unknown) \
-  docker compose up -d --build'
+# GIT_SHA expands locally on the dev box (Babar has no aya checkout)
+ssh babar "cd /volume1/docker/aya-gateway && GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build"
 ```
-
-(If Babar doesn't have a local checkout of `aya`, drop the GIT_SHA
-arg — version reports as `unknown`.)
 
 **6. Smoke test on Babar**
 
@@ -253,7 +248,7 @@ rsync -av --delete \
   --exclude='__pycache__' --exclude='.venv' --exclude='*.pyc' \
   Dockerfile docker-compose.yml pyproject.toml uv.lock app \
   babar:/volume1/docker/aya-gateway/
-ssh babar 'cd /volume1/docker/aya-gateway && docker compose up -d --build'
+ssh babar "cd /volume1/docker/aya-gateway && GIT_SHA=$(git rev-parse --short HEAD) docker compose up -d --build"
 
 # Token rotation — see "Rotation" under Auth, above. Run on Babar.
 

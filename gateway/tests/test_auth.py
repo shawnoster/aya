@@ -101,15 +101,13 @@ def test_lifespan_fails_when_bearer_unset(monkeypatch: MonkeyPatch) -> None:
     """Container must refuse to start when GATEWAY_BEARER is missing."""
     monkeypatch.delenv("GATEWAY_BEARER", raising=False)
     bare_app = FastAPI(lifespan=_lifespan)
-    with pytest.raises(RuntimeError, match="GATEWAY_BEARER"):
-        with TestClient(bare_app):
-            pass
+    with pytest.raises(RuntimeError, match="GATEWAY_BEARER"), TestClient(bare_app):
+        pass
 
 
 def test_lifespan_fails_when_bearer_blank(monkeypatch: MonkeyPatch) -> None:
     """Whitespace-only token counts as unset — fail fast."""
     monkeypatch.setenv("GATEWAY_BEARER", "   ")
     bare_app = FastAPI(lifespan=_lifespan)
-    with pytest.raises(RuntimeError, match="GATEWAY_BEARER"):
-        with TestClient(bare_app):
-            pass
+    with pytest.raises(RuntimeError, match="GATEWAY_BEARER"), TestClient(bare_app):
+        pass

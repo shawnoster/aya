@@ -58,9 +58,11 @@ cd gateway
 GATEWAY_BEARER=dev-token uv run uvicorn app.main:app --reload --port 8080
 curl localhost:8080/health
 # {"ok":true,"version":"dev"}
-curl -H "Authorization: Bearer dev-token" localhost:8080/
-# future authenticated routes return 200
 ```
+
+Auth is enforced for non-`/health` routes, but no authenticated
+application endpoint is exposed yet in this phase. Future routes will
+go on the `authenticated` router in `app/main.py`.
 
 Run the test suite:
 

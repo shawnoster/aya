@@ -265,8 +265,8 @@ ssh babar 'cd /volume1/docker/aya-gateway && docker compose down'
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Container won't start, `RuntimeError: GATEWAY_BEARER is not set` | secrets file missing or not readable by docker daemon | `ssh babar 'sudo ls -l /run/secrets/gateway.env'` — must exist, mode 600, owner readable by docker |
-| `curl localhost:8080/health` on Babar returns connection refused | container not running or crashed at startup | `docker compose logs gateway` |
-| DSM reverse proxy returns 502 | container down OR port mismatch in DSM rule | verify `localhost:8080` in DSM rule + container is up |
+| `curl localhost:8080/health` on Babar returns connection refused | container not running or crashed at startup | `ssh babar 'cd /volume1/docker/aya-gateway && docker compose logs gateway'` |
+| DSM reverse proxy returns 502 | container down OR port mismatch in DSM rule | verify `localhost:8080` in the DSM rule + check container status with `ssh babar 'cd /volume1/docker/aya-gateway && docker compose ps'` |
 | LE cert acquisition fails | DNS not pointing at Babar yet, or LE rate limit (5 certs/week/domain) | verify `dig gateway.monocularjack.com` returns the public IP; if rate limited, wait it out |
 | Public `https://gateway.../health` hangs | DSM nginx not running, or port 443 not forwarded | check DSM Web Station, verify port-forward at router |
 

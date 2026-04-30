@@ -48,9 +48,10 @@ GATEWAY_BEARER=<your-token>
      > /run/secrets/gateway.env
    chmod 600 /run/secrets/gateway.env
    ```
-3. Restart the container to pick up the new token:
+3. Restart the container to pick up the new token — DSM Container
+   Manager → Container → `aya-gateway` → Restart, or via SSH:
    ```bash
-   docker compose restart
+   ssh babar 'docker restart aya-gateway'
    ```
 
 ## Quickstart (local dev)
@@ -317,6 +318,6 @@ gateway/
 │   ├── test_auth.py     # bearer-token auth tests
 │   └── test_health.py   # /health smoke tests
 ├── Dockerfile           # multi-stage, non-root, Python 3.12
-├── docker-compose.yml   # bridge networking, restart unless-stopped
+├── docker-compose.yml   # synobridge networking, restart always (Babar)
 └── pyproject.toml       # fastapi, uvicorn + dev tooling
 ```

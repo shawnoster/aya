@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""nanoleaf-kitt — KITT-style scanner across the office Nanoleaf panels.
+
+A bright dot bounces left-to-right along the panel array, with a fading
+comet trail behind it in the direction of travel. End-hold on each
+bounce gives a natural pause before reversing. Loops continuously
+until panel state is changed (e.g., via HA's light.turn_on).
+
+Reads token from $NANOLEAF_TOKEN, then ~/.config/nanoleaf-direct/env,
+then ~/.config/nanoleaf-direct/token.json. Layout cached at
+~/.config/nanoleaf-direct/layout.json.
+
+Fire-and-forget: this script does not snapshot or restore. Callers
+handle the lifecycle (light-remind --tone kitt-pan does it for you).
+
+Usage:
+  nanoleaf-kitt                                  # red, 1.8s/cycle, trail 4
+  nanoleaf-kitt --color blue                     # blue scanner
+  nanoleaf-kitt --period 2.7                     # slower, more deliberate
+  nanoleaf-kitt --trail 5                        # longer comet
+  nanoleaf-kitt --color 0,255,200 --period 1.4   # custom
+
+Note: minimum cycle period is bounded by the panel count — for 9
+panels the floor is 1.8s (100ms × 18 frames). Asking for a shorter
+period clamps to that minimum.
+"""
+
+import argparse
+import json
+import os
+import pathlib
+import sys
+import urllib.error
+import urllib.request
+
+CTRL_HOST = "192.168.50.31"
+CTRL_PORT = 16021
+CFG_DIR = pathlib.Path.home() / ".config/nanoleaf-direct"
+LAYOUT_CACHE = CFG_DIR / "layout.json"
+TOKEN_JSON = CFG_DIR / "token.json"
+ENV_FILE = CFG_DIR / "env"
+
+NAMED_COLORS = {
+    "red":    (255,   0,   0),
+    "amber":  (255, 140,   0),
+    "green":  (  0, 200,  80),
+    "blue":   ( 40, 120, 255),
+    "white":  (255, 255, 255),
+    "purple": (160,  80, 255),
+    "cyan":   (  0, 200, 200),
+}
+
+
+def load_token():
+    t = os.environ.get("NANOLEAF_TOKEN")
+    if t:
+        return t
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            if line.startswith("NANOLEAF_TOKEN="):
+                return line.split("=", 1)[1].strip()
+    if TOKEN_JSON.exists():
+        return json.loads(TOKEN_JSON.read_text())["auth_token"]
+    sys.exit("nanoleaf-kitt: no token (set $NANOLEAF_TOKEN or "
+             f"populate {TOKEN_JSON})")
+
+
+def http(method, path, body=None, timeout=5):
+    url = f"http://{CTRL_HOST}:{CTRL_PORT}{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"} if body is not None else {}
+    req = urllib.request.Request(url, method=method, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode()
+
+
+def get_layout(token):
+    if LAYOUT_CACHE.exists():
+        return json.loads(LAYOUT_CACHE.read_text())
+    raw = http("GET", f"/api/v1/{token}/panelLayout/layout")
+    CFG_DIR.mkdir(parents=True, exist_ok=True)
+    LAYOUT_CACHE.write_text(raw)
+    return json.loads(raw)
+
+
+def parse_color(s):
+    if s in NAMED_COLORS:
+        return NAMED_COLORS[s]
+    parts = s.split(",")
+    if len(parts) != 3:
+        sys.exit(f"nanoleaf-kitt: --color must be a name "
+                 f"({'/'.join(NAMED_COLORS)}) or 'r,g,b'")
+    try:
+        rgb = tuple(int(p.strip()) for p in parts)
+    except ValueError:
+        sys.exit(f"nanoleaf-kitt: invalid RGB: {s!r}")
+    if not all(0 <= c <= 255 for c in rgb):
+        sys.exit("nanoleaf-kitt: RGB values must be 0-255")
+    return rgb
+
+
+def trail_intensities(rgb, trail_len):
+    """Geometric 0.5× decay from peak rgb."""
+    return [tuple(int(round(c * (0.5 ** i))) for c in rgb)
+            for i in range(trail_len)]
+
+
+def build_animdata(panel_ids, rgb, trail_len, dc_per_frame):
+    """Bounce 0→n-1→0 (2n frames). Each endpoint appears twice in
+    consecutive frames with direction flipping between — gives a
+    natural pause at each bounce.
+    """
+    n = len(panel_ids)
+    trail = trail_intensities(rgb, trail_len)
+    positions = list(range(n)) + list(range(n - 1, -1, -1))
+    moving_right = [True] * n + [False] * n
+    n_frames = len(positions)
+
+    parts = [str(n)]
+    for j, pid in enumerate(panel_ids):
+        parts += [str(pid), str(n_frames)]
+        for f in range(n_frames):
+            head = positions[f]
+            dist = (head - j) if moving_right[f] else (j - head)
+            r, g, b = trail[dist] if 0 <= dist < trail_len else (0, 0, 0)
+            parts += [str(r), str(g), str(b), "0", str(dc_per_frame)]
+    return " ".join(parts)
+
+
+def fire_kitt(token, rgb, period_s, trail_len):
+    layout = get_layout(token)
+    panels = sorted(layout["positionData"], key=lambda p: p["x"])
+    panel_ids = [p["panelId"] for p in panels]
+    n_frames = 2 * len(panel_ids)
+    dc_per_frame = max(1, int(round(period_s * 10 / n_frames)))
+    animdata = build_animdata(panel_ids, rgb, trail_len, dc_per_frame)
+    body = {
+        "write": {
+            "command": "display",
+            "version": "2.0",
+            "animType": "custom",
+            "animData": animdata,
+            "loop": True,
+            "palette": [],
+        }
+    }
+    try:
+        http("PUT", f"/api/v1/{token}/effects", body)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"nanoleaf-kitt: HTTP {e.code} from controller — "
+                 f"token may be invalid")
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--color", default="red",
+                   help=f"color name ({'/'.join(NAMED_COLORS)}) or 'r,g,b'")
+    p.add_argument("--period", type=float, default=1.8,
+                   help="cycle time in seconds (default 1.8)")
+    p.add_argument("--trail", type=int, default=4,
+                   help="trail length in panels (default 4)")
+    args = p.parse_args()
+
+    if args.trail < 1:
+        sys.exit("nanoleaf-kitt: --trail must be >= 1")
+
+    token = load_token()
+    rgb = parse_color(args.color)
+    fire_kitt(token, rgb, args.period, args.trail)
+
+
+if __name__ == "__main__":
+    main()

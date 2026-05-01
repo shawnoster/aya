@@ -28,10 +28,20 @@ ENV GIT_SHA=${GIT_SHA} \
     PATH=/opt/venv/bin:$PATH
 
 # Non-root runtime user. Numeric UID 1001 to avoid host UID collisions.
+# /home/gateway is intentionally minimal (no shell, no full home tree) — only
+# the cache dir nanoleaf-kitt expects for its layout cache is pre-created.
 RUN groupadd --system --gid 1001 gateway \
-    && useradd --system --uid 1001 --gid gateway --no-create-home gateway
+    && useradd --system --uid 1001 --gid gateway --no-create-home gateway \
+    && mkdir -p /home/gateway/.config/nanoleaf-direct \
+    && chown -R gateway:gateway /home/gateway
 
 COPY --from=builder /opt/venv /opt/venv
+
+# Effect runners (stdlib-only Python; no extra image deps).
+# Layout cache is fetched on first use into /home/gateway/.config/nanoleaf-direct/
+# and persists across container restarts in the writable layer.
+COPY effects/nanoleaf-kitt /usr/local/bin/nanoleaf-kitt
+RUN chmod 0755 /usr/local/bin/nanoleaf-kitt
 
 WORKDIR /app
 COPY --chown=gateway:gateway app /app/app

@@ -34,31 +34,72 @@ tmpfs on Linux and gets wiped on every reboot.
 ### Bootstrap (one-time, on the host)
 
 ```bash
-# Pull the credential from 1Password and write it next to docker-compose.yml.
+# Pull credentials from 1Password and write them next to docker-compose.yml.
 # Run this once from inside the compose directory on Babar.
 cd /volume1/docker/projects/aya-gateway-compose
-op read 'op://Private/aya-gateway/credential' \
-  | sed 's/^/GATEWAY_BEARER=/' \
-  > .env
+{
+  printf 'GATEWAY_BEARER=%s\n' "$(op read 'op://Private/aya-gateway/credential')"
+  printf 'NANOLEAF_TOKEN=%s\n' "$(op read 'op://Private/Nanoleaf - Token - Light Panels/credential')"
+} > .env
 sudo chmod 600 .env
 sudo chown root:root .env
 ```
 
-The file must contain a single line:
+The file should contain two lines:
 
 ```
-GATEWAY_BEARER=<your-token>
+GATEWAY_BEARER=<your-bearer-token>
+NANOLEAF_TOKEN=<your-nanoleaf-token>
 ```
+
+`GATEWAY_BEARER` gates every authenticated route. `NANOLEAF_TOKEN` is
+read by the `nanoleaf-kitt` script bundled in the image (see
+[Effects](#effects)) when `/effects/kitt` invokes it; if the route
+isn't deployed yet, the var is harmless to have set.
 
 ### Rotation
 
-1. Update the credential in 1Password (`op://Private/aya-gateway/credential`).
+1. Update the relevant credential in 1Password.
 2. Regenerate the `.env` file on the host (same command as Bootstrap above).
-3. Restart the container to pick up the new token — DSM Container
+3. Restart the container to pick up the new value — DSM Container
    Manager → Container → `aya-gateway` → Restart, or via SSH:
    ```bash
    ssh babar 'docker restart aya-gateway'
    ```
+
+## Effects
+
+The image bundles stdlib-only Python helpers under `/usr/local/bin/`
+that the gateway's effect routes (`/effects/*`) shell out to. Bundling
+keeps the container fully self-describing — no host-side script
+mounting, no cross-machine RPC.
+
+| Script | Source | Purpose |
+|---|---|---|
+| `nanoleaf-kitt` | `effects/nanoleaf-kitt` | KITT-style scanner across the office Nanoleaf panels |
+
+`nanoleaf-kitt` reads `NANOLEAF_TOKEN` from the environment (`env_file:
+./.env`) and talks to the controller at `192.168.50.31:16021` over
+LAN. It's a vendored copy of `~/.preflight/bin/nanoleaf-kitt` from the
+dev box; updates to the upstream script need to be re-vendored here.
+
+### Layout cache
+
+The Nanoleaf controller exposes a `/panelLayout/layout` endpoint. The
+script caches the response at `/home/gateway/.config/nanoleaf-direct/layout.json`
+**on first invocation** rather than baking it into the image — the
+image stays generic across panel configurations, and a re-pair or
+hardware swap just refreshes the cache on next call. The cache lives
+in the container's writable layer, persisting across restarts and
+clearing on rebuild.
+
+Manual smoke test (after the container has `NANOLEAF_TOKEN` set):
+
+```bash
+ssh babar 'docker exec aya-gateway nanoleaf-kitt --color blue --period 2'
+# Panels should display a blue scanner; Ctrl-C ends the command but
+# the animation continues until something else changes panel state.
+```
 
 ## Quickstart (local dev)
 
@@ -150,7 +191,7 @@ convention puts compose project dirs under `/volume1/docker/projects/`
 ssh babar 'sudo mkdir -p /volume1/docker/projects/aya-gateway-compose && sudo chown $USER:users /volume1/docker/projects/aya-gateway-compose'
 rsync -av --delete \
   --exclude='__pycache__' --exclude='.venv' --exclude='*.pyc' --exclude='tests' \
-  Dockerfile docker-compose.yml pyproject.toml uv.lock app \
+  Dockerfile docker-compose.yml pyproject.toml uv.lock app effects \
   babar:/volume1/docker/projects/aya-gateway-compose/
 ```
 
@@ -158,7 +199,7 @@ rsync -av --delete \
 Option B: DSM File Station
   1. In /volume1/docker/projects/, create folder aya-gateway-compose
   2. Drag-and-drop Dockerfile, docker-compose.yml, pyproject.toml,
-     uv.lock, and the app/ directory into it
+     uv.lock, and the app/ + effects/ directories into it
 ```
 
 **3. Write the .env file on Babar**
@@ -300,7 +341,7 @@ rebuild via the UI:
 # 1. Re-stage source on Babar
 rsync -av --delete \
   --exclude='__pycache__' --exclude='.venv' --exclude='*.pyc' --exclude='tests' \
-  Dockerfile docker-compose.yml pyproject.toml uv.lock app \
+  Dockerfile docker-compose.yml pyproject.toml uv.lock app effects \
   babar:/volume1/docker/projects/aya-gateway-compose/
 ```
 
@@ -335,6 +376,8 @@ gateway/
 ├── app/
 │   ├── __init__.py
 │   └── main.py          # FastAPI app, /health, bearer-auth dependency
+├── effects/
+│   └── nanoleaf-kitt    # vendored from ~/.preflight/bin (stdlib-only)
 ├── tests/
 │   ├── conftest.py      # sets GATEWAY_BEARER for the test run
 │   ├── test_auth.py     # bearer-token auth tests

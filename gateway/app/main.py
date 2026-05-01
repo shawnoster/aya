@@ -1,14 +1,15 @@
 """aya-gateway HTTP service."""
 
 import os
-import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Security, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import APIRouter, Depends, FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
-_bearer_scheme = HTTPBearer(auto_error=False)
+from app.auth import _bearer_token, _require_bearer
+from app.effects import router as effects_router
 
 
 def _version() -> str:
@@ -20,33 +21,6 @@ def _version() -> str:
     cost is a single env lookup per /health request — negligible.
     """
     return os.getenv("GIT_SHA", "dev")
-
-
-def _bearer_token() -> str:
-    """Return GATEWAY_BEARER from the environment.
-
-    Read per-call (not cached) so tests can override it with monkeypatch
-    without reloading the module. In production the value is fixed at
-    container start and never changes.
-    """
-    return os.getenv("GATEWAY_BEARER", "").strip()
-
-
-def _require_bearer(
-    credentials: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),  # noqa: B008
-) -> None:
-    """FastAPI dependency — reject requests that lack a valid bearer token."""
-    expected = _bearer_token()
-    if (
-        credentials is None
-        or not expected
-        or not secrets.compare_digest(credentials.credentials, expected)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing bearer token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
 
 
 @asynccontextmanager
@@ -66,8 +40,24 @@ app = FastAPI(
     openapi_url=None,
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def _validation_400(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Return 400 (not the FastAPI default 422) on body validation failures.
+
+    The gateway's clients (Home Assistant `rest_command`, iOS Shortcuts) are
+    HTTP-1 callers that read status codes literally; 400 communicates
+    "client sent something invalid" more universally than 422.
+    """
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": exc.errors()},
+    )
+
+
 # Router for all authenticated endpoints. Add future routes here.
 authenticated = APIRouter(dependencies=[Depends(_require_bearer)])
+authenticated.include_router(effects_router)
 app.include_router(authenticated)
 
 

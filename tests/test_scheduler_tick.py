@@ -681,3 +681,127 @@ class TestTickWithMixedAlertTypes:
         assert isinstance(result, dict)
         assert "claims_swept" in result
         assert "alerts_expired" in result
+
+
+# ── run_poll integration: new_comments end-to-end ────────────────────────────
+
+
+class TestRunPollNewCommentsIntegration:
+    """End-to-end: run_poll sees more comments → generates an alert."""
+
+    def test_new_comments_generates_alert(self):
+        """run_poll with new_comments condition creates an alert when comment count increases."""
+        from unittest.mock import patch
+
+        from aya.scheduler import _alerts_file, _get_local_tz, _scheduler_file, run_poll
+        from aya.scheduler.providers import GithubPrState
+
+        now = datetime.now(_get_local_tz())
+
+        # Seed scheduler with a github-pr/new_comments watch that has a
+        # last_state with comment_count=2 (baseline established on prior poll).
+        last_state = GithubPrState(
+            pr_state="open",
+            merged=False,
+            draft=False,
+            title="My PR",
+            reviews=[],
+            has_approval=False,
+            comment_count=2,
+        )
+        _scheduler_file().write_text(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "watch-comments-1",
+                            "type": "watch",
+                            "status": "active",
+                            "message": "New comment on PR",
+                            "provider": "github-pr",
+                            "watch_config": {"owner": "acme", "repo": "widget", "pr": 42},
+                            "condition": "new_comments",
+                            "poll_interval_minutes": 5,
+                            "last_checked_at": None,
+                            "last_state": last_state,
+                            "remove_when": "",
+                            "created_at": now.isoformat(),
+                            "session_required": False,
+                            "tags": [],
+                        }
+                    ]
+                }
+            )
+        )
+        _alerts_file().write_text(json.dumps({"alerts": []}))
+
+        # Mock poll_watch to return new state with comment_count=3 (one new comment).
+        new_state = GithubPrState(
+            pr_state="open",
+            merged=False,
+            draft=False,
+            title="My PR",
+            reviews=[],
+            has_approval=False,
+            comment_count=3,
+        )
+
+        with patch("aya.scheduler.core.poll_watch", return_value=(new_state, True)):
+            run_poll(quiet=True)
+
+        # Assert an alert was written to alerts.json.
+        alerts_data = json.loads(_alerts_file().read_text())
+        alerts = alerts_data["alerts"]
+        assert len(alerts) == 1
+        assert alerts[0]["source_item_id"] == "watch-comments-1"
+        assert "New comment on PR" in alerts[0]["message"]
+
+    def test_no_new_comments_no_alert(self):
+        """run_poll with new_comments condition and no change does not create an alert."""
+        from unittest.mock import patch
+
+        from aya.scheduler import _alerts_file, _get_local_tz, _scheduler_file, run_poll
+        from aya.scheduler.providers import GithubPrState
+
+        now = datetime.now(_get_local_tz())
+        last_state = GithubPrState(
+            pr_state="open",
+            merged=False,
+            draft=False,
+            title="PR",
+            reviews=[],
+            has_approval=False,
+            comment_count=2,
+        )
+        _scheduler_file().write_text(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "watch-comments-2",
+                            "type": "watch",
+                            "status": "active",
+                            "message": "New comment on PR",
+                            "provider": "github-pr",
+                            "watch_config": {"owner": "acme", "repo": "widget", "pr": 42},
+                            "condition": "new_comments",
+                            "poll_interval_minutes": 5,
+                            "last_checked_at": None,
+                            "last_state": last_state,
+                            "remove_when": "",
+                            "created_at": now.isoformat(),
+                            "session_required": False,
+                            "tags": [],
+                        }
+                    ]
+                }
+            )
+        )
+        _alerts_file().write_text(json.dumps({"alerts": []}))
+
+        # No change — same count.
+        with patch("aya.scheduler.core.poll_watch", return_value=(last_state, False)):
+            run_poll(quiet=True)
+
+        alerts_data = json.loads(_alerts_file().read_text())
+        assert len(alerts_data["alerts"]) == 0

@@ -669,7 +669,13 @@ class TestPollWatch:
 
     def test_no_change_detected(self):
         pr_state = GithubPrState(
-            pr_state="open", merged=False, draft=False, title="PR", reviews=[], has_approval=False
+            pr_state="open",
+            merged=False,
+            draft=False,
+            title="PR",
+            reviews=[],
+            has_approval=False,
+            comment_count=0,
         )
         item = self._item(condition="approved_or_merged", last_state=pr_state)
         with patch.dict(
@@ -681,7 +687,13 @@ class TestPollWatch:
 
     def test_change_detected(self):
         old_state = GithubPrState(
-            pr_state="open", merged=False, draft=False, title="PR", reviews=[], has_approval=False
+            pr_state="open",
+            merged=False,
+            draft=False,
+            title="PR",
+            reviews=[],
+            has_approval=False,
+            comment_count=0,
         )
         new_state = GithubPrState(
             pr_state="open",
@@ -690,6 +702,7 @@ class TestPollWatch:
             title="PR",
             reviews=[{"user": "alice", "state": "APPROVED"}],
             has_approval=True,
+            comment_count=0,
         )
         item = self._item(condition="approved_or_merged", last_state=old_state)
         with patch.dict(
@@ -712,6 +725,7 @@ class TestEvaluateAutoRemove:
             title="PR",
             reviews=[],
             has_approval=False,
+            comment_count=0,
         )
 
     def _item(self, provider="github-pr", remove_when=""):

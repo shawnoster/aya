@@ -240,6 +240,26 @@ class TestAddWatch:
         item = add_watch("github-pr", "o/r#1", "Fast poll", interval=5)
         assert item["poll_interval_minutes"] == 5
 
+    def test_github_pr_new_comments_condition(self):
+        item = add_watch("github-pr", "owner/repo#123", "Watch comments", condition="new_comments")
+        assert item["condition"] == "new_comments"
+
+    def test_invalid_condition_github_pr(self):
+        with pytest.raises(ValueError, match="Unknown condition 'new_comment' for github-pr"):
+            add_watch("github-pr", "owner/repo#123", "msg", condition="new_comment")
+
+    def test_invalid_condition_ci_checks(self):
+        with pytest.raises(ValueError, match="Unknown condition"):
+            add_watch("ci-checks", "owner/repo#123", "msg", condition="bogus")
+
+    def test_invalid_condition_jira_query(self):
+        with pytest.raises(ValueError, match="Unknown condition"):
+            add_watch("jira-query", "project=CSD", "msg", condition="bogus")
+
+    def test_invalid_condition_jira_ticket(self):
+        with pytest.raises(ValueError, match="Unknown condition"):
+            add_watch("jira-ticket", "CSD-123", "msg", condition="bogus")
+
     def test_invalid_provider(self):
         with pytest.raises(ValueError, match="Unknown provider"):
             add_watch("bogus", "target", "msg")

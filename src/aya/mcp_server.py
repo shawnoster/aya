@@ -135,9 +135,11 @@ _TOOLS: list[types.Tool] = [
                     "type": "string",
                     "description": (
                         "Condition that triggers the alert. "
-                        "github-pr: 'approved_or_merged' (default), 'merged', 'new_comments'. "
+                        "github-pr: 'approved_or_merged' (default), 'merged', 'new_comments' "
+                        "(fires when comments increase; no-fire on first poll). "
                         "jira-query: 'new_results'. jira-ticket: 'status_changed'. "
-                        "ci-checks: 'checks_failed', 'checks_complete'."
+                        "ci-checks: 'checks_failed', 'checks_complete'. "
+                        "Omitting condition uses the provider default shown above, not any-change."
                     ),
                 },
             },

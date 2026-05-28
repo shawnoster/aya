@@ -24,8 +24,8 @@ inline with each verb below. Fall back to the CLI when any of these apply:
   `aya schedule install`, `aya schedule recurring`), all of Pair,
   Refresh (`uv tool` commands), and `aya schedule dismiss`.
 - The operation needs flags the MCP tool doesn't expose — e.g.
-  `aya_schedule_watch` has no `--remove-when`, `-i`, or `--condition`,
-  so Watch setup is CLI-preferred.
+  `aya_schedule_watch` has no `--remove-when` or `-i`,
+  so Watch setup with auto-remove or custom interval is CLI-preferred.
 
 MCP tools that act on a local identity (e.g. `aya_relay_status`,
 `aya_send`, `aya_receive`) take `instance=<label>` where the CLI takes
@@ -376,14 +376,11 @@ Add a watch on a GitHub PR (or other target) with sensible defaults.
 
 5. **Create the watch.**
 
-   `aya_schedule_watch` exists as an MCP tool but exposes only
-   `provider`/`target`/`message` — it cannot set `--remove-when`, the
-   poll interval, or a condition. Use MCP only for a minimal default
-   watch; use CLI when the watch needs auto-remove, a custom interval,
-   or a condition (the common case for GitHub PRs):
+   `aya_schedule_watch` supports `provider`, `target`, `message`, and `condition` via MCP.
+   Use the CLI when the watch also needs `--remove-when` or a custom poll interval:
 
-   - **MCP (minimal watch):** `aya_schedule_watch(provider="{provider}",
-     target="{target}", message="{message}")`.
+   - **MCP (condition + message):** `aya_schedule_watch(provider="{provider}",
+     target="{target}", message="{message}", condition="{condition}")`.
    - **CLI (preferred for PR watches with auto-remove + interval):**
 
      ```bash
@@ -398,7 +395,8 @@ Add a watch on a GitHub PR (or other target) with sensible defaults.
 ### Notes
 
 - For PRs the user just opened or is reviewing, default to `--remove-when merged_or_closed` so the watch cleans itself up.
-- If the user says "let me know when it's approved", add `--condition approved_or_merged`.
+- If the user says "let me know when it's approved", use `--condition approved_or_merged`.
+- If the user wants to know when Copilot or other reviewers comment, use `--condition new_comments`. Note: does not fire on the first poll (no baseline); fires when issue or inline review comments are added after the watch is created.
 - Jira watches require `ATLASSIAN_*` env vars to be set. If they're missing, tell the user to run `op-load-env` or set them manually.
 - Watch IDs support prefix matching for later dismiss/snooze operations.
 

@@ -38,6 +38,13 @@ from .time_utils import (
     parse_work_hours,
 )
 from .types import (
+    CONDITION_APPROVED_OR_MERGED,
+    CONDITION_CHECKS_COMPLETE,
+    CONDITION_CHECKS_FAILED,
+    CONDITION_MERGED,
+    CONDITION_NEW_COMMENTS,
+    CONDITION_NEW_RESULTS,
+    CONDITION_STATUS_CHANGED,
     SEVERITY_ACTIONABLE,
     SEVERITY_ORDER,
     AlertDetails,
@@ -119,7 +126,13 @@ def add_watch(
         if not m:
             raise ValueError("Format: owner/repo#123")
         watch_config = {"owner": m.group(1), "repo": m.group(2), "pr": int(m.group(3))}
-        condition = condition or "approved_or_merged"
+        condition = condition or CONDITION_APPROVED_OR_MERGED
+        _valid = {CONDITION_APPROVED_OR_MERGED, CONDITION_MERGED, CONDITION_NEW_COMMENTS, ""}
+        if condition not in _valid:
+            raise ValueError(
+                f"Unknown condition '{condition}' for github-pr. "
+                f"Valid: approved_or_merged, merged, new_comments"
+            )
         if interval == 30:
             interval = 5
     elif provider == "ci-checks":
@@ -131,15 +144,29 @@ def add_watch(
             "repo": m.group(2),
             "pr": int(m.group(3)),
         }
-        condition = condition or "checks_failed"
+        condition = condition or CONDITION_CHECKS_FAILED
+        _valid_ci = {CONDITION_CHECKS_FAILED, CONDITION_CHECKS_COMPLETE, ""}
+        if condition not in _valid_ci:
+            raise ValueError(
+                f"Unknown condition '{condition}' for ci-checks. "
+                f"Valid: checks_failed, checks_complete"
+            )
         if interval == 30:
             interval = 1
     elif provider == "jira-query":
         watch_config = {"jql": target}
-        condition = condition or "new_results"
+        condition = condition or CONDITION_NEW_RESULTS
+        _valid_jq = {CONDITION_NEW_RESULTS, ""}
+        if condition not in _valid_jq:
+            raise ValueError(f"Unknown condition '{condition}' for jira-query. Valid: new_results")
     elif provider == "jira-ticket":
         watch_config = {"ticket": target.upper()}
-        condition = condition or "status_changed"
+        condition = condition or CONDITION_STATUS_CHANGED
+        _valid_jt = {CONDITION_STATUS_CHANGED, ""}
+        if condition not in _valid_jt:
+            raise ValueError(
+                f"Unknown condition '{condition}' for jira-ticket. Valid: status_changed"
+            )
     else:
         raise ValueError(f"Unknown provider: {provider}")
 

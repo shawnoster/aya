@@ -42,8 +42,13 @@ SEVERITY_HEARTBEAT: AlertSeverity = "heartbeat"
 SEVERITY_ORDER: list[AlertSeverity] = [SEVERITY_ACTIONABLE, SEVERITY_INFO, SEVERITY_HEARTBEAT]
 
 # ── watch conditions ─────────────────────────────────────────────────────────
+# These constants are the valid values for SchedulerItem["condition"].
+# Each maps to a change-detector function in providers._CHANGE_DETECTORS via
+# the key (provider, condition). An empty string condition uses the
+# provider-specific fallback detector (usually _detect_json_diff).
 CONDITION_APPROVED_OR_MERGED = "approved_or_merged"
 CONDITION_MERGED = "merged"
+CONDITION_NEW_COMMENTS = "new_comments"
 CONDITION_NEW_RESULTS = "new_results"
 CONDITION_STATUS_CHANGED = "status_changed"
 CONDITION_CHECKS_FAILED = "checks_failed"
@@ -175,6 +180,7 @@ class GithubPrState(TypedDict):
     title: str
     reviews: list[dict[str, Any]]
     has_approval: bool
+    comment_count: int
 
 
 class JiraQueryState(TypedDict):

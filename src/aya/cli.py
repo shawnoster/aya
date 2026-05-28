@@ -1390,7 +1390,15 @@ def schedule_watch(
     message: str = typer.Option(..., "--message", "-m", help="Watch description"),
     tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
     condition: str = typer.Option(
-        "", "--condition", "-c", help="Condition: approved_or_merged, etc."
+        "",
+        "--condition",
+        "-c",
+        help=(
+            "Condition that triggers the alert. "
+            "github-pr: approved_or_merged (default), merged, new_comments. "
+            "jira-query: new_results. jira-ticket: status_changed. "
+            "ci-checks: checks_failed, checks_complete."
+        ),
     ),
     interval: int = typer.Option(30, "--interval", "-i", help="Poll interval minutes"),
     remove_when: str = typer.Option("", help="Auto-remove: merged_or_closed"),

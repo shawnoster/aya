@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout:*)",
+      "Bash(git pull:*)",
+      "mcp__github__pull_request_read",
+      "Bash(git fetch:*)",
+      "Bash(uv run:*)",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "mcp__github__add_reply_to_pull_request_comment",
+      "Bash(gh api:*)",
+      "Bash(gh run:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(for id:*)",
+      "Bash(do echo:*)",
+      "Bash(done)"
+    ]
+  }
+}

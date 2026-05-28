@@ -68,7 +68,7 @@ def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list[Any] | 
 
 
 def _check_github_pr(config: GithubPrConfig) -> GithubPrState | None:
-    """Check GitHub PR status and reviews."""
+    """Check GitHub PR status, reviews, and comment counts."""
     owner = config["owner"]
     repo = config["repo"]
     pr = config["pr"]
@@ -94,6 +94,28 @@ def _check_github_pr(config: GithubPrConfig) -> GithubPrState | None:
     )
     reviews: list[dict[str, Any]] = reviews_raw if isinstance(reviews_raw, list) else []
 
+    issue_comments_raw = _run_gh(
+        [
+            "api",
+            f"/repos/{owner}/{repo}/issues/{pr}/comments",
+            "--jq",
+            "[.[] | { id: .id }]",
+        ]
+    )
+    issue_comments: list[Any] = issue_comments_raw if isinstance(issue_comments_raw, list) else []
+
+    review_comments_raw = _run_gh(
+        [
+            "api",
+            f"/repos/{owner}/{repo}/pulls/{pr}/comments",
+            "--jq",
+            "[.[] | { id: .id }]",
+        ]
+    )
+    review_comments: list[Any] = (
+        review_comments_raw if isinstance(review_comments_raw, list) else []
+    )
+
     return GithubPrState(
         pr_state=pr_data.get("state"),
         merged=pr_data.get("merged", False),
@@ -101,6 +123,7 @@ def _check_github_pr(config: GithubPrConfig) -> GithubPrState | None:
         title=pr_data.get("title", ""),
         reviews=reviews,
         has_approval=any(r.get("state") == "APPROVED" for r in reviews),
+        comment_count=len(issue_comments) + len(review_comments),
     )
 
 
@@ -244,6 +267,17 @@ def _detect_github_merged(new: GithubPrState, last: GithubPrState | None) -> boo
     return new["merged"] and not (last["merged"] if last else False)
 
 
+def _detect_github_new_comments(new: GithubPrState, last: GithubPrState | None) -> bool:
+    """Detect if new comments have been added to the PR since last poll.
+
+    Does not fire on the first poll (no baseline to diff against).
+    Does not fire if the count decreased (comment deleted).
+    """
+    if last is None:
+        return False
+    return new["comment_count"] > last["comment_count"]
+
+
 def _detect_jira_new_results(new: JiraQueryState, last: JiraQueryState | None) -> bool:
     """Detect new issues in Jira query results."""
     old_keys = {i["key"] for i in last["issues"]} if last else set()
@@ -274,6 +308,7 @@ def _detect_ci_checks_complete(new: CiChecksState, _last: CiChecksState | None) 
 _CHANGE_DETECTORS: dict[tuple[str, str], Callable[[Any, Any], bool]] = {
     ("github-pr", "approved_or_merged"): _detect_github_approved_or_merged,
     ("github-pr", "merged"): _detect_github_merged,
+    ("github-pr", "new_comments"): _detect_github_new_comments,
     ("github-pr", ""): _detect_json_diff,
     ("jira-query", "new_results"): _detect_jira_new_results,
     ("jira-query", ""): _detect_jira_count_change,

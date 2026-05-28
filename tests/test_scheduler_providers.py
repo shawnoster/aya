@@ -14,6 +14,7 @@ from aya.scheduler.providers import (
     _detect_ci_checks_failed,
     _detect_github_approved_or_merged,
     _detect_github_merged,
+    _detect_github_new_comments,
     _detect_jira_count_change,
     _detect_jira_new_results,
     _detect_jira_status_changed,
@@ -140,13 +141,22 @@ class TestCheckGithubPr:
     def _pr_config(self):
         return {"owner": "acme", "repo": "widget", "pr": 42}
 
+    def _side_effect(self, pr_data, reviews=None, issue_comments=None, review_comments=None):
+        """Build a side_effect list for the four _run_gh calls in _check_github_pr."""
+        return [
+            pr_data,
+            reviews if reviews is not None else [],
+            issue_comments if issue_comments is not None else [],
+            review_comments if review_comments is not None else [],
+        ]
+
     def test_returns_none_when_gh_fails(self):
         with patch("aya.scheduler.providers._run_gh", return_value=None):
             result = _check_github_pr(self._pr_config())
         assert result is None
 
     def test_returns_none_when_pr_data_not_dict(self):
-        with patch("aya.scheduler.providers._run_gh", side_effect=[[{"id": 1}], []]):
+        with patch("aya.scheduler.providers._run_gh", side_effect=[[{"id": 1}], [], [], []]):
             result = _check_github_pr(self._pr_config())
         assert result is None
 
@@ -154,7 +164,7 @@ class TestCheckGithubPr:
         pr_data = {"state": "open", "merged": False, "draft": False, "title": "My PR"}
         with patch(
             "aya.scheduler.providers._run_gh",
-            side_effect=[pr_data, []],
+            side_effect=self._side_effect(pr_data),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None
@@ -162,13 +172,14 @@ class TestCheckGithubPr:
         assert result["merged"] is False
         assert result["has_approval"] is False
         assert result["reviews"] == []
+        assert result["comment_count"] == 0
 
     def test_approved_pr(self):
         pr_data = {"state": "open", "merged": False, "draft": False, "title": "My PR"}
         reviews = [{"user": "alice", "state": "APPROVED"}]
         with patch(
             "aya.scheduler.providers._run_gh",
-            side_effect=[pr_data, reviews],
+            side_effect=self._side_effect(pr_data, reviews=reviews),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None
@@ -178,11 +189,35 @@ class TestCheckGithubPr:
         pr_data = {"state": "closed", "merged": True, "draft": False, "title": "My PR"}
         with patch(
             "aya.scheduler.providers._run_gh",
-            side_effect=[pr_data, []],
+            side_effect=self._side_effect(pr_data),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None
         assert result["merged"] is True
+
+    def test_comment_count_sums_issue_and_review_comments(self):
+        pr_data = {"state": "open", "merged": False, "draft": False, "title": "My PR"}
+        issue_comments = [{"id": 1}, {"id": 2}]
+        review_comments = [{"id": 3}]
+        with patch(
+            "aya.scheduler.providers._run_gh",
+            side_effect=self._side_effect(
+                pr_data, issue_comments=issue_comments, review_comments=review_comments
+            ),
+        ):
+            result = _check_github_pr(self._pr_config())
+        assert result is not None
+        assert result["comment_count"] == 3
+
+    def test_comment_count_zero_when_both_calls_fail(self):
+        pr_data = {"state": "open", "merged": False, "draft": False, "title": "My PR"}
+        with patch(
+            "aya.scheduler.providers._run_gh",
+            side_effect=[pr_data, [], None, None],
+        ):
+            result = _check_github_pr(self._pr_config())
+        assert result is not None
+        assert result["comment_count"] == 0
 
 
 # ── _check_jira_query ────────────────────────────────────────────────────────
@@ -404,6 +439,7 @@ class TestDetectGithubApprovedOrMerged:
             title="PR",
             reviews=[],
             has_approval=has_approval,
+            comment_count=0,
         )
 
     def test_no_change(self):
@@ -429,7 +465,13 @@ class TestDetectGithubApprovedOrMerged:
 class TestDetectGithubMerged:
     def _state(self, merged=False):
         return GithubPrState(
-            pr_state="open", merged=merged, draft=False, title="PR", reviews=[], has_approval=False
+            pr_state="open",
+            merged=merged,
+            draft=False,
+            title="PR",
+            reviews=[],
+            has_approval=False,
+            comment_count=0,
         )
 
     def test_not_merged(self):
@@ -443,6 +485,44 @@ class TestDetectGithubMerged:
     def test_already_merged_no_change(self):
         state = self._state(merged=True)
         assert _detect_github_merged(state, state) is False
+
+
+class TestDetectGithubNewComments:
+    def _state(self, comment_count=0):
+        return GithubPrState(
+            pr_state="open",
+            merged=False,
+            draft=False,
+            title="PR",
+            reviews=[],
+            has_approval=False,
+            comment_count=comment_count,
+        )
+
+    def test_no_change_same_count(self):
+        state = self._state(comment_count=3)
+        assert _detect_github_new_comments(state, state) is False
+
+    def test_new_comment_detected(self):
+        new = self._state(comment_count=4)
+        last = self._state(comment_count=3)
+        assert _detect_github_new_comments(new, last) is True
+
+    def test_no_last_state_with_zero_comments_no_fire(self):
+        """First poll with no comments should not fire."""
+        new = self._state(comment_count=0)
+        assert _detect_github_new_comments(new, None) is False
+
+    def test_no_last_state_with_existing_comments_no_fire(self):
+        """First poll with pre-existing comments should not fire — no baseline to diff against."""
+        new = self._state(comment_count=5)
+        assert _detect_github_new_comments(new, None) is False
+
+    def test_count_decreased_no_fire(self):
+        """Comment deleted — count went down; should not fire."""
+        new = self._state(comment_count=2)
+        last = self._state(comment_count=3)
+        assert _detect_github_new_comments(new, last) is False
 
 
 class TestDetectJiraNewResults:

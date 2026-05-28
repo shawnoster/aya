@@ -131,6 +131,15 @@ _TOOLS: list[types.Tool] = [
                     "type": "string",
                     "description": "Alert message when the condition fires.",
                 },
+                "condition": {
+                    "type": "string",
+                    "description": (
+                        "Condition that triggers the alert. "
+                        "github-pr: 'approved_or_merged' (default), 'merged', 'new_comments'. "
+                        "jira-query: 'new_results'. jira-ticket: 'status_changed'. "
+                        "ci-checks: 'checks_failed', 'checks_complete'."
+                    ),
+                },
             },
             "required": ["provider", "target", "message"],
             "additionalProperties": False,
@@ -494,6 +503,7 @@ async def _handle_schedule_watch(arguments: dict[str, Any]) -> list[types.TextCo
         provider=arguments["provider"],
         target=arguments["target"],
         message=arguments["message"],
+        condition=arguments.get("condition", ""),
     )
     return _text(item)
 

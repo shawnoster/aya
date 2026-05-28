@@ -129,7 +129,7 @@ Filtering happens at hook-time, not at fire-time. Both filters below are evaluat
 
 | Provider | Target | Condition | Notes |
 |----------|--------|-----------|-------|
-| `github-pr` | `owner/repo#123` | `approved_or_merged` | Uses `gh` CLI. `--remove-when merged_or_closed` auto-cleans. |
+| `github-pr` | `owner/repo#123` | `approved_or_merged` (default), `merged`, `new_comments` | Uses `gh` CLI. `--remove-when merged_or_closed` auto-cleans. `new_comments` fires when issue or inline review comments are added. |
 | `jira-query` | JQL string | `new_results` | Requires `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`, `ATLASSIAN_SERVER_URL` env vars. |
 | `jira-ticket` | `CSD-225` | `status_changed` | Same Jira env vars. |
 

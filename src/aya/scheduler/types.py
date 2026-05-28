@@ -44,6 +44,7 @@ SEVERITY_ORDER: list[AlertSeverity] = [SEVERITY_ACTIONABLE, SEVERITY_INFO, SEVER
 # ── watch conditions ─────────────────────────────────────────────────────────
 CONDITION_APPROVED_OR_MERGED = "approved_or_merged"
 CONDITION_MERGED = "merged"
+CONDITION_NEW_COMMENTS = "new_comments"
 CONDITION_NEW_RESULTS = "new_results"
 CONDITION_STATUS_CHANGED = "status_changed"
 CONDITION_CHECKS_FAILED = "checks_failed"
@@ -175,6 +176,7 @@ class GithubPrState(TypedDict):
     title: str
     reviews: list[dict[str, Any]]
     has_approval: bool
+    comment_count: int
 
 
 class JiraQueryState(TypedDict):

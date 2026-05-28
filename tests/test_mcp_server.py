@@ -713,6 +713,39 @@ async def test_schedule_watch_tool(tmp_path, monkeypatch):
     assert payload["status"] == "active"
 
 
+async def test_schedule_watch_tool_with_condition(tmp_path, monkeypatch):
+    """aya_schedule_watch passes condition through to the scheduler."""
+    sched_file = tmp_path / "scheduler.json"
+    sched_file.write_text(json.dumps({"schema_version": 2, "items": []}))
+    lock_file = tmp_path / ".scheduler.lock"
+
+    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", sched_file)
+    monkeypatch.setattr("aya.scheduler.LOCK_FILE", lock_file)
+
+    result = await call_tool(
+        "aya_schedule_watch",
+        {
+            "provider": "github-pr",
+            "target": "owner/repo#42",
+            "message": "Watch for comments",
+            "condition": "new_comments",
+        },
+    )
+    assert len(result) == 1
+    payload = json.loads(result[0].text)
+    assert payload["condition"] == "new_comments"
+
+
+def test_schedule_watch_schema_includes_condition():
+    """aya_schedule_watch inputSchema exposes condition as an optional property."""
+    tool = next(t for t in _TOOLS if t.name == "aya_schedule_watch")
+    props = tool.inputSchema.get("properties", {})
+    assert "condition" in props
+    assert props["condition"]["type"] == "string"
+    # condition must NOT be required
+    assert "condition" not in tool.inputSchema.get("required", [])
+
+
 # ---------------------------------------------------------------------------
 # error handling
 # ---------------------------------------------------------------------------

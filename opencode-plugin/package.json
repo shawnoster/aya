@@ -1,0 +1,12 @@
+{
+  "name": "aya-opencode-plugin",
+  "version": "1.0.0",
+  "description": "OpenCode plugin for proactive aya reminder and alert surfacing",
+  "main": "aya-reminders.js",
+  "keywords": ["opencode", "aya", "reminders", "scheduler"],
+  "author": "Shawn Oster",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

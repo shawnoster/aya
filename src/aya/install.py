@@ -1,4 +1,4 @@
-"""Install/uninstall aya scheduler integrations — crontab + Claude Code hooks."""
+"""Install/uninstall aya scheduler integrations — crontab + Claude Code hooks + OpenCode plugin."""
 
 from __future__ import annotations
 
@@ -26,6 +26,19 @@ MIN_TICK_SECONDS = 5
 CRON_COMMENT = "# aya-scheduler-tick"
 
 CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
+
+# OpenCode global plugin directory
+OPENCODE_PLUGIN_DIR = Path.home() / ".config" / "opencode" / "plugins"
+OPENCODE_PLUGIN_NAME = "aya-reminders.js"
+# Resolved at call-time so tests can patch Path.home()
+_PLUGIN_SOURCE: Path | None = None
+
+
+def _get_plugin_source() -> Path:
+    """Return the path to the bundled opencode plugin JS file."""
+    # Installed package: resolve relative to this file's location
+    return Path(__file__).parent.parent.parent / "opencode-plugin" / OPENCODE_PLUGIN_NAME
+
 
 CANONICAL_HOOKS: dict[str, list[dict[str, Any]]] = {
     "SessionStart": [
@@ -117,6 +130,8 @@ class InstallResult:
     hooks_installed: list[str] = field(default_factory=list)
     hooks_already_present: list[str] = field(default_factory=list)
     hooks_updated: list[str] = field(default_factory=list)
+    opencode_plugin_installed: bool = False
+    opencode_plugin_already_present: bool = False
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -129,6 +144,7 @@ class InstallResult:
 class UninstallResult:
     cron_removed: bool = False
     hooks_removed: list[str] = field(default_factory=list)
+    opencode_plugin_removed: bool = False
     errors: list[str] = field(default_factory=list)
 
 
@@ -438,6 +454,61 @@ def _remove_hooks(dry_run: bool = False, settings_path: Path | None = None) -> l
     return removed
 
 
+# ── OpenCode plugin helpers ──────────────────────────────────────────────────
+
+
+def _install_opencode_plugin(
+    dry_run: bool = False,
+    plugin_dir: Path | None = None,
+) -> tuple[bool, bool]:
+    """Copy the aya-reminders plugin to the OpenCode global plugin dir.
+
+    Returns (installed, already_present).
+
+    Skips silently if the plugin source file cannot be found (e.g. running
+    from a checkout without the opencode-plugin/ directory present).
+    """
+    source = _get_plugin_source()
+    if not source.exists():
+        return False, False
+
+    dest_dir = plugin_dir or OPENCODE_PLUGIN_DIR
+    dest = dest_dir / OPENCODE_PLUGIN_NAME
+
+    if dest.exists():
+        # Already present — check if it's identical to avoid spurious reinstalls
+        if dest.read_text() == source.read_text():
+            return False, True
+        # Content differs — update it
+        if not dry_run:
+            dest.write_text(source.read_text())
+        return True, False
+
+    if not dry_run:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest.write_text(source.read_text())
+    return True, False
+
+
+def _remove_opencode_plugin(
+    dry_run: bool = False,
+    plugin_dir: Path | None = None,
+) -> bool:
+    """Remove the aya-reminders plugin from the OpenCode global plugin dir.
+
+    Returns True if something was removed.
+    """
+    dest_dir = plugin_dir or OPENCODE_PLUGIN_DIR
+    dest = dest_dir / OPENCODE_PLUGIN_NAME
+
+    if not dest.exists():
+        return False
+
+    if not dry_run:
+        dest.unlink()
+    return True
+
+
 # ── Top-level install/uninstall ──────────────────────────────────────────────
 
 
@@ -447,7 +518,7 @@ def install_scheduler(
     tick_interval: str = DEFAULT_TICK_INTERVAL,
     force: bool = False,
 ) -> InstallResult:
-    """Install all scheduler integrations — crontab + Claude Code hooks.
+    """Install all scheduler integrations — crontab + Claude Code hooks + OpenCode plugin.
 
     Args:
         dry_run: Preview changes without applying.
@@ -488,7 +559,7 @@ def install_scheduler(
         except subprocess.CalledProcessError as exc:
             result.errors.append(f"crontab failed: {exc}")
 
-    # Hooks
+    # Claude Code hooks
     try:
         h_installed, h_already, h_updated = _install_hooks(
             dry_run=dry_run, settings_path=settings_path
@@ -499,13 +570,21 @@ def install_scheduler(
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         result.errors.append(f"settings.json failed: {exc}")
 
+    # OpenCode plugin
+    try:
+        oc_installed, oc_already = _install_opencode_plugin(dry_run=dry_run)
+        result.opencode_plugin_installed = oc_installed
+        result.opencode_plugin_already_present = oc_already
+    except OSError as exc:
+        result.errors.append(f"opencode plugin failed: {exc}")
+
     return result
 
 
 def uninstall_scheduler(
     dry_run: bool = False, settings_path: Path | None = None
 ) -> UninstallResult:
-    """Remove all scheduler integrations — crontab + Claude Code hooks."""
+    """Remove all scheduler integrations — crontab + Claude Code hooks + OpenCode plugin."""
     result = UninstallResult()
 
     # Crontab
@@ -514,10 +593,16 @@ def uninstall_scheduler(
     except subprocess.CalledProcessError as exc:
         result.errors.append(f"crontab failed: {exc}")
 
-    # Hooks
+    # Claude Code hooks
     try:
         result.hooks_removed = _remove_hooks(dry_run=dry_run, settings_path=settings_path)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         result.errors.append(f"settings.json failed: {exc}")
+
+    # OpenCode plugin
+    try:
+        result.opencode_plugin_removed = _remove_opencode_plugin(dry_run=dry_run)
+    except OSError as exc:
+        result.errors.append(f"opencode plugin failed: {exc}")
 
     return result

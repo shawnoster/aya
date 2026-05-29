@@ -159,13 +159,46 @@ All aya data lives under `~/.aya/`:
 ### Quick setup
 
 ```bash
-aya schedule install        # installs crontab + Claude Code hooks
+aya schedule install        # installs crontab + Claude Code hooks + OpenCode plugin
 aya schedule install --dry-run  # preview without changing anything
 ```
 
-This installs the system crontab entry for background polling and all required
-Claude Code hooks in `~/.claude/settings.json`. Run it once per machine.
+This installs the system crontab entry for background polling, all required
+Claude Code hooks in `~/.claude/settings.json`, and the OpenCode plugin at
+`~/.config/opencode/plugins/aya-reminders.js`. Run it once per machine.
 To remove everything: `aya schedule uninstall`.
+
+## OpenCode Integration
+
+aya ships an OpenCode plugin (`opencode-plugin/aya-reminders.js`) that
+proactively surfaces due reminders and unseen alerts inside OpenCode sessions.
+
+### How it works
+
+The plugin hooks into OpenCode's `session.idle` event (fires when you stop
+typing). On each idle tick it calls `aya schedule pending --format json`,
+and if anything is due it:
+
+1. Shows a `tui.toast.show` notification in the TUI status bar for each item
+2. Injects a summary into `tui.prompt.append` so the agent sees it on your next message
+
+A 15-second debounce prevents hammering aya on every brief pause.
+
+### Install
+
+`aya schedule install` copies the plugin automatically. To install manually:
+
+```bash
+cp opencode-plugin/aya-reminders.js ~/.config/opencode/plugins/
+```
+
+Or add it to your `opencode.json` by path:
+
+```json
+{
+  "plugin": ["/path/to/aya/opencode-plugin/aya-reminders.js"]
+}
+```
 
 ### Hooks installed
 

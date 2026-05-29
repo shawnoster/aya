@@ -35,8 +35,17 @@ _PLUGIN_SOURCE: Path | None = None
 
 
 def _get_plugin_source() -> Path:
-    """Return the path to the bundled opencode plugin JS file."""
-    # Installed package: resolve relative to this file's location
+    """Return the path to the bundled opencode plugin JS file.
+
+    Checks two locations in order:
+    1. Alongside this file (installed package: src/aya/opencode-plugin.js)
+    2. The opencode-plugin/ directory at the repo root (development checkout)
+    """
+    # Installed package path
+    alongside = Path(__file__).parent / "opencode-plugin.js"
+    if alongside.exists():
+        return alongside
+    # Development checkout path
     return Path(__file__).parent.parent.parent / "opencode-plugin" / OPENCODE_PLUGIN_NAME
 
 

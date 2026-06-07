@@ -2095,8 +2095,7 @@ def _run_chain_action(
 
     if action == "gate":
         message = (
-            f"{_chain_name(chain)} · {_chain_stage_name(stage, index)}"
-            " — awaiting confirmation"
+            f"{_chain_name(chain)} · {_chain_stage_name(stage, index)} — awaiting confirmation"
         )
         _append_chain_alert(
             alerts=alerts,

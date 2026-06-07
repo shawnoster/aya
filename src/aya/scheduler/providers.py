@@ -334,14 +334,22 @@ def poll_watch(item: SchedulerItem) -> tuple[WatchState | None, bool]:
     if new_state is None:
         return None, False
 
+    return new_state, detect_watch_change(item, new_state)
+
+
+def detect_watch_change(item: SchedulerItem, new_state: WatchState) -> bool:
+    """Detect whether a watch's state transition should fire an alert."""
+    provider = item.get("provider", "")
     last_state = item.get("last_state")
     condition = item.get("condition", "")
-
-    # Use strategy dict to detect changes
     detector = _CHANGE_DETECTORS.get((provider, condition))
-    changed = detector(new_state, last_state) if detector else False
-
-    return new_state, changed
+    if not detector:
+        return False
+    try:
+        return detector(new_state, last_state)
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.debug("watch change detection failed for provider %s: %s", provider, exc)
+        return False
 
 
 def _evaluate_auto_remove(item: SchedulerItem, state: WatchState) -> bool:

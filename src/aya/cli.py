@@ -1910,6 +1910,10 @@ def hook_watch() -> None:
     On ``git push``, auto-creates a transient ``ci-checks`` watch that
     polls PR checks and wakes Claude if they fail or time out.
 
+    Also accepts direct ``watch_update`` / ``watch_updates`` payloads for
+    push-based watch transitions, letting external callers inject a normalized
+    provider state without waiting for the next poll interval.
+
     Reads Claude hook JSON from stdin.
     """
     try:
@@ -1931,10 +1935,62 @@ def _hook_watch_impl(payload: dict) -> int:
         _load_items_unlocked,
         _scheduler_file,
     )
-    from aya.scheduler.types import AlertDetails, _alerts_data, _scheduler_data
+    from aya.scheduler.types import (
+        AlertDetails,
+        SchedulerItem,
+        WatchState,
+        _alerts_data,
+        _scheduler_data,
+    )
+
+    def _extract_watch_updates(raw_payload: dict) -> list[dict]:
+        updates: list[dict] = []
+        for container in (raw_payload, raw_payload.get("tool_input", {})):
+            if not isinstance(container, dict):
+                continue
+            singular = container.get("watch_update")
+            if isinstance(singular, dict):
+                updates.append(singular)
+            plural = container.get("watch_updates")
+            if isinstance(plural, list):
+                updates.extend(update for update in plural if isinstance(update, dict))
+        return updates
+
+    def _process_watch_state(
+        item: SchedulerItem,
+        new_state: WatchState,
+        now: datetime,
+        alerts: list[dict],
+        rewake_messages: list[str],
+    ) -> tuple[bool, bool]:
+        from aya.scheduler.display import _create_alert as create_alert
+        from aya.scheduler.providers import _evaluate_auto_remove, detect_watch_change
+
+        changed = detect_watch_change(item, new_state)
+        item["last_checked_at"] = now.isoformat()
+        item["last_state"] = new_state
+
+        alerts_modified = False
+        if changed:
+            alert_msg = _format_watch_alert(item, new_state)
+            alert = create_alert(
+                source_item_id=item["id"],
+                message=alert_msg,
+                details=AlertDetails(**new_state),  # type: ignore[arg-type]
+                now=now,
+            )
+            alerts.append(alert)
+            alerts_modified = True
+            rewake_messages.append(alert_msg)
+
+        if _evaluate_auto_remove(item, new_state):
+            item["status"] = "dismissed"
+
+        return True, alerts_modified
 
     now = datetime.now().astimezone()
     rewake_messages: list[str] = []
+    push_updates = _extract_watch_updates(payload)
 
     # ── Step 1: detect git push → create ci-checks watch ────────────────
     command = payload.get("tool_input", {}).get("command", "")
@@ -1952,6 +2008,31 @@ def _hook_watch_impl(payload: dict) -> int:
             if item.get("type") != "watch" or item.get("status") != "active":
                 continue
 
+            matching_updates = [
+                update
+                for update in push_updates
+                if update.get("provider") == item.get("provider")
+                and update.get("watch_config") == item.get("watch_config")
+            ]
+            if matching_updates:
+                for update in matching_updates:
+                    state = update.get("state")
+                    if not isinstance(state, dict):
+                        logger.debug("Skipping malformed watch update for %s", item.get("id", "?"))
+                        continue
+                    item_changed, alerts_changed = _process_watch_state(
+                        item,
+                        state,
+                        now,
+                        alerts,
+                        rewake_messages,
+                    )
+                    items_modified = items_modified or item_changed
+                    alerts_modified = alerts_modified or alerts_changed
+                    if item.get("status") != "active":
+                        break
+                continue
+
             # Respect poll interval
             last = item.get("last_checked_at")
             interval = item.get("poll_interval_minutes", 30)
@@ -1960,33 +2041,19 @@ def _hook_watch_impl(payload: dict) -> int:
                 if now < next_check:
                     continue
 
-            new_state, changed = poll_watch(item)
+            new_state, _changed = poll_watch(item)
             if new_state is None:
                 continue
 
-            item["last_checked_at"] = now.isoformat()
-            item["last_state"] = new_state
-            items_modified = True
-
-            if changed:
-                alert_msg = _format_watch_alert(item, new_state)
-                from aya.scheduler.display import _create_alert as create_alert
-
-                alert = create_alert(
-                    source_item_id=item["id"],
-                    message=alert_msg,
-                    details=AlertDetails(**new_state),  # type: ignore[arg-type]
-                    now=now,
-                )
-                alerts.append(alert)
-                alerts_modified = True
-                rewake_messages.append(alert_msg)
-
-            from aya.scheduler.providers import _evaluate_auto_remove
-
-            if _evaluate_auto_remove(item, new_state):
-                item["status"] = "dismissed"
-                items_modified = True
+            item_changed, alerts_changed = _process_watch_state(
+                item,
+                new_state,
+                now,
+                alerts,
+                rewake_messages,
+            )
+            items_modified = items_modified or item_changed
+            alerts_modified = alerts_modified or alerts_changed
 
         if items_modified:
             _atomic_write(_scheduler_file(), _scheduler_data(items))

@@ -76,6 +76,7 @@ from aya.scheduler import (
 from aya.status import run_status
 
 logger = logging.getLogger(__name__)
+DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES = 120
 
 
 class OutputFormat(StrEnum):
@@ -2139,9 +2140,9 @@ def _run_chain_action(
 
 
 def _heartbeat_due(item: dict[str, Any], now: datetime) -> bool:
-    interval = item.get("heartbeat_interval_minutes", 120)
+    interval = item.get("heartbeat_interval_minutes", DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES)
     if not isinstance(interval, int) or interval <= 0:
-        interval = 120
+        interval = DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES
     last = (
         item.get("last_heartbeat_at")
         or item.get("current_stage_started_at")

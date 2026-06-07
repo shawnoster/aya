@@ -16,7 +16,7 @@ from contextlib import nullcontext, suppress
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import typer
 from rich.console import Console
@@ -49,6 +49,7 @@ from aya.scheduler import (
     SEVERITY_ACTIONABLE,
     SEVERITY_HEARTBEAT,
     SEVERITY_INFO,
+    AlertDetails,
     AlertSeverity,
     _display_items,
     _format_watch_alert,
@@ -2019,15 +2020,15 @@ def _build_chain_stage_watch_item(
 
 def _chain_stage_details(
     chain: dict[str, Any], stage: dict[str, Any], index: int, **extra: Any
-) -> dict[str, Any]:
-    details = {
+) -> AlertDetails:
+    details: dict[str, Any] = {
         "type": "watch-chain",
         "intent": _chain_name(chain),
         "opener": _chain_stage_name(stage, index),
         "context_summary": stage.get("action", ""),
     }
     details.update(extra)
-    return details
+    return cast(AlertDetails, details)
 
 
 def _append_chain_alert(
@@ -2045,7 +2046,7 @@ def _append_chain_alert(
         create_alert(
             source_item_id=source_item_id,
             message=message,
-            details=details,  # type: ignore[arg-type]
+            details=details,
             now=now,
             severity=severity,
         )

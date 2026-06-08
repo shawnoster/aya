@@ -1998,6 +1998,11 @@ def _build_chain_stage_watch_item(
     interval = stage.get("interval", stage.get("poll_interval_minutes"))
     if not isinstance(interval, int):
         interval = 30
+    # Mirror the provider-specific tightening in add_watch()
+    if interval == 30 and provider == "github-pr":
+        interval = 5
+    elif interval == 30 and provider == "ci-checks":
+        interval = 1
 
     return {
         "id": chain["id"],
@@ -2091,6 +2096,22 @@ def _run_chain_action(
     autonomy = _chain_stage_autonomy(chain, stage)
 
     if action == "notify":
+        # Watch-backed notify stages already emitted an alert from the watch trigger;
+        # only emit here for non-watch stages so the caller isn't notified twice.
+        if _chain_stage_watch_spec(stage) is None:
+            message = stage.get("message") or (
+                f"{_chain_name(chain)} · {_chain_stage_name(stage, index)}"
+            )
+            _append_chain_alert(
+                alerts=alerts,
+                source_item_id=chain["id"],
+                now=now,
+                message=message,
+                details=_chain_stage_details(chain, stage, index, autonomy=autonomy),
+                severity=SEVERITY_INFO,
+            )
+            rewake_messages.append(message)
+            return False, True, True
         return False, False, True
 
     if action == "gate":
@@ -2115,7 +2136,12 @@ def _run_chain_action(
 
     command = stage.get("dispatch") or stage.get("command") or stage.get("prompt")
     if not isinstance(command, str) or not command:
-        return False, False, True
+        logger.warning(
+            "Chain %s stage %d has action 'dispatch' but no command; stage halted",
+            chain.get("id", "?"),
+            index,
+        )
+        return False, False, False
 
     message = _chain_dispatch_message(chain, stage, index, autonomy, command)
     severity = SEVERITY_INFO if autonomy != "confirm" else SEVERITY_ACTIONABLE

@@ -2029,23 +2029,32 @@ def _hook_watch_impl(payload: dict) -> int:
                 [],
             )
             if matching_updates:
+                push_consumed = False
                 for update in matching_updates:
                     state = update.get("state")
                     if not isinstance(state, dict):
                         logger.debug("Skipping malformed watch update for %s", item.get("id", "?"))
                         continue
-                    item_changed, alerts_changed = _process_hook_watch_state(
-                        item,
-                        state,
-                        now,
-                        alerts,
-                        rewake_messages,
-                    )
+                    try:
+                        item_changed, alerts_changed = _process_hook_watch_state(
+                            item,
+                            state,
+                            now,
+                            alerts,
+                            rewake_messages,
+                        )
+                    except (KeyError, TypeError) as e:
+                        logger.warning(
+                            "Skipping bad pushed state for watch %s: %s", item.get("id", "?"), e
+                        )
+                        continue
+                    push_consumed = True
                     items_modified = items_modified or item_changed
                     alerts_modified = alerts_modified or alerts_changed
                     if item.get("status") != "active":
                         break
-                continue
+                if push_consumed:
+                    continue
 
             # Respect poll interval
             last = item.get("last_checked_at")

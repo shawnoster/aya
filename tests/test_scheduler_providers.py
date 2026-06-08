@@ -150,9 +150,16 @@ class TestCheckGithubPr:
         title="My PR",
         review_nodes=None,
         comments_count=0,
-        review_threads_count=0,
+        review_thread_comment_counts=None,
     ):
-        """Build a GraphQL response dict for _check_github_pr."""
+        """Build a GraphQL response dict for _check_github_pr.
+
+        review_thread_comment_counts: list of ints, one per review thread,
+        where each int is the comment count for that thread.
+        """
+        thread_nodes = [
+            {"comments": {"totalCount": c}} for c in (review_thread_comment_counts or [])
+        ]
         return {
             "data": {
                 "repository": {
@@ -163,7 +170,7 @@ class TestCheckGithubPr:
                         "title": title,
                         "reviews": {"nodes": review_nodes if review_nodes is not None else []},
                         "comments": {"totalCount": comments_count},
-                        "reviewThreads": {"totalCount": review_threads_count},
+                        "reviewThreads": {"nodes": thread_nodes},
                     }
                 }
             }
@@ -181,6 +188,12 @@ class TestCheckGithubPr:
 
     def test_returns_none_when_pull_request_null(self):
         response = {"data": {"repository": {"pullRequest": None}}}
+        with patch("aya.scheduler.providers._run_gh", return_value=response):
+            result = _check_github_pr(self._pr_config())
+        assert result is None
+
+    def test_returns_none_when_repository_null(self):
+        response = {"data": {"repository": None}}
         with patch("aya.scheduler.providers._run_gh", return_value=response):
             result = _check_github_pr(self._pr_config())
         assert result is None
@@ -238,10 +251,13 @@ class TestCheckGithubPr:
         assert result is not None
         assert result["draft"] is True
 
-    def test_comment_count_sums_comments_and_review_threads(self):
+    def test_comment_count_sums_comments_and_review_comments(self):
+        # 2 issue comments + 1 thread with 1 comment = 3 total
         with patch(
             "aya.scheduler.providers._run_gh",
-            return_value=self._graphql_response(comments_count=2, review_threads_count=1),
+            return_value=self._graphql_response(
+                comments_count=2, review_thread_comment_counts=[1]
+            ),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None

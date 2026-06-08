@@ -82,7 +82,11 @@ query($owner: String!, $repo: String!, $pr: Int!) {
         }
       }
       comments { totalCount }
-      reviewThreads { totalCount }
+      reviewThreads(first: 100) {
+        nodes {
+          comments { totalCount }
+        }
+      }
     }
   }
 }
@@ -112,7 +116,10 @@ def _check_github_pr(config: GithubPrConfig) -> GithubPrState | None:
     if not data or not isinstance(data, dict):
         return None
 
-    pr_data = data.get("data", {}).get("repository", {}).get("pullRequest")
+    repository = (data.get("data") or {}).get("repository")
+    if not isinstance(repository, dict):
+        return None
+    pr_data = repository.get("pullRequest")
     if not pr_data or not isinstance(pr_data, dict):
         return None
 
@@ -135,9 +142,11 @@ def _check_github_pr(config: GithubPrConfig) -> GithubPrState | None:
         if node.get("author")
     ]
 
-    comment_count = pr_data.get("comments", {}).get("totalCount", 0) + pr_data.get(
-        "reviewThreads", {}
-    ).get("totalCount", 0)
+    review_thread_nodes = (pr_data.get("reviewThreads") or {}).get("nodes", [])
+    review_comment_count = sum(
+        (node.get("comments") or {}).get("totalCount", 0) for node in review_thread_nodes
+    )
+    comment_count = (pr_data.get("comments") or {}).get("totalCount", 0) + review_comment_count
 
     return GithubPrState(
         pr_state=pr_state,

@@ -67,63 +67,95 @@ def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list[Any] | 
         return None
 
 
+_GITHUB_PR_QUERY = """
+query($owner: String!, $repo: String!, $pr: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      state
+      merged
+      isDraft
+      title
+      reviews(first: 100) {
+        nodes {
+          author { login }
+          state
+        }
+      }
+      comments { totalCount }
+      reviewThreads(first: 100) {
+        nodes {
+          comments { totalCount }
+        }
+      }
+    }
+  }
+}
+"""
+
+
 def _check_github_pr(config: GithubPrConfig) -> GithubPrState | None:
-    """Check GitHub PR status, reviews, and comment counts."""
+    """Check GitHub PR status, reviews, and comment counts via a single GraphQL call."""
     owner = config["owner"]
     repo = config["repo"]
     pr = config["pr"]
 
-    pr_data = _run_gh(
+    data = _run_gh(
         [
             "api",
-            f"/repos/{owner}/{repo}/pulls/{pr}",
-            "--jq",
-            "{ state: .state, merged: .merged, draft: .draft, title: .title }",
+            "graphql",
+            "-f",
+            f"query={_GITHUB_PR_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={repo}",
+            "-F",
+            f"pr={pr}",
         ]
     )
+    if not data or not isinstance(data, dict):
+        return None
+
+    repository = (data.get("data") or {}).get("repository")
+    if not isinstance(repository, dict):
+        return None
+    pr_data = repository.get("pullRequest")
     if not pr_data or not isinstance(pr_data, dict):
         return None
 
-    reviews_raw = _run_gh(
-        [
-            "api",
-            f"/repos/{owner}/{repo}/pulls/{pr}/reviews",
-            "--jq",
-            "[.[] | { user: .user.login, state: .state }]",
-        ]
-    )
-    reviews: list[dict[str, Any]] = reviews_raw if isinstance(reviews_raw, list) else []
+    raw_state = pr_data.get("state", "")
+    # GraphQL uses OPEN/CLOSED/MERGED; map to lowercase REST-style
+    # (REST returns state:"closed" for both merged and unmerged closed PRs)
+    if raw_state == "MERGED":
+        pr_state: str | None = "closed"
+    elif raw_state:
+        pr_state = raw_state.lower()
+    else:
+        pr_state = None
 
-    issue_comments_raw = _run_gh(
-        [
-            "api",
-            f"/repos/{owner}/{repo}/issues/{pr}/comments",
-            "--jq",
-            "[.[] | { id: .id }]",
-        ]
-    )
-    issue_comments: list[Any] = issue_comments_raw if isinstance(issue_comments_raw, list) else []
+    reviews_nodes = pr_data.get("reviews", {}).get("nodes", [])
+    # NOTE: reviews are fetched up to first 100; PRs with >100 reviews may have
+    # incomplete approval status. This is an accepted limitation.
+    reviews: list[dict[str, Any]] = [
+        {"user": node["author"]["login"], "state": node["state"]}
+        for node in reviews_nodes
+        if node.get("author")
+    ]
 
-    review_comments_raw = _run_gh(
-        [
-            "api",
-            f"/repos/{owner}/{repo}/pulls/{pr}/comments",
-            "--jq",
-            "[.[] | { id: .id }]",
-        ]
+    review_thread_nodes = (pr_data.get("reviewThreads") or {}).get("nodes", [])
+    review_comment_count = sum(
+        (node.get("comments") or {}).get("totalCount", 0) for node in review_thread_nodes
     )
-    review_comments: list[Any] = (
-        review_comments_raw if isinstance(review_comments_raw, list) else []
-    )
+    comment_count = (pr_data.get("comments") or {}).get("totalCount", 0) + review_comment_count
 
     return GithubPrState(
-        pr_state=pr_data.get("state"),
+        pr_state=pr_state,
         merged=pr_data.get("merged", False),
-        draft=pr_data.get("draft", False),
+        draft=pr_data.get("isDraft", False),
         title=pr_data.get("title", ""),
         reviews=reviews,
         has_approval=any(r.get("state") == "APPROVED" for r in reviews),
-        comment_count=len(issue_comments) + len(review_comments),
+        comment_count=comment_count,
     )
 
 
@@ -334,14 +366,22 @@ def poll_watch(item: SchedulerItem) -> tuple[WatchState | None, bool]:
     if new_state is None:
         return None, False
 
+    return new_state, detect_watch_change(item, new_state)
+
+
+def detect_watch_change(item: SchedulerItem, new_state: WatchState) -> bool:
+    """Detect whether a watch's state transition should fire an alert."""
+    provider = item.get("provider", "")
     last_state = item.get("last_state")
     condition = item.get("condition", "")
-
-    # Use strategy dict to detect changes
     detector = _CHANGE_DETECTORS.get((provider, condition))
-    changed = detector(new_state, last_state) if detector else False
-
-    return new_state, changed
+    if not detector:
+        return False
+    try:
+        return detector(new_state, last_state)
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.debug("watch change detection failed for provider %s: %s", provider, exc)
+        return False
 
 
 def _evaluate_auto_remove(item: SchedulerItem, state: WatchState) -> bool:

@@ -1021,6 +1021,146 @@ class TestHookCrons:
         assert data["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
 
 
+class TestHookWatchPushUpdates:
+    def _isolate_scheduler(self, tmp_path: Path, monkeypatch):
+        scheduler_file = tmp_path / "sched" / "scheduler.json"
+        alerts_file = tmp_path / "sched" / "alerts.json"
+        scheduler_file.parent.mkdir(parents=True)
+        scheduler_file.write_text(json.dumps({"items": []}))
+        alerts_file.write_text(json.dumps({"alerts": []}))
+        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        return scheduler_file, alerts_file
+
+    def test_push_update_triggers_matching_watch_without_polling(self, tmp_path: Path, monkeypatch):
+        scheduler_file, alerts_file = self._isolate_scheduler(tmp_path, monkeypatch)
+        scheduler_file.write_text(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "watch-pr-1",
+                            "type": "watch",
+                            "status": "active",
+                            "message": "Review ready",
+                            "provider": "github-pr",
+                            "watch_config": {"owner": "acme", "repo": "widget", "pr": 42},
+                            "condition": "approved_or_merged",
+                            "poll_interval_minutes": 30,
+                            "last_checked_at": None,
+                            "last_state": {
+                                "pr_state": "open",
+                                "merged": False,
+                                "draft": False,
+                                "title": "PR",
+                                "reviews": [],
+                                "has_approval": False,
+                                "comment_count": 0,
+                            },
+                            "created_at": "2026-01-01T00:00:00+00:00",
+                            "session_required": False,
+                            "tags": [],
+                            "remove_when": "",
+                        }
+                    ]
+                }
+            )
+        )
+
+        payload = {
+            "watch_update": {
+                "provider": "github-pr",
+                "watch_config": {"owner": "acme", "repo": "widget", "pr": 42},
+                "state": {
+                    "pr_state": "open",
+                    "merged": False,
+                    "draft": False,
+                    "title": "PR",
+                    "reviews": [{"user": "alice", "state": "APPROVED"}],
+                    "has_approval": True,
+                    "comment_count": 0,
+                },
+            }
+        }
+
+        with (
+            patch("aya.cli.poll_watch") as mock_poll,
+            patch("aya.cli.rewake_emit") as mock_rewake,
+        ):
+            from aya.cli import _hook_watch_impl
+
+            result = _hook_watch_impl(payload)
+
+        assert result == 2
+        mock_poll.assert_not_called()
+        mock_rewake.assert_called_once()
+
+        alerts = json.loads(alerts_file.read_text())["alerts"]
+        assert len(alerts) == 1
+        assert alerts[0]["source_item_id"] == "watch-pr-1"
+        assert "APPROVED by alice" in alerts[0]["message"]
+
+        item = json.loads(scheduler_file.read_text())["items"][0]
+        assert item["last_state"]["has_approval"] is True
+        assert item["last_checked_at"] is not None
+
+    def test_non_matching_push_update_falls_back_to_polling(self, tmp_path: Path, monkeypatch):
+        scheduler_file, alerts_file = self._isolate_scheduler(tmp_path, monkeypatch)
+        scheduler_file.write_text(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "watch-pr-2",
+                            "type": "watch",
+                            "status": "active",
+                            "message": "Review ready",
+                            "provider": "github-pr",
+                            "watch_config": {"owner": "acme", "repo": "widget", "pr": 42},
+                            "condition": "approved_or_merged",
+                            "poll_interval_minutes": 30,
+                            "last_checked_at": None,
+                            "last_state": None,
+                            "created_at": "2026-01-01T00:00:00+00:00",
+                            "session_required": False,
+                            "tags": [],
+                            "remove_when": "",
+                        }
+                    ]
+                }
+            )
+        )
+
+        payload = {
+            "watch_update": {
+                "provider": "github-pr",
+                "watch_config": {"owner": "acme", "repo": "widget", "pr": 99},
+                "state": {
+                    "pr_state": "open",
+                    "merged": False,
+                    "draft": False,
+                    "title": "Other PR",
+                    "reviews": [{"user": "alice", "state": "APPROVED"}],
+                    "has_approval": True,
+                    "comment_count": 0,
+                },
+            }
+        }
+
+        with (
+            patch("aya.cli.poll_watch", return_value=(None, False)) as mock_poll,
+            patch("aya.cli.rewake_emit") as mock_rewake,
+        ):
+            from aya.cli import _hook_watch_impl
+
+            result = _hook_watch_impl(payload)
+
+        assert result == 0
+        mock_poll.assert_called_once()
+        mock_rewake.assert_not_called()
+        assert json.loads(alerts_file.read_text())["alerts"] == []
+
+
 @pytest.mark.usefixtures("_isolate_scheduler")
 class TestScheduleStatusCLI:
     def test_status_exits_zero(self):

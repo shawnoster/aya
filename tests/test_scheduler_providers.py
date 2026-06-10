@@ -142,14 +142,40 @@ class TestCheckGithubPr:
     def _pr_config(self):
         return {"owner": "acme", "repo": "widget", "pr": 42}
 
-    def _side_effect(self, pr_data, reviews=None, issue_comments=None, review_comments=None):
-        """Build a side_effect list for the four _run_gh calls in _check_github_pr."""
-        return [
-            pr_data,
-            reviews if reviews is not None else [],
-            issue_comments if issue_comments is not None else [],
-            review_comments if review_comments is not None else [],
+    def _graphql_response(
+        self,
+        *,
+        state="OPEN",
+        merged=False,
+        is_draft=False,
+        title="My PR",
+        review_nodes=None,
+        comments_count=0,
+        review_thread_comment_counts=None,
+    ):
+        """Build a GraphQL response dict for _check_github_pr.
+
+        review_thread_comment_counts: list of ints, one per review thread,
+        where each int is the comment count for that thread.
+        """
+        thread_nodes = [
+            {"comments": {"totalCount": c}} for c in (review_thread_comment_counts or [])
         ]
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "state": state,
+                        "merged": merged,
+                        "isDraft": is_draft,
+                        "title": title,
+                        "reviews": {"nodes": review_nodes if review_nodes is not None else []},
+                        "comments": {"totalCount": comments_count},
+                        "reviewThreads": {"nodes": thread_nodes},
+                    }
+                }
+            }
+        }
 
     def test_returns_none_when_gh_fails(self):
         with patch("aya.scheduler.providers._run_gh", return_value=None):
@@ -157,15 +183,26 @@ class TestCheckGithubPr:
         assert result is None
 
     def test_returns_none_when_pr_data_not_dict(self):
-        with patch("aya.scheduler.providers._run_gh", side_effect=[[{"id": 1}], [], [], []]):
+        with patch("aya.scheduler.providers._run_gh", return_value=[{"id": 1}]):
+            result = _check_github_pr(self._pr_config())
+        assert result is None
+
+    def test_returns_none_when_pull_request_null(self):
+        response = {"data": {"repository": {"pullRequest": None}}}
+        with patch("aya.scheduler.providers._run_gh", return_value=response):
+            result = _check_github_pr(self._pr_config())
+        assert result is None
+
+    def test_returns_none_when_repository_null(self):
+        response = {"data": {"repository": None}}
+        with patch("aya.scheduler.providers._run_gh", return_value=response):
             result = _check_github_pr(self._pr_config())
         assert result is None
 
     def test_open_pr_with_no_reviews(self):
-        pr_data = {"state": "open", "merged": False, "draft": False, "title": "My PR"}
         with patch(
             "aya.scheduler.providers._run_gh",
-            side_effect=self._side_effect(pr_data),
+            return_value=self._graphql_response(),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None
@@ -176,49 +213,87 @@ class TestCheckGithubPr:
         assert result["comment_count"] == 0
 
     def test_approved_pr(self):
-        pr_data = {"state": "open", "merged": False, "draft": False, "title": "My PR"}
-        reviews = [{"user": "alice", "state": "APPROVED"}]
+        review_nodes = [{"author": {"login": "alice"}, "state": "APPROVED"}]
         with patch(
             "aya.scheduler.providers._run_gh",
-            side_effect=self._side_effect(pr_data, reviews=reviews),
+            return_value=self._graphql_response(review_nodes=review_nodes),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None
         assert result["has_approval"] is True
+        assert result["reviews"] == [{"user": "alice", "state": "APPROVED"}]
 
     def test_merged_pr(self):
-        pr_data = {"state": "closed", "merged": True, "draft": False, "title": "My PR"}
         with patch(
             "aya.scheduler.providers._run_gh",
-            side_effect=self._side_effect(pr_data),
+            return_value=self._graphql_response(state="MERGED", merged=True),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None
         assert result["merged"] is True
+        assert result["pr_state"] == "closed"  # MERGED maps to "closed" for REST compatibility
 
-    def test_comment_count_sums_issue_and_review_comments(self):
-        pr_data = {"state": "open", "merged": False, "draft": False, "title": "My PR"}
-        issue_comments = [{"id": 1}, {"id": 2}]
-        review_comments = [{"id": 3}]
+    def test_closed_unmerged_pr(self):
         with patch(
             "aya.scheduler.providers._run_gh",
-            side_effect=self._side_effect(
-                pr_data, issue_comments=issue_comments, review_comments=review_comments
-            ),
+            return_value=self._graphql_response(state="CLOSED", merged=False),
+        ):
+            result = _check_github_pr(self._pr_config())
+        assert result is not None
+        assert result["merged"] is False
+        assert result["pr_state"] == "closed"
+
+    def test_draft_pr(self):
+        with patch(
+            "aya.scheduler.providers._run_gh",
+            return_value=self._graphql_response(is_draft=True),
+        ):
+            result = _check_github_pr(self._pr_config())
+        assert result is not None
+        assert result["draft"] is True
+
+    def test_comment_count_sums_comments_and_review_comments(self):
+        # 2 issue comments + 1 thread with 1 comment = 3 total
+        with patch(
+            "aya.scheduler.providers._run_gh",
+            return_value=self._graphql_response(comments_count=2, review_thread_comment_counts=[1]),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None
         assert result["comment_count"] == 3
 
-    def test_comment_count_zero_when_both_calls_fail(self):
-        pr_data = {"state": "open", "merged": False, "draft": False, "title": "My PR"}
+    def test_comment_count_zero_when_no_comments(self):
         with patch(
             "aya.scheduler.providers._run_gh",
-            side_effect=[pr_data, [], None, None],
+            return_value=self._graphql_response(),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None
         assert result["comment_count"] == 0
+
+    def test_review_node_without_author_skipped(self):
+        review_nodes = [
+            {"author": None, "state": "APPROVED"},
+            {"author": {"login": "bob"}, "state": "CHANGES_REQUESTED"},
+        ]
+        with patch(
+            "aya.scheduler.providers._run_gh",
+            return_value=self._graphql_response(review_nodes=review_nodes),
+        ):
+            result = _check_github_pr(self._pr_config())
+        assert result is not None
+        assert result["reviews"] == [{"user": "bob", "state": "CHANGES_REQUESTED"}]
+        assert result["has_approval"] is False
+
+    def test_single_gh_call_made(self):
+        """_check_github_pr must issue exactly one gh api graphql call."""
+        with patch("aya.scheduler.providers._run_gh") as mock_run:
+            mock_run.return_value = self._graphql_response()
+            _check_github_pr(self._pr_config())
+        assert mock_run.call_count == 1
+        args, _ = mock_run.call_args
+        assert args[0][0] == "api"
+        assert args[0][1] == "graphql"
 
 
 # ── _check_jira_query ────────────────────────────────────────────────────────

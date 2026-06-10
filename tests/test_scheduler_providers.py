@@ -22,6 +22,7 @@ from aya.scheduler.providers import (
     _evaluate_auto_remove,
     _get_jira_credentials,
     _run_gh,
+    detect_watch_change,
     poll_watch,
 )
 from aya.scheduler.types import (
@@ -786,6 +787,54 @@ class TestPollWatch:
             state, changed = poll_watch(item)
         assert state is not None
         assert changed is True
+
+
+class TestDetectWatchChange:
+    def test_uses_item_condition_and_last_state(self):
+        old_state = GithubPrState(
+            pr_state="open",
+            merged=False,
+            draft=False,
+            title="PR",
+            reviews=[],
+            has_approval=False,
+            comment_count=0,
+        )
+        new_state = GithubPrState(
+            pr_state="open",
+            merged=False,
+            draft=False,
+            title="PR",
+            reviews=[{"user": "alice", "state": "APPROVED"}],
+            has_approval=True,
+            comment_count=0,
+        )
+        item: SchedulerItem = {
+            "id": "01JTEST00000000000000000001",
+            "type": "watch",
+            "status": "active",
+            "message": "Test watch",
+            "provider": "github-pr",
+            "watch_config": {"owner": "acme", "repo": "widget", "pr": 42},
+            "condition": "approved_or_merged",
+            "last_state": old_state,
+            "created_at": "2026-01-01T00:00:00",
+        }
+        assert detect_watch_change(item, new_state) is True
+
+    def test_invalid_state_returns_false(self):
+        item: SchedulerItem = {
+            "id": "01JTEST00000000000000000001",
+            "type": "watch",
+            "status": "active",
+            "message": "Test watch",
+            "provider": "github-pr",
+            "watch_config": {"owner": "acme", "repo": "widget", "pr": 42},
+            "condition": "approved_or_merged",
+            "last_state": None,
+            "created_at": "2026-01-01T00:00:00",
+        }
+        assert detect_watch_change(item, {}) is False
 
 
 # ── _evaluate_auto_remove ────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ from contextlib import nullcontext, suppress
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn, cast
 
 import typer
 from rich.console import Console
@@ -48,6 +48,7 @@ from aya.rewake import emit as rewake_emit
 from aya.scheduler import (
     SEVERITY_ACTIONABLE,
     SEVERITY_HEARTBEAT,
+    SEVERITY_INFO,
     AlertDetails,
     AlertSeverity,
     SchedulerItem,
@@ -77,6 +78,7 @@ from aya.scheduler import (
 from aya.status import run_status
 
 logger = logging.getLogger(__name__)
+DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES = 120
 
 
 class OutputFormat(StrEnum):
@@ -1928,6 +1930,403 @@ def hook_watch() -> None:
     raise typer.Exit(exit_code)
 
 
+def _hook_watch_now() -> datetime:
+    """Clock helper for hook-watch tests."""
+    return datetime.now().astimezone()
+
+
+def _is_watch_chain(item: dict[str, Any]) -> bool:
+    """Return True when a scheduler watch item represents a multi-stage chain."""
+    return item.get("type") == "watch" and isinstance(item.get("stages"), list)
+
+
+def _chain_name(item: dict[str, Any]) -> str:
+    raw = item.get("chain") or item.get("message") or "watch chain"
+    return str(raw)
+
+
+def _chain_stage_name(stage: dict[str, Any], index: int) -> str:
+    raw = stage.get("name") or f"stage-{index + 1}"
+    return str(raw)
+
+
+def _chain_stage_action(stage: dict[str, Any]) -> str:
+    action = stage.get("action")
+    if isinstance(action, str) and action:
+        return action
+    return "notify" if _chain_stage_watch_spec(stage) is not None else "dispatch"
+
+
+def _chain_stage_autonomy(item: dict[str, Any], stage: dict[str, Any]) -> str:
+    raw = stage.get("autonomy") or item.get("default_autonomy") or "autonomous"
+    return raw if raw in {"autonomous", "confirm", "notify-only"} else "autonomous"
+
+
+def _chain_stage_watch_spec(stage: dict[str, Any]) -> tuple[str, str] | None:
+    watch = stage.get("watch")
+    if isinstance(watch, str):
+        parts = watch.split(maxsplit=1)
+        if len(parts) == 2:
+            return parts[0], parts[1]
+    provider = stage.get("provider")
+    target = stage.get("target")
+    if isinstance(provider, str) and isinstance(target, str) and provider and target:
+        return provider, target
+    return None
+
+
+def _build_chain_stage_watch_item(
+    chain: dict[str, Any], stage: dict[str, Any], index: int
+) -> dict[str, Any] | None:
+    """Build an ephemeral watch item for the current chain stage."""
+    watch_spec = _chain_stage_watch_spec(stage)
+    if watch_spec is None:
+        return None
+
+    provider, target = watch_spec
+    watch_config: dict[str, Any]
+    if provider in {"github-pr", "ci-checks"}:
+        match = re.match(r"([^/]+)/([^#]+)#(\d+)", target)
+        if not match:
+            return None
+        watch_config = {
+            "owner": match.group(1),
+            "repo": match.group(2),
+            "pr": int(match.group(3)),
+        }
+    elif provider == "jira-query":
+        watch_config = {"jql": target}
+    elif provider == "jira-ticket":
+        watch_config = {"ticket": target.upper()}
+    else:
+        return None
+
+    interval = stage.get("interval", stage.get("poll_interval_minutes"))
+    if not isinstance(interval, int):
+        interval = 30
+    # Mirror the provider-specific tightening in add_watch()
+    if interval == 30 and provider == "github-pr":
+        interval = 5
+    elif interval == 30 and provider == "ci-checks":
+        interval = 1
+
+    return {
+        "id": chain["id"],
+        "type": "watch",
+        "status": "active",
+        "created_at": chain.get("created_at", _hook_watch_now().isoformat()),
+        "message": (
+            stage.get("message") or f"{_chain_name(chain)} · {_chain_stage_name(stage, index)}"
+        ),
+        "tags": chain.get("tags", []),
+        "session_required": False,
+        "provider": provider,
+        "watch_config": watch_config,
+        "condition": stage.get("condition", ""),
+        "poll_interval_minutes": interval,
+        "last_checked_at": chain.get("last_checked_at"),
+        "last_state": chain.get("last_state"),
+        "remove_when": stage.get("remove_when", ""),
+    }
+
+
+def _chain_stage_details(
+    chain: dict[str, Any], stage: dict[str, Any], index: int, **extra: Any
+) -> AlertDetails:
+    details: dict[str, Any] = {
+        "type": "watch-chain",
+        "intent": _chain_name(chain),
+        "opener": _chain_stage_name(stage, index),
+        "context_summary": stage.get("action", ""),
+    }
+    details.update(extra)
+    return cast(AlertDetails, details)
+
+
+def _append_chain_alert(
+    *,
+    alerts: list[dict[str, Any]],
+    source_item_id: str,
+    now: datetime,
+    message: str,
+    details: dict[str, Any],
+    severity: AlertSeverity,
+) -> None:
+    from aya.scheduler.display import _create_alert as create_alert
+
+    alerts.append(
+        create_alert(
+            source_item_id=source_item_id,
+            message=message,
+            details=details,
+            now=now,
+            severity=severity,
+        )
+    )
+
+
+def _advance_watch_chain(item: dict[str, Any], next_index: int, now: datetime) -> None:
+    item["current_stage_index"] = next_index
+    item["current_stage_started_at"] = now.isoformat()
+    item["last_checked_at"] = None
+    item["last_state"] = None
+    item.pop("awaiting_confirmation", None)
+    item.pop("pending_stage_index", None)
+    item.pop("pending_dispatch", None)
+
+
+def _chain_dispatch_message(
+    chain: dict[str, Any], stage: dict[str, Any], index: int, autonomy: str, command: str
+) -> str:
+    label = f"{_chain_name(chain)} · {_chain_stage_name(stage, index)}"
+    if autonomy == "confirm":
+        return f"{label} — awaiting confirmation to run {command}"
+    if autonomy == "notify-only":
+        return f"{label} — notify-only: {command}"
+    return f"{label} — dispatching {command}"
+
+
+def _run_chain_action(
+    chain: dict[str, Any],
+    stage: dict[str, Any],
+    index: int,
+    now: datetime,
+    alerts: list[dict[str, Any]],
+    rewake_messages: list[str],
+) -> tuple[bool, bool, bool]:
+    """Run the current chain stage action.
+
+    Returns (items_modified, alerts_modified, should_advance).
+    """
+    action = _chain_stage_action(stage)
+    autonomy = _chain_stage_autonomy(chain, stage)
+
+    if action == "notify":
+        # Watch-backed notify stages already emitted an alert from the watch trigger;
+        # only emit here for non-watch stages so the caller isn't notified twice.
+        if _chain_stage_watch_spec(stage) is None:
+            message = stage.get("message") or (
+                f"{_chain_name(chain)} · {_chain_stage_name(stage, index)}"
+            )
+            _append_chain_alert(
+                alerts=alerts,
+                source_item_id=chain["id"],
+                now=now,
+                message=message,
+                details=_chain_stage_details(chain, stage, index, autonomy=autonomy),
+                severity=SEVERITY_INFO,
+            )
+            rewake_messages.append(message)
+            return False, True, True
+        return False, False, True
+
+    if action == "gate":
+        message = (
+            f"{_chain_name(chain)} · {_chain_stage_name(stage, index)} — awaiting confirmation"
+        )
+        _append_chain_alert(
+            alerts=alerts,
+            source_item_id=chain["id"],
+            now=now,
+            message=message,
+            details=_chain_stage_details(chain, stage, index, autonomy=autonomy),
+            severity=SEVERITY_ACTIONABLE,
+        )
+        rewake_messages.append(message)
+        chain["awaiting_confirmation"] = True
+        chain["pending_stage_index"] = index
+        return True, True, False
+
+    if action != "dispatch":
+        return False, False, True
+
+    command = stage.get("dispatch") or stage.get("command") or stage.get("prompt")
+    if not isinstance(command, str) or not command:
+        logger.warning(
+            "Chain %s stage %d has action 'dispatch' but no command; stage halted",
+            chain.get("id", "?"),
+            index,
+        )
+        return False, False, False
+
+    message = _chain_dispatch_message(chain, stage, index, autonomy, command)
+    severity = SEVERITY_INFO if autonomy != "confirm" else SEVERITY_ACTIONABLE
+    _append_chain_alert(
+        alerts=alerts,
+        source_item_id=chain["id"],
+        now=now,
+        message=message,
+        details=_chain_stage_details(chain, stage, index, autonomy=autonomy, body=command),
+        severity=severity,
+    )
+    rewake_messages.append(message)
+
+    if autonomy == "confirm":
+        chain["awaiting_confirmation"] = True
+        chain["pending_stage_index"] = index
+        chain["pending_dispatch"] = command
+        return True, True, False
+
+    return False, True, True
+
+
+def _heartbeat_due(item: dict[str, Any], now: datetime) -> bool:
+    interval = item.get("heartbeat_interval_minutes", DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES)
+    if not isinstance(interval, int) or interval <= 0:
+        interval = DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES
+    last = (
+        item.get("last_heartbeat_at")
+        or item.get("current_stage_started_at")
+        or item.get("created_at")
+    )
+    if not isinstance(last, str) or not last:
+        return True
+    try:
+        return now >= datetime.fromisoformat(last) + timedelta(minutes=interval)
+    except ValueError:
+        return True
+
+
+def _emit_watch_chain_heartbeat(
+    item: dict[str, Any], now: datetime, alerts: list[dict[str, Any]], rewake_messages: list[str]
+) -> bool:
+    stages = item.get("stages")
+    if not isinstance(stages, list) or item.get("status") != "active" or not stages:
+        return False
+    if not _heartbeat_due(item, now):
+        return False
+
+    index = item.get("current_stage_index", 0)
+    if not isinstance(index, int) or index < 0:
+        index = 0
+    if index >= len(stages):
+        return False
+
+    stage = stages[index]
+    if not isinstance(stage, dict):
+        return False
+
+    stage_name = _chain_stage_name(stage, index)
+    stage_count = len(stages)
+    prefix = "awaiting confirmation for" if item.get("awaiting_confirmation") else "waiting on"
+    message = f"{_chain_name(item)} heartbeat — {prefix} {stage_name} ({index + 1}/{stage_count})"
+    _append_chain_alert(
+        alerts=alerts,
+        source_item_id=item["id"],
+        now=now,
+        message=message,
+        details=_chain_stage_details(item, stage, index, total=stage_count),
+        severity=SEVERITY_HEARTBEAT,
+    )
+    rewake_messages.append(message)
+    item["last_heartbeat_at"] = now.isoformat()
+    return True
+
+
+def _process_watch_chain(
+    item: dict[str, Any],
+    now: datetime,
+    alerts: list[dict[str, Any]],
+    rewake_messages: list[str],
+) -> tuple[bool, bool]:
+    """Advance a watch chain as far as possible for this hook invocation."""
+    stages = item.get("stages")
+    if not isinstance(stages, list) or not stages:
+        return False, False
+
+    items_modified = False
+    alerts_modified = False
+    stage_progressed = False
+    index = item.get("current_stage_index", 0)
+    if not isinstance(index, int) or index < 0:
+        index = 0
+        item["current_stage_index"] = 0
+        items_modified = True
+
+    while item.get("status") == "active" and index < len(stages):
+        stage = stages[index]
+        if not isinstance(stage, dict):
+            break
+        if item.get("awaiting_confirmation"):
+            break
+
+        watch_item = _build_chain_stage_watch_item(item, stage, index)
+        if watch_item is not None:
+            last = item.get("last_checked_at")
+            interval = watch_item.get("poll_interval_minutes", 30)
+            if last:
+                try:
+                    next_check = datetime.fromisoformat(last) + timedelta(minutes=interval)
+                except ValueError:
+                    next_check = now
+                if now < next_check:
+                    break
+
+            new_state, changed = poll_watch(watch_item)
+            if new_state is None:
+                break
+
+            item["last_checked_at"] = now.isoformat()
+            item["last_state"] = new_state
+            items_modified = True
+
+            if not changed:
+                break
+
+            autonomy = _chain_stage_autonomy(item, stage)
+            severity = SEVERITY_INFO if autonomy == "notify-only" else SEVERITY_ACTIONABLE
+            message = _format_watch_alert(watch_item, new_state)
+            _append_chain_alert(
+                alerts=alerts,
+                source_item_id=item["id"],
+                now=now,
+                message=message,
+                details=_chain_stage_details(
+                    item, stage, index, body=json.dumps(new_state, sort_keys=True)
+                ),
+                severity=severity,
+            )
+            rewake_messages.append(message)
+            alerts_modified = True
+
+        action_items_modified, action_alerts_modified, should_advance = _run_chain_action(
+            item, stage, index, now, alerts, rewake_messages
+        )
+        items_modified = items_modified or action_items_modified
+        alerts_modified = alerts_modified or action_alerts_modified
+        if not should_advance:
+            break
+
+        stage_progressed = True
+        index += 1
+        if index >= len(stages):
+            item["current_stage_index"] = index
+            item["status"] = "done"
+            item["completed_at"] = now.isoformat()
+            items_modified = True
+            message = f"{_chain_name(item)} complete"
+            _append_chain_alert(
+                alerts=alerts,
+                source_item_id=item["id"],
+                now=now,
+                message=message,
+                details=_chain_stage_details(item, stage, max(index - 1, 0)),
+                severity=SEVERITY_INFO,
+            )
+            rewake_messages.append(message)
+            alerts_modified = True
+            break
+
+        _advance_watch_chain(item, index, now)
+        items_modified = True
+
+    if not stage_progressed and _emit_watch_chain_heartbeat(item, now, alerts, rewake_messages):
+        items_modified = True
+        alerts_modified = True
+
+    return items_modified, alerts_modified
+
+
 def _extract_watch_updates(raw_payload: dict) -> list[dict]:
     """Extract normalized pushed watch updates from a hook payload."""
     updates: list[dict] = []
@@ -1999,7 +2398,7 @@ def _hook_watch_impl(payload: dict) -> int:
     )
     from aya.scheduler.types import _alerts_data, _scheduler_data
 
-    now = datetime.now().astimezone()
+    now = _hook_watch_now()
     rewake_messages: list[str] = []
     push_updates_by_key: dict[str, list[dict]] = {}
     for update in _extract_watch_updates(payload):
@@ -2021,6 +2420,14 @@ def _hook_watch_impl(payload: dict) -> int:
         alerts_modified = False
 
         for item in items:
+            if _is_watch_chain(item) and item.get("status") == "active":
+                chain_items_modified, chain_alerts_modified = _process_watch_chain(
+                    item, now, alerts, rewake_messages
+                )
+                items_modified = items_modified or chain_items_modified
+                alerts_modified = alerts_modified or chain_alerts_modified
+                continue
+
             if item.get("type") != "watch" or item.get("status") != "active":
                 continue
 

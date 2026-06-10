@@ -255,9 +255,7 @@ class TestCheckGithubPr:
         # 2 issue comments + 1 thread with 1 comment = 3 total
         with patch(
             "aya.scheduler.providers._run_gh",
-            return_value=self._graphql_response(
-                comments_count=2, review_thread_comment_counts=[1]
-            ),
+            return_value=self._graphql_response(comments_count=2, review_thread_comment_counts=[1]),
         ):
             result = _check_github_pr(self._pr_config())
         assert result is not None

@@ -262,6 +262,16 @@ Refresh is **CLI-only** — `uv tool` installer commands and
 `aya schedule install` have no MCP equivalents. Reinstall aya, with
 verification.
 
+> **Pin a wheel-compatible Python.** aya depends on `coincurve`/`cffi`, which
+> lag the newest CPython. On Python 3.14 there are no wheels yet, so uv builds
+> them from source and `cffi` fails (`Expected exactly one LICENSE file in cffi
+> distribution`). Install with `--python 3.13` (the newest interpreter that has
+> coincurve + cffi wheels) on both paths below; bump it when 3.14 wheels land.
+> `uv tool upgrade` preserves the env's interpreter, so only fresh installs and
+> `--force` reinstalls need the flag. (This replaces the older `coincurve<21`
+> constraint workaround, which pinned an outdated coincurve instead of fixing
+> the wheel gap.)
+
 ### Detect install source first
 
 Before reinstalling, check whether the current install is editable from
@@ -296,7 +306,7 @@ denote the path read from the receipt (e.g. `~/dev/code/aya`):
 2. **Reinstall editable** (re-syncs deps from `pyproject.toml`):
 
    ```bash
-   uv tool install --editable <aya-clone> --reinstall
+   uv tool install --editable <aya-clone> --reinstall --python 3.13
    ```
 
 3. Continue at **Common steps** below.
@@ -314,7 +324,7 @@ When the receipt is missing or non-editable:
 2. **Reinstall latest from GitHub:**
 
    ```bash
-   uv tool install --from git+https://github.com/shawnoster/aya aya-ai-assist --force
+   uv tool install --from git+https://github.com/shawnoster/aya aya-ai-assist --python 3.13 --force
    ```
 
 3. Continue at **Common steps** below.

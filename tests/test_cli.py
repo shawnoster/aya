@@ -4342,3 +4342,59 @@ class TestSentLog:
         )
         p.save(profile_with_trusted)
         assert Profile.load(profile_with_trusted).sent_ids == []
+
+
+class TestDeliverySummary:
+    """The one-line relay summary must not read the same for 2/2 and 1/2."""
+
+    def test_summary_distinguishes_partial_from_complete(self):
+        from aya.cli import _delivery_summary
+
+        complete = _delivery_summary(["wss://a", "wss://b"], 2)
+        partial = _delivery_summary(["wss://a"], 2)
+        assert complete != partial
+        assert "2 of 2" in complete
+        assert "1 of 2" in partial
+
+    def test_summary_single_relay_stays_bare(self):
+        from aya.cli import _delivery_summary
+
+        assert _delivery_summary(["wss://a"], 1) == "wss://a"
+
+    def test_send_json_relay_field_reflects_delivery(self, profile_with_trusted: Path):
+        report = [
+            {"url": "wss://good", "ok": True, "error": None},
+            {"url": "wss://bad", "ok": False, "error": "503"},
+        ]
+
+        class FakeClient:
+            last_publish_report = report
+
+            def __init__(self, *a, **kw):
+                pass
+
+            async def publish(self, packet, pubkey, encrypt=True):
+                return "evt" + packet.id[-8:]
+
+        with patch("aya.cli.RelayClient", FakeClient):
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "x",
+                    "-m",
+                    "b",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert "1 of 2" in json.loads(result.output)["relay"]
+
+    def test_send_help_warns_exit_code_is_not_delivery(self):
+        result = runner.invoke(app, ["send", "--help"])
+        assert "relays_failed" in result.output

@@ -394,6 +394,19 @@ def _record_sent(
         logger.debug("Could not persist sent packet body for %s", packet.id, exc_info=True)
 
 
+def _delivery_summary(relays_ok: list[str], attempted: int) -> str:
+    """One-line delivery summary that never overstates reach.
+
+    Reads as "<first accepting relay> (N of M relays)" so a partial failure is
+    visible in the summary itself, not only in ``relays_failed``.
+    """
+    if not relays_ok:
+        return f"none (0 of {attempted} relays)"
+    if len(relays_ok) == attempted == 1:
+        return relays_ok[0]
+    return f"{relays_ok[0]} ({len(relays_ok)} of {attempted} relays)"
+
+
 def _render_delivery(relays_ok: list[str], relays_failed: list[dict[str, object]]) -> str:
     """One line per relay, so a partial delivery is visible rather than implied."""
     lines = [f"  [green]✓[/green] {url}" for url in relays_ok]
@@ -797,6 +810,11 @@ def send_cmd(
 
     Pass --in-reply-to <id> to thread a reply. For a bare acknowledgement with
     no new content, `aya ack <id> "message"` is shorter.
+
+    Exit code is 0 if *any* relay accepts the packet, so it is not a delivery
+    signal. Check `relays_failed` (or the Delivery block in text mode): if the
+    peer polls only a relay that rejected it, they will never see the packet.
+    `aya sent --failed` lists such packets later.
     """
     logger.debug("send: to=%s, intent=%s, as=%s", to, intent, as_)
     format_ = resolve_format(format_)
@@ -926,9 +944,10 @@ def send_cmd(
         )
 
         relay_count = len(relay_urls)
-        relay_display = (
-            relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
-        )
+        # Summarise *delivery*, not attempts. The old "<first> (+N)" form
+        # counted relays tried, so a 1-of-2 partial failure rendered
+        # identically to a clean 2-of-2 send.
+        relay_display = _delivery_summary(relays_ok, relay_count)
 
         if format_ == OutputFormat.JSON:
             _output_json(

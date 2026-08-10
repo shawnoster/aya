@@ -18,7 +18,7 @@ from aya.resolve import (
 
 @pytest.fixture
 def profile() -> Profile:
-    p = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    p = Profile()
     p.instances["harbor"] = Identity.generate("harbor")
     beacon = Identity.generate("beacon")
     p.trusted_keys["beacon"] = TrustedKey(

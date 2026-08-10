@@ -37,22 +37,12 @@ from aya.identity import (
 from aya.ingest import ingest as _ingest
 from aya.install import install_scheduler, uninstall_scheduler
 from aya.outbox import (
-    NOT_INGESTED_HINT as _NOT_INGESTED_HINT,
-)
-from aya.outbox import (
-    check_idempotency as _check_idempotency,
-)
-from aya.outbox import (
-    delivery_from_report as _delivery_from_report,
-)
-from aya.outbox import (
-    delivery_summary as _delivery_summary,
-)
-from aya.outbox import (
-    record_idempotency as _record_idempotency,
-)
-from aya.outbox import (
-    record_sent as _record_sent,
+    NOT_INGESTED_HINT,
+    check_idempotency,
+    delivery_from_report,
+    delivery_summary,
+    record_idempotency,
+    record_sent,
 )
 from aya.packet import ConflictStrategy, ContentType, Packet, human_age
 from aya.pair import (
@@ -497,11 +487,11 @@ def init(
         p = Profile.load(profile)
     else:
         profile.parent.mkdir(parents=True, exist_ok=True)
-        p = Profile(alias="Ace", ship_mind_name="", user_name="")
+        p = Profile()
 
     p.instances[label] = identity
     if relay is not None:
-        p.default_relay = relay  # sets default_relays = [relay]
+        p.default_relays = [relay]
     p.save(profile)
 
     if format_ == OutputFormat.JSON:
@@ -643,7 +633,7 @@ def send_raw(
         raise typer.Exit(0)
 
     if idempotency_key:
-        cached = _check_idempotency(idempotency_key)
+        cached = check_idempotency(idempotency_key)
         if cached:
             if format_ == OutputFormat.JSON:
                 _output_json({**cached, "cached": True})
@@ -660,7 +650,7 @@ def send_raw(
     event_id = asyncio.run(client.publish(packet, recipient_nostr_pub, encrypt=packet.encrypted))
 
     if idempotency_key:
-        _record_idempotency(idempotency_key, packet.id, event_id)
+        record_idempotency(idempotency_key, packet.id, event_id)
 
     relay_count = len(relay_urls)
     relay_display = relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
@@ -819,7 +809,7 @@ def send_cmd(
             return
 
         if idempotency_key:
-            cached = _check_idempotency(idempotency_key)
+            cached = check_idempotency(idempotency_key)
             if cached:
                 if format_ == OutputFormat.JSON:
                     _output_json({**cached, "cached": True})
@@ -851,12 +841,12 @@ def send_cmd(
             )
 
         if idempotency_key:
-            _record_idempotency(idempotency_key, signed.id, event_id)
+            record_idempotency(idempotency_key, signed.id, event_id)
 
-        relays_ok, relays_failed = _delivery_from_report(
+        relays_ok, relays_failed = delivery_from_report(
             getattr(client, "last_publish_report", []), relay_urls
         )
-        _record_sent(
+        record_sent(
             p,
             profile,
             signed,
@@ -871,7 +861,7 @@ def send_cmd(
         # Summarise *delivery*, not attempts. The old "<first> (+N)" form
         # counted relays tried, so a 1-of-2 partial failure rendered
         # identically to a clean 2-of-2 send.
-        relay_display = _delivery_summary(relays_ok, relay_count)
+        relay_display = delivery_summary(relays_ok, relay_count)
 
         if format_ == OutputFormat.JSON:
             _output_json(
@@ -967,7 +957,7 @@ def ack(
         if not matched:
             _emit_error(
                 ErrorCode.PACKET_NOT_FOUND,
-                _NOT_INGESTED_HINT.format(packet_id=packet_id),
+                NOT_INGESTED_HINT.format(packet_id=packet_id),
                 {"packet_id": packet_id},
             )
         if len(matched) > 1:
@@ -1045,7 +1035,7 @@ def ack(
             return
 
         if idempotency_key:
-            cached = _check_idempotency(idempotency_key)
+            cached = check_idempotency(idempotency_key)
             if cached:
                 if format_ == OutputFormat.JSON:
                     _output_json({**cached, "cached": True})
@@ -1064,12 +1054,12 @@ def ack(
             raise typer.Exit(1) from None
 
         if idempotency_key:
-            _record_idempotency(idempotency_key, signed.id, event_id)
+            record_idempotency(idempotency_key, signed.id, event_id)
 
-        relays_ok, relays_failed = _delivery_from_report(
+        relays_ok, relays_failed = delivery_from_report(
             getattr(client, "last_publish_report", []), relay_urls
         )
-        _record_sent(
+        record_sent(
             p,
             profile,
             signed,
@@ -3046,13 +3036,13 @@ def read(
         _emit_error(ErrorCode.INVALID_ARGUMENT, "Packet ID prefix must be at least 8 characters.")
 
     if not PACKETS_DIR.exists():
-        _emit_error(ErrorCode.PACKET_NOT_FOUND, _NOT_INGESTED_HINT.format(packet_id=packet_id))
+        _emit_error(ErrorCode.PACKET_NOT_FOUND, NOT_INGESTED_HINT.format(packet_id=packet_id))
 
     matches = [f for f in PACKETS_DIR.glob("*.json") if f.stem.startswith(packet_id)]
     if not matches:
         _emit_error(
             ErrorCode.PACKET_NOT_FOUND,
-            _NOT_INGESTED_HINT.format(packet_id=packet_id),
+            NOT_INGESTED_HINT.format(packet_id=packet_id),
             {"packet_id": packet_id, "remedy": "aya receive --auto-ingest"},
         )
     if len(matches) > 1:

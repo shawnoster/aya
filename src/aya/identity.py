@@ -6,7 +6,6 @@ import json
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -170,41 +169,22 @@ def _assert_valid_ulid(id_: str) -> None:
 
 
 def _normalize_ingested_ids(raw: object) -> list[dict[str, str]]:
-    """Coerce legacy string entries to the ``{id, ingested_at, from_did?}`` dict format.
+    """Keep only entries whose ``id`` is a valid 26-character ULID.
 
-    Older profiles stored bare packet-ID strings in ``ingested_ids``.  On
-    first load after the migration, those strings are converted to dicts with
-    ``ingested_at`` set to the current time so they survive the next TTL prune
-    and don't cause an immediate false-re-ingestion.
-
-    Entries whose ``id`` field is not a valid 26-character ULID are dropped,
-    with a warning logged.  This serves as a one-time migration that removes any
-    truncated 8-character display prefixes that were erroneously stored by older
-    versions.
+    A truncated display prefix stored here would never match a real packet ID,
+    so the entry would silently fail to dedup.
     """
     if not isinstance(raw, list):
         return []
-    now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     result: list[dict[str, str]] = []
     for entry in raw:
-        if isinstance(entry, str):
-            if not _is_valid_ulid(entry):
-                logger.warning(
-                    "Dropping ingested_id entry with invalid ULID (len=%d): %r", len(entry), entry
-                )
-                continue
-            result.append({"id": entry, "ingested_at": now_iso})
-        elif isinstance(entry, dict) and "id" in entry:
-            entry_id = entry.get("id", "")
-            if not _is_valid_ulid(entry_id):
-                entry_len = len(entry_id) if isinstance(entry_id, str) else 0
-                logger.warning(
-                    "Dropping ingested_id entry with invalid ULID (len=%d): %r",
-                    entry_len,
-                    entry_id,
-                )
-                continue
-            result.append(entry)
+        if not isinstance(entry, dict) or "id" not in entry:
+            continue
+        entry_id = entry.get("id", "")
+        if not _is_valid_ulid(entry_id):
+            logger.warning("Dropping ingested_id with invalid ULID: %r", entry_id)
+            continue
+        result.append(entry)
     return result
 
 
@@ -244,9 +224,6 @@ class Profile:
     Stored at ~/.copilot/assistant_profile.json (or configured path).
     """
 
-    alias: str
-    ship_mind_name: str
-    user_name: str
     instances: dict[str, Identity] = field(default_factory=dict)
     # Label of the instance to act as when ``--as``/``instance`` is omitted.
     # Without it, a profile holding both a real instance and a leftover
@@ -266,16 +243,6 @@ class Profile:
     # spam, anything the user wants to ignore permanently). Filtered out of
     # `aya inbox` listings on every poll.
     dropped_ids: list[str] = field(default_factory=list)
-
-    @property
-    def default_relay(self) -> str:
-        """Return the primary relay URL (first in the list). Backward-compat alias."""
-        return self.default_relays[0] if self.default_relays else _DEFAULT_RELAYS[0]
-
-    @default_relay.setter
-    def default_relay(self, value: str) -> None:
-        """Set a single relay, replacing the list. Backward-compat alias."""
-        self.default_relays = [value]
 
     def add_relay(self, url: str, *, first: bool = False) -> bool:
         """Ensure *url* is in ``default_relays``. Returns True if the list changed.
@@ -300,15 +267,13 @@ class Profile:
     def load(cls, path: Path) -> Profile:
         """Load from assistant_profile.json.
 
-        Reads from 'aya' key; migrates 'assistant_sync' if present.
-        Accepts both legacy ``default_relay`` (string) and ``default_relays`` (list).
 
         Validates profile structure and logs warnings for deprecated keys or malformed data.
         """
         logger.debug("Loading profile from %s", path)
         data = json.loads(path.read_text())
         # Migrate profiles written by older versions (assistant_sync → aya)
-        aya_data = data.get("aya") or data.get("assistant_sync", {})
+        aya_data = data.get("aya", {})
 
         # Forward compatibility: warn if schema is newer than expected
         if isinstance(aya_data, dict):
@@ -374,30 +339,16 @@ class Profile:
         # Support both default_relays (list) and legacy default_relay (string).
         # Coerce a bare string to a list, strip non-string entries, fall back to
         # _DEFAULT_RELAYS if the result is empty or the key is missing entirely.
-        if "default_relays" in aya_data:
-            raw = aya_data["default_relays"]
-            if isinstance(raw, str):
-                relays: list[str] = [raw]
-            else:
-                relays = [u for u in raw if isinstance(u, str) and u.strip()]
-            if not relays:
-                relays = list(_DEFAULT_RELAYS)
-        elif "default_relay" in aya_data:
-            # Warn about deprecated key
-            logger.warning(
-                "Profile uses deprecated 'default_relay' key; prefer 'default_relays' list. "
-                "This key will be removed on next save."
-            )
-            relays = [aya_data["default_relay"]]
-        else:
-            relays = list(_DEFAULT_RELAYS)
+        raw_relays = aya_data.get("default_relays")
+        relays = (
+            [u for u in raw_relays if isinstance(u, str) and u.strip()]
+            if isinstance(raw_relays, list)
+            else []
+        ) or list(_DEFAULT_RELAYS)
 
         ledger = Ledger.load()
 
         return cls(
-            alias=data.get("alias", "Ace"),
-            ship_mind_name=data.get("ship_mind_name", ""),
-            user_name=data.get("user_name", ""),
             instances=instances,
             primary_instance=(
                 aya_data.get("primary_instance")
@@ -407,15 +358,13 @@ class Profile:
             trusted_keys=trusted,
             default_relays=relays,
             last_checked=aya_data.get("last_checked", {}),
-            ingested_ids=_normalize_ingested_ids(
-                ledger.ingested or aya_data.get("ingested_ids", [])
-            ),
+            ingested_ids=_normalize_ingested_ids(ledger.ingested),
             sent_ids=[
                 e
-                for e in (ledger.sent or aya_data.get("sent_ids") or [])
+                for e in ledger.sent
                 if isinstance(e, dict) and _is_valid_ulid(str(e.get("id", "")))
             ],
-            dropped_ids=_normalize_dropped_ids(ledger.dropped or aya_data.get("dropped_ids")),
+            dropped_ids=_normalize_dropped_ids(ledger.dropped),
         )
 
     def save(self, path: Path) -> None:
@@ -442,7 +391,6 @@ class Profile:
             data = json.loads(path.read_text()) if path.exists() else {}
             before = json.dumps(data, sort_keys=True)
 
-            data.pop("assistant_sync", None)  # legacy key
             aya = data.setdefault("aya", {})
             aya["schema_version"] = PROFILE_SCHEMA_VERSION
             aya["instances"] = {
@@ -464,21 +412,12 @@ class Profile:
                 k: {"did": v.did, "label": v.label, "nostr_pubkey": v.nostr_pubkey}
                 for k, v in self.trusted_keys.items()
             }
-            # Always write the list form and drop the legacy scalar so migrated
-            # profiles don't keep a stale default_relay entry.
-            aya.pop("default_relay", None)
             aya["default_relays"] = self.default_relays
             aya["last_checked"] = self.last_checked
-            # Ledgers moved to ledger.json; clear any legacy copies here.
-            for legacy in ("ingested_ids", "sent_ids", "dropped_ids"):
-                aya.pop(legacy, None)
 
             if json.dumps(data, sort_keys=True) == before:
                 return
             atomic_write_json(path, data, mode=0o600)
-
-    def active_instance(self, label: str = "default") -> Identity | None:
-        return self.instances.get(label) or next(iter(self.instances.values()), None)
 
     def resolve_instance_name(self, requested: str | None) -> tuple[str, str]:
         """Resolve *requested* to a registered instance label.

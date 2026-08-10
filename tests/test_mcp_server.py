@@ -139,9 +139,6 @@ async def test_send_tool():
     fake_identity = Identity.generate("default")
     peer_identity = Identity.generate("peer")
     fake_profile = Profile(
-        alias="Test",
-        ship_mind_name="GSV Test",
-        user_name="Tester",
         instances={"default": fake_identity},
         trusted_keys={
             "peer": TrustedKey(
@@ -184,9 +181,6 @@ async def test_send_tool_with_in_reply_to(tmp_path):
     fake_identity = Identity.generate("default")
     peer_identity = Identity.generate("peer")
     fake_profile = Profile(
-        alias="Test",
-        ship_mind_name="",
-        user_name="Tester",
         instances={"default": fake_identity},
         trusted_keys={
             "peer": TrustedKey(
@@ -234,7 +228,7 @@ async def test_inbox_tool(tmp_path):
 
     local = Identity.generate("default")
     home = Identity.generate("home")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
@@ -271,7 +265,7 @@ async def test_inbox_filters_dropped_packets(tmp_path):
 
     local = Identity.generate("default")
     sender = Identity.generate("work")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["work"] = TrustedKey(
         did=sender.did, label="work", nostr_pubkey=sender.nostr_public_hex
@@ -316,7 +310,7 @@ async def test_inbox_includes_trusted_flag(tmp_path):
     local = Identity.generate("default")
     trusted_sender = Identity.generate("friend")
     untrusted_sender = Identity.generate("stranger")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["friend"] = TrustedKey(
         did=trusted_sender.did, label="friend", nostr_pubkey=trusted_sender.nostr_public_hex
@@ -368,7 +362,7 @@ async def test_receive_writes_packet_body_to_disk(tmp_path):
 
     local = Identity.generate("default")
     home = Identity.generate("home")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
@@ -414,7 +408,7 @@ async def test_receive_skips_cursor_when_persist_fails(tmp_path):
 
     local = Identity.generate("default")
     home = Identity.generate("home")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
@@ -463,7 +457,7 @@ async def test_receive_no_since_filter(tmp_path):
     from aya.identity import Identity, Profile
 
     local = Identity.generate("default")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     relay_url = "wss://relay.example.com"
     profile.default_relays = [relay_url]
@@ -507,7 +501,7 @@ async def test_ack_tool(tmp_path):
 
     local = Identity.generate("default")
     home = Identity.generate("home")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
@@ -662,9 +656,6 @@ async def test_relay_status_tool():
     local = Identity.generate("default")
     peer = Identity.generate("peer")
     profile = Profile(
-        alias="Test",
-        ship_mind_name="",
-        user_name="Tester",
         instances={"default": local},
         trusted_keys={
             "peer": TrustedKey(

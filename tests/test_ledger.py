@@ -100,7 +100,7 @@ class TestLedger:
 class TestProfileLedgerSplit:
     def _profile(self, path: Path) -> Profile:
         path.write_text("{}")
-        p = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        p = Profile()
         p.instances["harbor"] = Identity.generate("harbor")
         p.save(path)
         return Profile.load(path)
@@ -122,27 +122,6 @@ class TestProfileLedgerSplit:
         p.primary_instance = "harbor"
         p.save(path)
         assert json.loads(path.read_text())["aya"]["primary_instance"] == "harbor"
-
-    def test_legacy_in_profile_ledgers_are_migrated(self, tmp_path: Path):
-        """Existing profiles keep their history and stop carrying it inline."""
-        path = tmp_path / "profile.json"
-        self._profile(path)
-        raw = json.loads(path.read_text())
-        raw["aya"]["ingested_ids"] = [
-            {"id": "01KZN6N2Q4Q9NHRRQAHN0NFPCB", "ingested_at": _iso(datetime.now(UTC))}
-        ]
-        raw["aya"]["dropped_ids"] = ["01KZN6N2Q4Q9NHRRQAHN0NFPCC"]
-        path.write_text(json.dumps(raw))
-
-        migrated = Profile.load(path)
-        assert len(migrated.ingested_ids) == 1
-        assert migrated.dropped_ids == ["01KZN6N2Q4Q9NHRRQAHN0NFPCC"]
-
-        migrated.save(path)
-        after = json.loads(path.read_text())["aya"]
-        assert "ingested_ids" not in after
-        assert "dropped_ids" not in after
-        assert len(Ledger.load().ingested) == 1
 
     def test_profile_written_owner_only(self, tmp_path: Path):
         path = tmp_path / "profile.json"

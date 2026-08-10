@@ -111,26 +111,6 @@ class RelayClient:
         # to cover (one end-to-end rejection test cost 30s of wall clock).
         self._sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
 
-    @property
-    def relay_url(self) -> str:
-        """Return the first relay URL. Backward compatibility alias for _relay_urls[0]."""
-        return self._relay_urls[0]
-
-    @relay_url.setter
-    def relay_url(self, url: str) -> None:
-        """Set the primary relay URL, updating the first entry in _relay_urls.
-
-        This preserves backward compatibility for code that previously did
-        ``client.relay_url = "wss://..."`` when relay_url was a plain attribute.
-        """
-        if not isinstance(url, str) or not url.strip():
-            raise ValueError("relay_url must be a non-empty string URL")
-        if self._relay_urls:
-            self._relay_urls[0] = url
-        else:
-            # Defensive fallback; in normal use _relay_urls is non-empty.
-            self._relay_urls.append(url)
-
     async def publish(
         self, packet: Packet, recipient_nostr_pubkey: str, encrypt: bool = True
     ) -> str:

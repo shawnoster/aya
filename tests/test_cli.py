@@ -45,7 +45,7 @@ def profile_path(tmp_path: Path) -> Path:
 def profile_with_instance(profile_path: Path) -> Path:
     """Create a minimal profile with a 'default' instance already initialised."""
     identity = Identity.generate("default")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = identity
     profile.save(profile_path)
     return profile_path
@@ -67,7 +67,7 @@ def profile_with_trusted(profile_with_instance: Path) -> Path:
 def profile_with_named_instance(profile_path: Path) -> Path:
     """Profile with a single 'work' instance — no 'default' instance."""
     identity = Identity.generate("work")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["work"] = identity
     profile.save(profile_path)
     return profile_path
@@ -76,7 +76,7 @@ def profile_with_named_instance(profile_path: Path) -> Path:
 @pytest.fixture
 def profile_with_multiple_instances(profile_path: Path) -> Path:
     """Profile with 'work' and 'laptop' instances — no 'default' instance."""
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["work"] = Identity.generate("work")
     profile.instances["laptop"] = Identity.generate("laptop")
     profile.save(profile_path)
@@ -86,7 +86,7 @@ def profile_with_multiple_instances(profile_path: Path) -> Path:
 @pytest.fixture
 def profile_with_no_instances(profile_path: Path) -> Path:
     """Profile with no instances registered — simulates pre-init state."""
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.save(profile_path)
     return profile_path
 
@@ -1834,7 +1834,7 @@ class TestAck:
         local = Identity.generate("default")
         home = Identity.generate("home")
 
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile.trusted_keys["home"] = TrustedKey(
             did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
@@ -1949,7 +1949,7 @@ class TestAck:
     def test_ack_no_trusted_peers_exits_nonzero(self, tmp_path: Path) -> None:
         """ack with no trusted peers (no Nostr pubkey) must exit non-zero."""
         local = Identity.generate("default")
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         # A trusted key without a Nostr pubkey
         other = Identity.generate("other")
@@ -1990,7 +1990,7 @@ class TestAck:
         peer_a = Identity.generate("peer_a")
         peer_b = Identity.generate("peer_b")
 
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile.trusted_keys["peer_a"] = TrustedKey(
             did=peer_a.did, label="peer_a", nostr_pubkey=peer_a.nostr_public_hex
@@ -2025,7 +2025,7 @@ class TestAck:
         local = Identity.generate("default")
         peer = Identity.generate("peer")
 
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile.trusted_keys["peer"] = TrustedKey(
             did=peer.did, label="peer", nostr_pubkey=peer.nostr_public_hex
@@ -2123,7 +2123,7 @@ class TestDryRun:
         local = Identity.generate("default")
         home = Identity.generate("home")
 
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile.trusted_keys["home"] = TrustedKey(
             did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
@@ -3777,7 +3777,7 @@ class TestRelayStatus:
         assert payload["last_checked"] == {"wss://relay.damus.io": "2026-04-16T12:00:00Z"}
 
     def test_status_with_named_instance(self, profile_path: Path) -> None:
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["work"] = Identity.generate("work")
         profile.default_relays = ["wss://relay.example"]
         profile.save(profile_path)
@@ -3791,7 +3791,7 @@ class TestRelayStatus:
         assert "wss://relay.example" in result.output
 
     def test_status_with_unknown_instance_errors(self, profile_path: Path) -> None:
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["work"] = Identity.generate("work")
         profile.instances["home"] = Identity.generate("home")
         profile.save(profile_path)
@@ -3940,7 +3940,7 @@ def profile_with_stub_default(profile_path: Path) -> Path:
     This is what `aya init --label <name>` leaves behind, and the shape that
     made every poll silently use the stub's unrelated Nostr keypair.
     """
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = Identity.generate("default")
     profile.instances["harbor"] = Identity.generate("harbor")
     profile.save(profile_path)
@@ -3967,7 +3967,7 @@ class TestInstanceResolution:
         assert Profile.load(profile_with_stub_default).primary_instance == "harbor"
 
     def test_ambiguous_resolution_errors_rather_than_guessing(self, profile_path: Path):
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["work"] = Identity.generate("work")
         profile.instances["home"] = Identity.generate("home")
         profile.save(profile_path)
@@ -4132,7 +4132,7 @@ class TestWhoami:
         assert [p["label"] for p in payload["peers"]] == ["home"]
 
     def test_whoami_marks_ambiguity_instead_of_guessing(self, profile_path: Path):
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["work"] = Identity.generate("work")
         profile.instances["home"] = Identity.generate("home")
         profile.save(profile_path)
@@ -4317,18 +4317,18 @@ class TestDeliverySummary:
     """The one-line relay summary must not read the same for 2/2 and 1/2."""
 
     def test_summary_distinguishes_partial_from_complete(self):
-        from aya.cli import _delivery_summary
+        from aya.outbox import delivery_summary
 
-        complete = _delivery_summary(["wss://a", "wss://b"], 2)
-        partial = _delivery_summary(["wss://a"], 2)
+        complete = delivery_summary(["wss://a", "wss://b"], 2)
+        partial = delivery_summary(["wss://a"], 2)
         assert complete != partial
         assert "2 of 2" in complete
         assert "1 of 2" in partial
 
     def test_summary_single_relay_stays_bare(self):
-        from aya.cli import _delivery_summary
+        from aya.outbox import delivery_summary
 
-        assert _delivery_summary(["wss://a"], 1) == "wss://a"
+        assert delivery_summary(["wss://a"], 1) == "wss://a"
 
     def test_send_json_relay_field_reflects_delivery(self, profile_with_trusted: Path):
         report = [

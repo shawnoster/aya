@@ -88,6 +88,24 @@
 
 ### Removed
 
+Dead code and back-compat shims with no remaining consumers. There is no
+migration path from these — they are gone, not deprecated.
+
+- `aya/profile.py` and its tests. Despite the name it held no `Profile` (that
+  is in `identity.py`) — it was an assistant persona generator with no
+  production caller, whose `recent_activity` was always empty, making the
+  activity-themed naming unreachable. `aya status` reads the persona keys
+  straight from the profile JSON and is unaffected.
+- `Profile.alias` / `.ship_mind_name` / `.user_name` — required constructor
+  arguments that `save()` never wrote back.
+- `Profile.default_relay` and `RelayClient.relay_url` back-compat aliases,
+  `Profile.active_instance`, and `install.py`'s `cron_line` property.
+- Legacy profile migrations: the `assistant_sync` → `aya` rename, the
+  `default_relay` string → `default_relays` list coercion, bare-string entries
+  in `ingested_ids`, and reading ledgers from inside `profile.json`.
+- `AyaPaths` — an injection abstraction added in the same series with no
+  callers. The dynamic path constants it wrapped are the live interface.
+
 - `aya pack` — `aya send` is the canonical pack-and-publish flow. The pack
   command had no callers in skills, hooks, or MCP — its help even redirected
   users to `send`. If you need to build a packet without publishing, use

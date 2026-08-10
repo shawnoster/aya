@@ -103,23 +103,6 @@ class TestProfilePersistence:
         assert restored.is_trusted(home.did)
         assert not restored.is_trusted("did:key:z6MkStranger")
 
-    def test_active_instance_fallback(self, tmp_path: Path) -> None:
-        profile_path = tmp_path / "profile.json"
-        profile_path.write_text("{}")
-
-        p = Profile.load(profile_path)
-        assert p.active_instance() is None
-
-        p.instances["work"] = Identity.generate("work")
-        p.save(profile_path)
-
-        restored = Profile.load(profile_path)
-        # "default" label doesn't exist but should fall back to first instance
-        assert restored.active_instance("default") is not None
-
-
-# ── Multi-relay profile ───────────────────────────────────────────────────────
-
 
 class TestProfileMultiRelay:
     def test_default_relays_saved_as_list(self, tmp_path: Path) -> None:
@@ -136,15 +119,6 @@ class TestProfileMultiRelay:
             "wss://relay2.example.com",
         ]
         assert "default_relay" not in data["aya"]
-
-    def test_load_legacy_default_relay_string(self, tmp_path: Path) -> None:
-        """Profiles with the old scalar default_relay key are migrated transparently."""
-        profile_path = tmp_path / "profile.json"
-        profile_path.write_text(json.dumps({"aya": {"default_relay": "wss://legacy.example.com"}}))
-
-        p = Profile.load(profile_path)
-        assert p.default_relays == ["wss://legacy.example.com"]
-        assert p.default_relay == "wss://legacy.example.com"
 
     def test_load_new_default_relays_list(self, tmp_path: Path) -> None:
         profile_path = tmp_path / "profile.json"
@@ -163,31 +137,6 @@ class TestProfileMultiRelay:
 
         p = Profile.load(profile_path)
         assert p.default_relays == ["wss://relay1.example.com", "wss://relay2.example.com"]
-        assert p.default_relay == "wss://relay1.example.com"
-
-    def test_default_relay_setter_updates_list(self, tmp_path: Path) -> None:
-        profile_path = tmp_path / "profile.json"
-        profile_path.write_text("{}")
-
-        p = Profile.load(profile_path)
-        p.default_relay = "wss://single.example.com"
-        assert p.default_relays == ["wss://single.example.com"]
-        assert p.default_relay == "wss://single.example.com"
-
-    def test_legacy_key_dropped_on_save(self, tmp_path: Path) -> None:
-        """After loading a legacy profile and saving, default_relay key is removed."""
-        profile_path = tmp_path / "profile.json"
-        profile_path.write_text(json.dumps({"aya": {"default_relay": "wss://legacy.example.com"}}))
-
-        p = Profile.load(profile_path)
-        p.save(profile_path)
-
-        data = json.loads(profile_path.read_text())
-        assert "default_relay" not in data["aya"]
-        assert data["aya"]["default_relays"] == ["wss://legacy.example.com"]
-
-
-# ── ingested_ids TTL pruning ──────────────────────────────────────────────────
 
 
 class TestIngestedIdsTTL:
@@ -224,18 +173,6 @@ class TestIngestedIdsTTL:
         restored = Profile.load(profile_path)
         assert not any(e["id"] == stale_id for e in restored.ingested_ids)
 
-    def test_legacy_string_entries_are_migrated(self, tmp_path: Path) -> None:
-        """Old bare-string ingested_ids with valid ULIDs must be normalised to dicts on load."""
-        profile_path = tmp_path / "profile.json"
-        valid_id = str(ULID())
-        profile_path.write_text(json.dumps({"aya": {"ingested_ids": [valid_id]}}))
-
-        p = Profile.load(profile_path)
-        assert len(p.ingested_ids) == 1
-        entry = p.ingested_ids[0]
-        assert entry["id"] == valid_id
-        assert "ingested_at" in entry
-
     def test_save_stores_dicts_not_strings(self, tmp_path: Path) -> None:
         """Saved ingested_ids must be dicts with 'id' and 'ingested_at' keys."""
         profile_path = tmp_path / "profile.json"
@@ -265,30 +202,6 @@ class TestIngestedIdsTTL:
 
 class TestTruncatedUlidMigration:
     """Guard against truncated 8-char display prefixes being stored in ingested_ids."""
-
-    def test_truncated_entry_dropped_on_load(self, tmp_path: Path) -> None:
-        """Truncated 8-char display prefix must be stripped from ingested_ids on load."""
-        full_id = str(ULID())
-        truncated_id = full_id[:8]
-        profile_path = tmp_path / "profile.json"
-        profile_path.write_text(
-            json.dumps(
-                {
-                    "aya": {
-                        "ingested_ids": [
-                            {"id": truncated_id, "ingested_at": "2026-03-30T06:00:21Z"},
-                            {"id": full_id, "ingested_at": "2026-03-30T06:00:21Z"},
-                        ]
-                    }
-                }
-            )
-        )
-
-        p = Profile.load(profile_path)
-        ids = [e["id"] for e in p.ingested_ids]
-        assert full_id in ids, "Full ULID must be retained"
-        assert truncated_id not in ids, "Truncated 8-char prefix must be dropped"
-        assert len(ids) == 1, "Exactly one entry must remain after migration"
 
     def test_only_full_ulid_written_to_ingested_ids(self, tmp_path: Path) -> None:
         """Only the full 26-character ULID must appear in ingested_ids after save/load."""

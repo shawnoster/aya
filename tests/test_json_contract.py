@@ -133,7 +133,7 @@ class TestInboxContract:
 
         profile_path = tmp_path / "profile.json"
         identity = Identity.generate("default")
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = identity
         profile.save(profile_path)
 
@@ -161,7 +161,7 @@ class TestInboxContract:
 
         profile_path = tmp_path / "profile.json"
         identity = Identity.generate("default")
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = identity
         profile.save(profile_path)
 
@@ -203,7 +203,7 @@ class TestReceiveContract:
         from aya.identity import Identity, Profile
 
         local = Identity.generate("default")
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile_path = tmp_path / "profile.json"
         profile.save(profile_path)

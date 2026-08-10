@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from aya.adapters import paths as _paths
+from aya.adapters.profile_store import save_profile
 from aya.entities.identity import Profile, _assert_valid_ulid
 from aya.entities.packet import Packet
 
@@ -180,7 +181,7 @@ def record_sent(
             "relays_failed": relays_failed,
         }
     )
-    p.save(profile_path)
+    save_profile(p, profile_path)
     # Best-effort body persistence so `aya read <id>` works on sent packets too.
     try:
         _assert_valid_ulid(packet.id)

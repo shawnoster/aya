@@ -18,6 +18,7 @@ import pytest
 from typer.testing import CliRunner
 
 from aya.adapters.cli import app
+from aya.adapters.profile_store import save_profile
 
 runner = CliRunner()
 
@@ -135,7 +136,7 @@ class TestInboxContract:
         identity = Identity.generate("default")
         profile = Profile()
         profile.instances["default"] = identity
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
         async def _empty_fetch(self):
             return
@@ -163,7 +164,7 @@ class TestInboxContract:
         identity = Identity.generate("default")
         profile = Profile()
         profile.instances["default"] = identity
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
         fake_packet = Packet(
             **{"from": identity.did, "to": identity.did},
@@ -206,7 +207,7 @@ class TestReceiveContract:
         profile = Profile()
         profile.instances["default"] = local
         profile_path = tmp_path / "profile.json"
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
         async def mock_fetch(*args, **kwargs):
             if False:  # pragma: no cover

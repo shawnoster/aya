@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from aya.adapters.mcp_server import _TOOLS, call_tool
+from aya.adapters.profile_store import save_profile
 
 # ---------------------------------------------------------------------------
 # list_tools
@@ -234,7 +235,7 @@ async def test_inbox_tool(tmp_path):
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     async def mock_fetch(*args, **kwargs):
         if False:  # pragma: no cover
@@ -277,7 +278,7 @@ async def test_inbox_filters_dropped_packets(tmp_path):
 
     # Pre-populate dropped_ids with the second packet's ID.
     profile.dropped_ids.append(dropped.id)
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     async def mock_fetch(*args, **kwargs):
         yield kept
@@ -316,7 +317,7 @@ async def test_inbox_includes_trusted_flag(tmp_path):
         did=trusted_sender.did, label="friend", nostr_pubkey=trusted_sender.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     trusted_pkt = Packet(
         **{"from": trusted_sender.did, "to": local.did}, intent="trusted msg"
@@ -368,7 +369,7 @@ async def test_receive_writes_packet_body_to_disk(tmp_path):
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     packets_dir = tmp_path / "packets"
 
@@ -414,7 +415,7 @@ async def test_receive_skips_cursor_when_persist_fails(tmp_path):
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     # Simulate the body write failing: persist_packet reports False when the
     # file is not on disk afterwards (disk full, permissions, etc.).
@@ -464,7 +465,7 @@ async def test_receive_no_since_filter(tmp_path):
         last_check_time.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     fetch_calls: list[tuple] = []
 
@@ -508,7 +509,7 @@ async def test_ack_tool(tmp_path):
     now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": home.did})
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     mock_publish = AsyncMock(return_value="ack" * 21 + "aa")
     with (

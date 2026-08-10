@@ -8,6 +8,7 @@ from typing import ClassVar
 import pytest
 
 from aya.adapters.ledger import Ledger
+from aya.adapters.profile_store import load_profile, save_profile
 from aya.entities.identity import Identity, Profile, TrustedKey
 from aya.entities.packet import Packet
 from aya.usecases.relay_ops import (
@@ -80,8 +81,8 @@ def profile(tmp_path: Path, peer: Identity) -> tuple[Profile, Path]:
         did=peer.did, label="beacon", nostr_pubkey=peer.nostr_public_hex
     )
     p.default_relays = ["wss://a", "wss://b"]
-    p.save(path)
-    return Profile.load(path), path
+    save_profile(p, path)
+    return load_profile(path), path
 
 
 def _incoming(peer: Identity, to: Profile, intent: str = "hello") -> Packet:

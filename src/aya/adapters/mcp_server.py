@@ -15,6 +15,7 @@ from aya.adapters.outbox import (
     delivery_from_report,
     record_sent,
 )
+from aya.adapters.profile_store import load_profile
 from aya.usecases import relay_ops
 from aya.usecases.resolve import (
     NoNostrPubkeyError,
@@ -326,9 +327,8 @@ def _error(message: str) -> list[types.TextContent]:
 
 def _load_profile() -> Any:
     from aya.adapters.paths import PROFILE_PATH
-    from aya.entities.identity import Profile
 
-    return Profile.load(PROFILE_PATH)
+    return load_profile(PROFILE_PATH)
 
 
 def _resolve_instance_labelled(profile: Any, instance: str | None) -> tuple[Any, str]:

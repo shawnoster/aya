@@ -23,18 +23,6 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "aya"
 
 PRESENTATION_PACKAGES = {"typer", "rich", "mcp", "click"}
 
-# usecases is handed its persistence gateways directly rather than through a
-# port. Tracked debt, allowlisted so the rule stays enforceable meanwhile.
-GATEWAYS_USED_BY_USECASES = {
-    "aya.adapters.paths",
-    "aya.adapters.atomic",
-    "aya.adapters.ledger",
-    "aya.adapters.outbox",
-    "aya.adapters.relay",
-    "aya.adapters.config",
-}
-
-
 def _modules(layer: str) -> list[Path]:
     return sorted(p for p in (SRC / layer).glob("*.py") if p.name != "__init__.py")
 
@@ -76,18 +64,14 @@ ADAPTERS = _modules("adapters")
 def test_entities_depend_on_nothing_inward(module: Path):
     """The innermost layer imports no other layer.
 
-    identity.py is the known exception: Profile persists itself (Active
-    Record), so it reaches for the storage gateways. Splitting Profile out is
-    the fix; until then it is named here rather than hidden.
+    Held for every entity now that reading and writing profile.json lives in
+    adapters.profile_store rather than on Profile itself.
     """
     outward = {
         i
         for i in _aya_imports(module)
         if i.startswith(("aya.usecases", "aya.adapters", "aya.scheduler"))
     }
-    if module.name == "identity.py":
-        assert outward <= GATEWAYS_USED_BY_USECASES, f"new violation: {sorted(outward)}"
-        return
     assert not outward, f"{module.name} reaches outward: {sorted(outward)}"
 
 

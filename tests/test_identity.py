@@ -9,13 +9,17 @@ from pathlib import Path
 import pytest
 from ulid import ULID
 
+from aya.adapters.profile_store import (
+    _normalize_ingested_ids,
+    load_profile,
+    save_profile,
+)
 from aya.entities.identity import (
     PROFILE_SCHEMA_VERSION,
     Identity,
     Profile,
     TrustedKey,
     _assert_valid_ulid,
-    _normalize_ingested_ids,
 )
 
 
@@ -55,14 +59,14 @@ class TestProfilePersistence:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text(json.dumps({"alias": "Ace", "user_name": "Shawn"}))
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         p.instances["work"] = Identity.generate("work")
         p.trusted_keys["home"] = TrustedKey(
             did="did:key:z6MkFakeHome", label="home", nostr_pubkey="abc123"
         )
-        p.save(profile_path)
+        save_profile(p, profile_path)
 
-        restored = Profile.load(profile_path)
+        restored = load_profile(profile_path)
         assert "work" in restored.instances
         assert restored.instances["work"].did == p.instances["work"].did
         assert "home" in restored.trusted_keys
@@ -80,9 +84,9 @@ class TestProfilePersistence:
             )
         )
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         p.instances["work"] = Identity.generate("work")
-        p.save(profile_path)
+        save_profile(p, profile_path)
 
         data = json.loads(profile_path.read_text())
         # Existing keys must survive the save
@@ -94,12 +98,12 @@ class TestProfilePersistence:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text("{}")
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         home = Identity.generate("home")
         p.trusted_keys["home"] = TrustedKey(did=home.did, label="home")
-        p.save(profile_path)
+        save_profile(p, profile_path)
 
-        restored = Profile.load(profile_path)
+        restored = load_profile(profile_path)
         assert restored.is_trusted(home.did)
         assert not restored.is_trusted("did:key:z6MkStranger")
 
@@ -109,9 +113,9 @@ class TestProfileMultiRelay:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text("{}")
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         p.default_relays = ["wss://relay1.example.com", "wss://relay2.example.com"]
-        p.save(profile_path)
+        save_profile(p, profile_path)
 
         data = json.loads(profile_path.read_text())
         assert data["aya"]["default_relays"] == [
@@ -135,7 +139,7 @@ class TestProfileMultiRelay:
             )
         )
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         assert p.default_relays == ["wss://relay1.example.com", "wss://relay2.example.com"]
 
 
@@ -145,7 +149,7 @@ class TestIngestedIdsTTL:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text("{}")
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         recent_ts = (
             (datetime.now(UTC) - timedelta(days=1))
             .replace(microsecond=0)
@@ -154,9 +158,9 @@ class TestIngestedIdsTTL:
         )
         valid_id = str(ULID())
         p.ingested_ids.append({"id": valid_id, "ingested_at": recent_ts})
-        p.save(profile_path)
+        save_profile(p, profile_path)
 
-        restored = Profile.load(profile_path)
+        restored = load_profile(profile_path)
         assert any(e["id"] == valid_id for e in restored.ingested_ids)
 
     def test_old_entries_are_pruned(self, tmp_path: Path) -> None:
@@ -164,13 +168,13 @@ class TestIngestedIdsTTL:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text("{}")
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         stale_id = str(ULID())
         # Timestamp well beyond the 7-day TTL window
         p.ingested_ids.append({"id": stale_id, "ingested_at": "2020-01-01T00:00:00Z"})
-        p.save(profile_path)
+        save_profile(p, profile_path)
 
-        restored = Profile.load(profile_path)
+        restored = load_profile(profile_path)
         assert not any(e["id"] == stale_id for e in restored.ingested_ids)
 
     def test_save_stores_dicts_not_strings(self, tmp_path: Path) -> None:
@@ -178,7 +182,7 @@ class TestIngestedIdsTTL:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text("{}")
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         recent_ts = (
             (datetime.now(UTC) - timedelta(days=1))
             .replace(microsecond=0)
@@ -187,7 +191,7 @@ class TestIngestedIdsTTL:
         )
         valid_id = str(ULID())
         p.ingested_ids.append({"id": valid_id, "ingested_at": recent_ts})
-        p.save(profile_path)
+        save_profile(p, profile_path)
 
         from aya.adapters.ledger import Ledger
 
@@ -215,9 +219,9 @@ class TestTruncatedUlidMigration:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text("{}")
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         p.ingested_ids.append({"id": full_id, "ingested_at": recent_ts})
-        p.save(profile_path)
+        save_profile(p, profile_path)
 
         from aya.adapters.ledger import Ledger
 
@@ -241,7 +245,7 @@ class TestTruncatedUlidMigration:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text(json.dumps({"aya": {"ingested_ids": ["01KMEWBY"]}}))
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         assert p.ingested_ids == [], "Invalid bare-string ULID must be dropped on load"
 
 
@@ -279,8 +283,8 @@ class TestProfileSchemaVersion:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text("{}")
 
-        p = Profile.load(profile_path)
-        p.save(profile_path)
+        p = load_profile(profile_path)
+        save_profile(p, profile_path)
 
         data = json.loads(profile_path.read_text())
         assert data["aya"]["schema_version"] == PROFILE_SCHEMA_VERSION
@@ -290,7 +294,7 @@ class TestProfileSchemaVersion:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text(json.dumps({"aya": {"instances": {}}}))
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         assert isinstance(p, Profile)
 
     def test_load_future_schema_version_warns(self, tmp_path: Path, caplog) -> None:
@@ -298,6 +302,6 @@ class TestProfileSchemaVersion:
         profile_path = tmp_path / "profile.json"
         profile_path.write_text(json.dumps({"aya": {"schema_version": 999, "instances": {}}}))
 
-        p = Profile.load(profile_path)
+        p = load_profile(profile_path)
         assert isinstance(p, Profile)
         assert "schema_version 999" in caplog.text

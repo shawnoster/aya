@@ -10,6 +10,7 @@ import pytest
 
 from aya.adapters.atomic import atomic_write_json, file_lock, locked_read_json
 from aya.adapters.ledger import Ledger
+from aya.adapters.profile_store import load_profile, save_profile
 from aya.entities.identity import Identity, Profile
 
 
@@ -102,8 +103,8 @@ class TestProfileLedgerSplit:
         path.write_text("{}")
         p = Profile()
         p.instances["harbor"] = Identity.generate("harbor")
-        p.save(path)
-        return Profile.load(path)
+        save_profile(p, path)
+        return load_profile(path)
 
     def test_poll_does_not_rewrite_the_key_file(self, tmp_path: Path):
         path = tmp_path / "profile.json"
@@ -111,7 +112,7 @@ class TestProfileLedgerSplit:
         before = path.read_bytes()
 
         p.ingested_ids.append({"id": "x", "ingested_at": _iso(datetime.now(UTC))})
-        p.save(path)
+        save_profile(p, path)
 
         assert path.read_bytes() == before, "advancing a cursor rewrote the keystore"
         assert len(Ledger.load().ingested) == 1
@@ -120,7 +121,7 @@ class TestProfileLedgerSplit:
         path = tmp_path / "profile.json"
         p = self._profile(path)
         p.primary_instance = "harbor"
-        p.save(path)
+        save_profile(p, path)
         assert json.loads(path.read_text())["aya"]["primary_instance"] == "harbor"
 
     def test_profile_written_owner_only(self, tmp_path: Path):

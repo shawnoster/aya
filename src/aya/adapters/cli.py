@@ -33,6 +33,7 @@ from aya.adapters.outbox import (
     delivery_summary,
     record_idempotency,
 )
+from aya.adapters.profile_store import load_profile, save_profile
 from aya.adapters.relay import RelayClient, RelayUnreachableError
 
 # Subcommand modules — imported at top-level; each is only invoked when its
@@ -265,7 +266,7 @@ def _load_profile(profile_path: Path) -> Profile:
             f"Profile not found at {profile_path}. Run 'aya init' first.",
             {"path": str(profile_path)},
         )
-    return Profile.load(profile_path)
+    return load_profile(profile_path)
 
 
 def _collect_body(
@@ -482,7 +483,7 @@ def _record_pairing(
     trusted.label = peer
     p.trusted_keys[peer] = trusted
     promoted = relay_urls and p.add_relay(relay_urls[0], first=True)
-    p.save(profile_path)
+    save_profile(p, profile_path)
     return relay_urls[0] if promoted else None
 
 
@@ -614,7 +615,7 @@ def use(
             {"instance": label, "available": list(p.instances)},
         )
     p.primary_instance = label
-    p.save(profile)
+    save_profile(p, profile)
     if format_ == OutputFormat.JSON:
         _output_json({"primary_instance": label})
     else:
@@ -648,7 +649,7 @@ def init(
     identity = Identity.generate(label)
 
     if profile.exists():
-        p = Profile.load(profile)
+        p = load_profile(profile)
     else:
         profile.parent.mkdir(parents=True, exist_ok=True)
         p = Profile()
@@ -656,7 +657,7 @@ def init(
     p.instances[label] = identity
     if relay is not None:
         p.default_relays = [relay]
-    p.save(profile)
+    save_profile(p, profile)
 
     if format_ == OutputFormat.JSON:
         _output_json({"profile_path": str(profile), "did": identity.did, "instance": label})
@@ -705,7 +706,7 @@ def trust(
         label=peer,
         nostr_pubkey=nostr_pubkey,
     )
-    p.save(profile)
+    save_profile(p, profile)
 
     if format_ == OutputFormat.JSON:
         _output_json({"did": did, "label": peer, "nostr_pubkey": nostr_pubkey or None})
@@ -1106,7 +1107,7 @@ def receive(
             # typer.confirm has no non-interactive fallback — without a TTY it
             # aborts mid-poll, which reads as a crash rather than a missing flag.
             if not sys.stdin.isatty():
-                p.save(profile)
+                save_profile(p, profile)
                 _emit_error(
                     ErrorCode.INVALID_ARGUMENT,
                     "Packet(s) need confirmation but there is no terminal. "
@@ -2932,7 +2933,7 @@ def drop(
         already_dropped = full_id in p.dropped_ids
         if not already_dropped:
             p.dropped_ids.append(full_id)
-            p.save(profile)
+            save_profile(p, profile)
 
         if format_ == OutputFormat.JSON:
             _output_json(
@@ -3195,7 +3196,7 @@ def relay_add(
         return
 
     relays = list(p.default_relays)
-    p.save(profile)
+    save_profile(p, profile)
 
     if format_ == OutputFormat.JSON:
         _output_json(
@@ -3218,7 +3219,7 @@ def relay_remove(
     force: bool = typer.Option(
         False,
         "--force",
-        help="Allow removing the last remaining relay. Note: Profile.load() auto-refills an "
+        help="Allow removing the last remaining relay. Note: load_profile() auto-refills an "
         "empty list with the bootstrap defaults on next load, so this effectively resets "
         "to defaults.",
     ),
@@ -3264,7 +3265,7 @@ def relay_remove(
         )
 
     p.default_relays = relays
-    p.save(profile)
+    save_profile(p, profile)
 
     if format_ == OutputFormat.JSON:
         _output_json({"ok": True, "removed": removed, "relays": relays})

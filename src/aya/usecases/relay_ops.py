@@ -30,6 +30,7 @@ from aya.adapters.outbox import (
     record_idempotency,
     record_sent,
 )
+from aya.adapters.profile_store import save_profile
 from aya.adapters.relay import RelayClient
 from aya.entities.identity import Profile, _assert_valid_ulid
 from aya.entities.packet import ConflictStrategy, ContentType, Packet, human_age
@@ -576,7 +577,7 @@ async def receive(
             except Exception:
                 logger.debug("Read receipt failed for %s", packet.id, exc_info=True)
 
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
     return PollResult(
         packets=summaries,
         instance=label,

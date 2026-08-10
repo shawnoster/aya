@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aya.identity import Identity
-from aya.packet import ConflictStrategy, ContentType, Packet
+from aya.entities.identity import Identity
+from aya.entities.packet import ConflictStrategy, ContentType, Packet
 
 
 @pytest.fixture
@@ -23,7 +23,8 @@ def home_identity() -> Identity:
 @pytest.fixture
 def basic_packet(work_identity: Identity, home_identity: Identity) -> Packet:
     return Packet(
-        **{"from": work_identity.did, "to": home_identity.did},
+        from_did=work_identity.did,
+        to_did=home_identity.did,
         intent="Pack for home — dinner party notes",
         content="Guest list: 12 people. Decision: open seating.",
     )
@@ -51,7 +52,8 @@ class TestPacketCreation:
     def test_expired_packet(self, work_identity: Identity, home_identity: Identity) -> None:
         past = (datetime.now(UTC) - timedelta(days=8)).isoformat()
         packet = Packet(
-            **{"from": work_identity.did, "to": home_identity.did},
+            from_did=work_identity.did,
+            to_did=home_identity.did,
             intent="Old news",
             content="...",
             expires_at=past,
@@ -69,7 +71,8 @@ class TestPacketCreation:
         self, work_identity: Identity, home_identity: Identity
     ) -> None:
         packet = Packet(
-            **{"from": work_identity.did, "to": home_identity.did},
+            from_did=work_identity.did,
+            to_did=home_identity.did,
             intent="Encrypted transfer",
             content="ciphertext",
             encrypted=True,
@@ -84,7 +87,8 @@ class TestPacketCreation:
         self, work_identity: Identity, home_identity: Identity
     ) -> None:
         packet = Packet(
-            **{"from": work_identity.did, "to": home_identity.did},
+            from_did=work_identity.did,
+            to_did=home_identity.did,
             intent="Encrypted",
             content="ciphertext",
             encrypted=True,

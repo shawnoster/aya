@@ -6,14 +6,14 @@ import base64
 
 import pytest
 
-from aya.encryption import (
+from aya.entities.encryption import (
     _calc_padded_len,
     _pad,
     _unpad,
     nip44_decrypt,
     nip44_encrypt,
 )
-from aya.identity import Identity
+from aya.entities.identity import Identity
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

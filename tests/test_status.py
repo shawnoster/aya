@@ -7,15 +7,13 @@ from datetime import UTC, datetime, timedelta
 
 from rich.console import Console
 
-from aya.status import (
+from aya.adapters.status_view import _render_json, _render_plain, _render_rich
+from aya.usecases.status import (
     _exists,
     _gather_status,
     _greeting,
     _perspective,
     _read_json,
-    _render_json,
-    _render_plain,
-    _render_rich,
     _time_flavor,
 )
 
@@ -127,10 +125,10 @@ class TestRenderRich:
     def test_renders_output(self, monkeypatch):
         """_render_rich must produce output — regression guard for the 'prints nothing' bug."""
         console = Console(record=True)
-        monkeypatch.setattr("aya.status.get_unseen_alerts", list)
-        monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_active_watches", list)
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", list)
 
         data = _gather_status()
         _render_rich(data, console)
@@ -152,11 +150,11 @@ class TestRenderRich:
                 }
             )
         )
-        monkeypatch.setattr("aya.status.PROFILE", profile_file)
-        monkeypatch.setattr("aya.status.get_unseen_alerts", list)
-        monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_active_watches", list)
+        monkeypatch.setattr("aya.adapters.paths.PROFILE_PATH", profile_file)
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", list)
 
         console = Console(record=True)
         data = _gather_status()
@@ -208,20 +206,20 @@ def _sample_watches():
 
 class TestRenderPlain:
     def test_renders_compact(self, monkeypatch):
-        monkeypatch.setattr("aya.status.get_unseen_alerts", list)
-        monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_active_watches", list)
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", list)
 
         output = _render_plain(_gather_status())
         assert "Systems" in output
         assert "\n\n" not in output  # no blank lines
 
     def test_renders_populated_data(self, monkeypatch):
-        monkeypatch.setattr("aya.status.get_unseen_alerts", _sample_alerts)
-        monkeypatch.setattr("aya.status.get_due_reminders", _sample_due)
-        monkeypatch.setattr("aya.status.get_upcoming_reminders", _sample_upcoming)
-        monkeypatch.setattr("aya.status.get_active_watches", _sample_watches)
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", _sample_alerts)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", _sample_due)
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", _sample_upcoming)
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", _sample_watches)
 
         output = _render_plain(_gather_status())
         assert "alert:" in output
@@ -245,11 +243,11 @@ class TestRenderPlain:
                 }
             )
         )
-        monkeypatch.setattr("aya.status.PROFILE", profile_path)
-        monkeypatch.setattr("aya.status.get_unseen_alerts", list)
-        monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_active_watches", list)
+        monkeypatch.setattr("aya.adapters.paths.PROFILE_PATH", profile_path)
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", list)
 
         output = _render_plain(_gather_status())
         assert "Name re-eval due" in output
@@ -259,10 +257,10 @@ class TestRenderJson:
     def test_valid_json(self, monkeypatch):
         import json as json_mod
 
-        monkeypatch.setattr("aya.status.get_unseen_alerts", list)
-        monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
-        monkeypatch.setattr("aya.status.get_active_watches", list)
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", list)
 
         raw = _render_json(_gather_status())
         parsed = json_mod.loads(raw)
@@ -274,10 +272,10 @@ class TestRenderJson:
     def test_json_with_populated_data(self, monkeypatch):
         import json as json_mod
 
-        monkeypatch.setattr("aya.status.get_unseen_alerts", _sample_alerts)
-        monkeypatch.setattr("aya.status.get_due_reminders", _sample_due)
-        monkeypatch.setattr("aya.status.get_upcoming_reminders", _sample_upcoming)
-        monkeypatch.setattr("aya.status.get_active_watches", _sample_watches)
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", _sample_alerts)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", _sample_due)
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", _sample_upcoming)
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", _sample_watches)
 
         raw = _render_json(_gather_status())
         parsed = json_mod.loads(raw)

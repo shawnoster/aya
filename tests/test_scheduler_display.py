@@ -47,10 +47,10 @@ def _isolate_scheduler(tmp_path, monkeypatch):
     scheduler_file.write_text(json.dumps({"schema_version": 2, "items": []}))
     alerts_file.write_text(json.dumps({"schema_version": 1, "alerts": []}))
 
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-    monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+    monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+    monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
     monkeypatch.setattr("aya.scheduler.REGISTERED_CRONS_FILE", registered_file)
-    monkeypatch.setattr("aya.scheduler.LOCK_FILE", lock_file)
+    monkeypatch.setattr("aya.adapters.paths.LOCK_FILE", lock_file)
 
 
 # ── filter helpers ────────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, Field, model_validator
 from ulid import ULID
 
-from aya.identity import Identity
+from aya.entities.identity import Identity
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,8 @@ class Packet(BaseModel):
             parts.append(f"## {p.name}\n\n{p.read_text()}")
         content = "\n\n---\n\n".join(parts)
         return cls(
-            **{"from": from_did, "to": to_did},
+            from_did=from_did,
+            to_did=to_did,
             intent=intent,
             context=context,
             content_type=ContentType.MARKDOWN,
@@ -198,7 +199,8 @@ class Packet(BaseModel):
             open_questions=open_questions or [],
         )
         return cls(
-            **{"from": from_did, "to": to_did},
+            from_did=from_did,
+            to_did=to_did,
             intent=intent,
             content_type=ContentType.SEED,
             content=seed.model_dump(),

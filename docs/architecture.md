@@ -200,47 +200,74 @@ Workspace structure (CLAUDE.md, AGENTS.md, skills, hooks) is defined in your wor
 
 ## Component Map
 
+Layered inward to outward. Source dependencies point inward only, and the
+boundaries are enforced by `tests/test_architecture.py` — not left to
+convention.
+
 ```
-aya (CLI + Plugin + MCP server)
-├── Identity
-│   ├── identity.py      — did:key gen, ed25519 + secp256k1 keypairs
-│   ├── profile.py       — Profile class: instances, trusted_keys, default_relays
-│   ├── credentials.py   — keypair persistence
-│   └── paths.py         — data directory paths (~/.aya/...)
+src/aya/
+├── entities/           rules that hold without this application; no I/O
+│   ├── packet.py       Packet, ContentType, ConflictStrategy, signing
+│   ├── identity.py     Identity, TrustedKey, Profile
+│   └── encryption.py   NIP-44 v2
 │
-├── Sync
-│   ├── packet.py        — JSON envelope, signing, verification
-│   ├── relay.py         — Nostr WebSocket client (kind 5999)
-│   ├── encryption.py    — NIP-44 v2 E2E encryption (ECDH + ChaCha20)
-│   ├── pair.py          — short-code pairing via relay
-│   └── ingest.py        — packet ingestion path shared by CLI + MCP
+├── usecases/           what aya does; no printing, no exit codes
+│   ├── relay_ops.py    send / ack / receive / inbox, once for both surfaces
+│   ├── ingest.py       persist a packet, alert on seeds
+│   ├── triage.py       which fetched packets to act on
+│   ├── resolve.py      instance, recipient, relay and label resolution
+│   ├── pair.py         the pairing exchange
+│   ├── watch_chains.py multi-stage watches that advance as stages complete
+│   ├── status.py       gather workspace readiness (facts only)
+│   ├── context.py      context-block builder
+│   └── log.py          daily-notes logger
 │
-├── Schedule
-│   └── scheduler/
-│       ├── core.py      — reminders, watches, recurring jobs, polling
-│       ├── storage.py   — scheduler.json + alerts.json + activity.json
-│       ├── providers.py — github-pr / ci-checks / jira-ticket / jira-query pollers
-│       ├── time_utils.py — idle detection, work-hours parsing
-│       ├── display.py   — Rich-formatted scheduler views
-│       └── types.py     — SchedulerItem, AlertItem, SuppressedCron
+├── adapters/           everything that touches the outside world
+│   ├── cli/            driving: the Typer app
+│   │   ├── _kernel.py    app, sub-apps, output formats, error codes
+│   │   ├── _render.py    all terminal output
+│   │   ├── send_cmds.py  send, send-raw, ack
+│   │   ├── poll_cmds.py  receive, inbox
+│   │   ├── packet_cmds.py read, drop, sent, packets
+│   │   ├── pair_cmds.py  pair
+│   │   ├── schedule_cmds.py, config_cmds.py, identity_cmds.py,
+│   │   └── hook_cmds.py, workspace_cmds.py
+│   ├── mcp_server.py   driving: MCP tools over stdio
+│   ├── status_view.py  presenters for `aya status` (json / plain / rich)
+│   ├── relay.py        driven: Nostr transport
+│   ├── clock.py        driven: the system clock, in one place
+│   ├── paths.py        driven: AYA_HOME resolution, on access
+│   ├── atomic.py       driven: file lock + atomic replace
+│   ├── profile_store.py driven: load/save profile.json
+│   ├── ledger.py       driven: ingested / sent / dropped logs
+│   ├── outbox.py       driven: idempotency, delivery, sent log
+│   ├── config.py       driven: workspace config
+│   ├── credentials.py  driven: credential checks
+│   ├── install.py      driven: crontab + Claude Code hooks
+│   └── rewake.py       driven: asyncRewake for PostToolUse watch hits
 │
-├── Status
-│   ├── status.py        — workspace readiness check, daily notes parsing
-│   └── context.py       — context-block builder for new sessions
-│
-├── Install
-│   ├── install.py       — system crontab + Claude Code hooks setup
-│   └── log.py           — daily-notes logger (`aya log` subcommands)
-│
-├── MCP
-│   └── mcp_server.py    — MCP server (stdio); aya_send / aya_receive / aya_inbox / etc.
-│
-├── Rewake
-│   └── rewake.py        — asyncRewake plumbing for PostToolUse watch hits
-│
-└── CLI
-    └── cli.py           — typer app wiring all subcommands
+└── scheduler/          bounded subsystem, layered internally
+    ├── core.py         CRUD, poll, tick, pending, watch validation
+    ├── storage.py      persistence, locking, atomic writes
+    ├── providers.py    github-pr, jira, ci-checks pollers
+    ├── display.py      alert rendering
+    ├── time_utils.py   due-date parsing, timezones
+    └── types.py        SchedulerItem, AlertItem, SuppressedCron
 ```
+
+The two driving adapters are peers: each parses its own input, calls a use
+case, and renders the result. Neither imports the other — `cli` imports
+`mcp_server` in one direction only, to start it.
+
+### Why the layers
+
+`send`, `ack`, `receive` and `inbox` used to exist twice, once per surface.
+The copies drifted: read receipts fired on one of four ingest paths, one
+surface encrypted acks and the other did not, one honoured `--dismiss` and
+the other hardcoded it, and a packet dropped with `aya drop` was silently
+re-ingested by the next poll. Every one of those was the same shape — one
+rule, written more than once. The use-case layer exists so there is one
+place for each to be written.
 
 ## Security Model
 

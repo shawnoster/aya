@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from aya.credentials import (
+from aya.adapters.credentials import (
     CANONICAL_SERVICES,
     CredentialsReport,
     check_credentials,
@@ -222,7 +222,7 @@ class TestStatusIntegration:
     """Smoke tests that the credentials report flows through aya status."""
 
     def test_gather_status_includes_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from aya.status import _gather_status
+        from aya.usecases.status import _gather_status
 
         # Clear any user env so the test is deterministic
         for vars_ in CANONICAL_SERVICES.values():
@@ -240,7 +240,7 @@ class TestStatusIntegration:
     ) -> None:
         import json
 
-        from aya.status import run_status
+        from aya.adapters.status_view import run_status
 
         # Set one var so the output has non-trivial content
         for vars_ in CANONICAL_SERVICES.values():
@@ -264,7 +264,7 @@ class TestStatusIntegration:
     def test_text_output_mentions_credentials(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from aya.status import run_status
+        from aya.adapters.status_view import run_status
 
         for vars_ in CANONICAL_SERVICES.values():
             for var in vars_:

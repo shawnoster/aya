@@ -4,11 +4,28 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+
+from aya.adapters.outbox import (
+    NOT_INGESTED_HINT,
+    delivery_from_report,
+    record_sent,
+)
+from aya.adapters.profile_store import load_profile
+from aya.usecases import relay_ops
+from aya.usecases.resolve import (
+    NoNostrPubkeyError,
+    label_for_did,
+    nostr_pubkey_for,
+    resolve_instance,
+    resolve_recipient,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +53,11 @@ _TOOLS: list[types.Tool] = [
             "properties": {
                 "instance": {
                     "type": "string",
-                    "description": "Local identity to act as (default: 'default').",
-                    "default": "default",
+                    "description": ("Local identity to act as. Omit to use the primary instance."),
+                },
+                "relay": {
+                    "type": "string",
+                    "description": "Relay URL override (default: profile default_relays).",
                 },
             },
             "additionalProperties": False,
@@ -63,8 +83,11 @@ _TOOLS: list[types.Tool] = [
                 },
                 "instance": {
                     "type": "string",
-                    "description": "Local identity to act as (default: 'default').",
-                    "default": "default",
+                    "description": ("Local identity to act as. Omit to use the primary instance."),
+                },
+                "relay": {
+                    "type": "string",
+                    "description": "Relay URL override (default: profile default_relays).",
                 },
                 "idempotency_key": {
                     "type": "string",
@@ -87,8 +110,11 @@ _TOOLS: list[types.Tool] = [
             "properties": {
                 "instance": {
                     "type": "string",
-                    "description": "Local identity to act as (default: 'default').",
-                    "default": "default",
+                    "description": ("Local identity to act as. Omit to use the primary instance."),
+                },
+                "relay": {
+                    "type": "string",
+                    "description": "Relay URL override (default: profile default_relays).",
                 },
             },
             "additionalProperties": False,
@@ -164,8 +190,11 @@ _TOOLS: list[types.Tool] = [
                 },
                 "instance": {
                     "type": "string",
-                    "description": "Local identity to act as (default: 'default').",
-                    "default": "default",
+                    "description": ("Local identity to act as. Omit to use the primary instance."),
+                },
+                "relay": {
+                    "type": "string",
+                    "description": "Relay URL override (default: profile default_relays).",
                 },
                 "idempotency_key": {
                     "type": "string",
@@ -241,6 +270,27 @@ _TOOLS: list[types.Tool] = [
         },
     ),
     types.Tool(
+        name="aya_sent",
+        description=(
+            "List packets this instance has sent, with per-relay delivery status. "
+            "Counterpart to aya_inbox; aya_packets lists received packets only."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max packets to return (default 20).",
+                },
+                "failed_only": {
+                    "type": "boolean",
+                    "description": "Only packets some relay rejected.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
         name="aya_relay_status",
         description="Show relay health and identity info for an instance.",
         inputSchema={
@@ -258,7 +308,8 @@ _TOOLS: list[types.Tool] = [
 ]
 
 
-@server.list_tools()
+# The MCP SDK ships these decorators untyped; the handlers below are typed.
+@server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
 async def list_tools() -> list[types.Tool]:
     return _TOOLS
 
@@ -278,217 +329,138 @@ def _error(message: str) -> list[types.TextContent]:
 
 
 def _load_profile() -> Any:
-    from aya.identity import Profile
-    from aya.paths import PROFILE_PATH
+    from aya.adapters.paths import PROFILE_PATH
 
-    return Profile.load(PROFILE_PATH)
+    return load_profile(PROFILE_PATH)
 
 
-def _resolve_instance(profile: Any, instance: str) -> Any:
-    local = profile.instances.get(instance)
-    if local is not None:
-        return local
-    available = list(profile.instances.keys())
-    if len(available) == 1:
-        return next(iter(profile.instances.values()))
-    msg = f"Instance '{instance}' not found. Available: {', '.join(available)}."
-    raise ValueError(msg)
+def _resolve_instance_labelled(profile: Any, instance: str | None) -> tuple[Any, str]:
+    """Resolve *instance* to ``(Identity, label)``. See ``aya.resolve``."""
+    return resolve_instance(profile, instance)
+
+
+def _resolve_instance(profile: Any, instance: str | None) -> Any:
+    return resolve_instance(profile, instance)[0]
 
 
 def _resolve_did(to: str, profile: Any) -> tuple[str, str]:
-    if to.startswith("did:"):
-        return to, to
-    key = profile.trusted_keys.get(to)
-    if key:
-        return key.did, to
-    available = list(profile.trusted_keys.keys())
-    if len(available) == 1:
-        label = available[0]
-        return next(iter(profile.trusted_keys.values())).did, label
-    raise ValueError(f"Unknown recipient '{to}'. Available: {', '.join(available)}.")
+    """Resolve a label or DID. Raises UnknownRecipientError (a ValueError)."""
+    return resolve_recipient(profile, to)
 
 
 def _resolve_nostr_pubkey(did: str, profile: Any) -> str | None:
-    for key in profile.trusted_keys.values():
-        if key.did == did and key.nostr_pubkey:
-            return str(key.nostr_pubkey)
-    for inst in profile.instances.values():
-        if inst.did == did:
-            return str(inst.nostr_public_hex)
-    return None
+    """Look up the Nostr pubkey for a DID, or None."""
+    try:
+        return nostr_pubkey_for(profile, did)
+    except NoNostrPubkeyError:
+        return None
+
+
+def _record_send(
+    profile: Any,
+    packet: Any,
+    *,
+    to_label: str,
+    event_id: str,
+    client: Any,
+    relay_urls: list[str],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Log an outbound packet and return its per-relay delivery outcome."""
+    from aya.adapters.paths import PROFILE_PATH
+
+    relays_ok, relays_failed = delivery_from_report(
+        getattr(client, "last_publish_report", []), relay_urls
+    )
+    record_sent(
+        profile,
+        PROFILE_PATH,
+        packet,
+        to_did=packet.to_did,
+        to_label=to_label,
+        event_id=event_id,
+        relays_ok=relays_ok,
+        relays_failed=relays_failed,
+    )
+    return relays_ok, relays_failed
+
+
+async def _handle_sent(arguments: dict[str, Any]) -> list[types.TextContent]:
+    """Outbound log with per-relay delivery status — counterpart to aya_inbox."""
+    profile = _load_profile()
+    limit = int(arguments.get("limit", 20) or 20)
+    failed_only = bool(arguments.get("failed_only"))
+    entries = list(reversed(profile.sent_ids))
+    if failed_only:
+        entries = [e for e in entries if e.get("relays_failed")]
+    return _text({"packets": entries[:limit]})
+
+
+def _label_for_did(profile: Any, did: str) -> str | None:
+    """Human label for a sender DID. See ``aya.resolve.label_for_did``."""
+    return label_for_did(profile, did)
 
 
 # ── individual handlers ──────────────────────────────────────────────────────
 
 
 async def _handle_status() -> list[types.TextContent]:
-    from aya.status import _gather_status, _render_json
+    from aya.adapters.status_view import _render_json
+    from aya.usecases.status import _gather_status
 
     data = _gather_status()
     return [types.TextContent(type="text", text=_render_json(data))]
 
 
 async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
-    instance = arguments.get("instance", "default")
     profile = _load_profile()
-    local = _resolve_instance(profile, instance)
-
-    from aya.relay import RelayClient
-
-    relay_urls = profile.default_relays
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-
-    all_packets = [pkt async for pkt in client.fetch_pending()]
-    ingested_set = {entry["id"] for entry in profile.ingested_ids}
-    # Filter dropped packets — same logic as CLI `inbox` so both surfaces agree.
-    # Dropped IDs are user-marked-ignore and must never resurface on any surface.
-    dropped_set = set(profile.dropped_ids)
-    new_packets = [
-        pkt for pkt in all_packets if pkt.id not in ingested_set and pkt.id not in dropped_set
-    ]
-
-    summaries = [
-        {
-            "id": pkt.id,
-            "intent": pkt.intent,
-            "from": pkt.from_did,
-            "sent_at": pkt.sent_at,
-            "trusted": profile.is_trusted(pkt.from_did),
-            "summary": pkt.summary(),
-        }
-        for pkt in new_packets
-    ]
-    return _text(summaries)
+    result, _packets = await relay_ops.inbox(
+        profile,
+        instance=arguments.get("instance"),
+        relay=arguments.get("relay"),
+    )
+    return _text(result.envelope())
 
 
 async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.cli import _check_idempotency, _record_idempotency
-
-    idempotency_key = arguments.get("idempotency_key")
-    if idempotency_key:
-        cached = _check_idempotency(idempotency_key)
-        if cached:
-            return _text(
-                {
-                    "packet_id": cached["packet_id"],
-                    "event_id": cached["event_id"],
-                    "cached": True,
-                }
-            )
-
-    instance = arguments.get("instance", "default")
-    to = arguments["to"]
-    intent = arguments["intent"]
-    content = arguments["content"]
+    from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
-    local = _resolve_instance(profile, instance)
-    to_did, _to_label = _resolve_did(to, profile)
-
-    from aya.packet import ContentType, Packet
-    from aya.relay import RelayClient
-
-    in_reply_to = arguments.get("in_reply_to")
-
-    packet = Packet(
-        **{"from": local.did, "to": to_did},
-        intent=intent,
-        content_type=ContentType.MARKDOWN,
-        content=content,
-        in_reply_to=in_reply_to,
+    result = await relay_ops.send(
+        profile,
+        PROFILE_PATH,
+        to=arguments["to"],
+        intent=arguments["intent"],
+        body=relay_ops.PacketBody.markdown(arguments["content"]),
+        instance=arguments.get("instance"),
+        relay=arguments.get("relay"),
+        in_reply_to=arguments.get("in_reply_to"),
+        idempotency_key=arguments.get("idempotency_key"),
     )
-    packet.encrypted = True
-    signed = packet.sign(local)
-
-    recipient_nostr_pub = _resolve_nostr_pubkey(signed.to_did, profile)
-    if recipient_nostr_pub is None:
-        return _error("No Nostr pubkey found for recipient. Pair first.")
-
-    relay_urls = profile.default_relays
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-    event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
-
-    if idempotency_key:
-        _record_idempotency(idempotency_key, signed.id, event_id)
-
-    return _text({"packet_id": signed.id, "event_id": event_id})
+    if result.cached:
+        return _text({"event_id": result.event_id, "cached": True})
+    return _text(
+        {
+            "packet_id": result.packet.id if result.packet else "",
+            "event_id": result.event_id,
+            "to": result.to_label,
+            "relays_ok": result.relays_ok,
+            "relays_failed": result.relays_failed,
+        }
+    )
 
 
 async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
-    instance = arguments.get("instance", "default")
-
-    from datetime import UTC, datetime
-
-    from aya.identity import _assert_valid_ulid
-    from aya.ingest import ingest
-    from aya.packet import Packet
-    from aya.paths import PACKETS_DIR, PROFILE_PATH
-    from aya.relay import RelayClient
+    from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
-    local = _resolve_instance(profile, instance)
-
-    relay_urls = profile.default_relays
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-
-    # No `since` filter — ingested_ids is the authoritative dedup mechanism and
-    # the relay's 7-day TTL window is the correct lower bound.  A last_checked-
-    # derived cursor permanently excludes packets that arrived before the cursor
-    # but were never ingested (see issue #246).
-    packets: list[Packet] = []
-    async for packet in client.fetch_pending():
-        packets.append(packet)
-
-    now_check_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    for url in relay_urls:
-        profile.last_checked[url] = now_check_iso
-
-    ingested_set = {entry["id"] for entry in profile.ingested_ids}
-    verified = [pkt for pkt in packets if pkt.id not in ingested_set and pkt.verify_from_did()]
-
-    received: list[dict[str, Any]] = []
-    now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    for pkt in verified:
-        trusted = profile.is_trusted(pkt.from_did)
-        if trusted:
-            _assert_valid_ulid(pkt.id)
-            ingest(pkt, quiet=True)
-            # ingest persists best-effort (debug-log on failure). Under MCP the
-            # body write is our only record — if it didn't land, leave ingested_ids
-            # alone so the next poll retries instead of losing the packet.
-            if not (PACKETS_DIR / f"{pkt.id}.json").exists():
-                logger.warning("Persistence failed for packet %s; not advancing cursor", pkt.id)
-                received.append(
-                    {
-                        "id": pkt.id,
-                        "intent": pkt.intent,
-                        "from": pkt.from_did,
-                        "ingested": False,
-                        "error": "persist_failed",
-                    }
-                )
-                continue
-            profile.ingested_ids.append(
-                {"id": pkt.id, "ingested_at": now_iso, "from_did": pkt.from_did}
-            )
-            received.append(
-                {"id": pkt.id, "intent": pkt.intent, "from": pkt.from_did, "ingested": True}
-            )
-        else:
-            # MCP is always non-interactive — skip untrusted packets silently.
-            logger.debug("Skipping untrusted packet %s from %s", pkt.id[:8], pkt.from_did[:30])
-            received.append(
-                {
-                    "id": pkt.id,
-                    "intent": pkt.intent,
-                    "from": pkt.from_did,
-                    "ingested": False,
-                    "skipped": True,
-                }
-            )
-
-    profile.save(PROFILE_PATH)
-    return _text(received)
+    # MCP is always non-interactive: take trusted senders, hold the rest.
+    result = await relay_ops.receive(
+        profile,
+        PROFILE_PATH,
+        instance=arguments.get("instance"),
+        relay=arguments.get("relay"),
+    )
+    return _text(result.envelope())
 
 
 async def _handle_schedule_remind(arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -511,108 +483,49 @@ async def _handle_schedule_watch(arguments: dict[str, Any]) -> list[types.TextCo
 
 
 async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.cli import _check_idempotency, _record_idempotency
-
-    idempotency_key = arguments.get("idempotency_key")
-    if idempotency_key:
-        cached = _check_idempotency(idempotency_key)
-        if cached:
-            return _text(
-                {
-                    "packet_id": cached["packet_id"],
-                    "event_id": cached["event_id"],
-                    "cached": True,
-                }
-            )
-
-    packet_id = arguments["packet_id"]
-    message = arguments.get("message", "acknowledged")
-
-    from aya.packet import ContentType, Packet
-    from aya.relay import RelayClient
+    from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
-
-    if len(packet_id) < 8:
-        return _error("Packet ID prefix must be at least 8 characters.")
-
-    ingested_ids = [entry["id"] for entry in profile.ingested_ids]
-    matched = [pid for pid in ingested_ids if pid.startswith(packet_id)]
-
-    if not matched:
-        return _error(f"Packet ID '{packet_id}' not found in ingested_ids.")
-    if len(matched) > 1:
-        return _error(f"Ambiguous prefix '{packet_id}' -- matches {len(matched)} packets.")
-
-    full_packet_id = matched[0]
-
-    # Look up sender DID
-    entry = next((e for e in profile.ingested_ids if e["id"] == full_packet_id), None)
-    sender_did = entry.get("from_did") if entry else None
-
-    to_did: str | None = None
-    recipient_nostr_pub: str | None = None
-
-    if sender_did:
-        for _label, tk in profile.trusted_keys.items():
-            if tk.did == sender_did and tk.nostr_pubkey:
-                to_did = tk.did
-                recipient_nostr_pub = tk.nostr_pubkey
-                break
-
-    if not to_did:
-        trusted_with_nostr = [
-            (lbl, tk) for lbl, tk in profile.trusted_keys.items() if tk.nostr_pubkey
-        ]
-        if not trusted_with_nostr:
-            return _error("No trusted peers with a Nostr pubkey found.")
-        if len(trusted_with_nostr) > 1:
-            return _error("Multiple trusted peers -- cannot determine ACK recipient.")
-        _lbl, tk = trusted_with_nostr[0]
-        to_did = tk.did
-        recipient_nostr_pub = tk.nostr_pubkey
-
-    local = _resolve_instance(profile, arguments.get("instance", "default"))
-
-    ack_packet = Packet(
-        **{"from": local.did, "to": to_did},
-        intent="ack",
-        content_type=ContentType.JSON,
-        content={"in_reply_to": full_packet_id, "message": message, "dismiss": False},
-        in_reply_to=full_packet_id,
+    result = await relay_ops.ack(
+        profile,
+        PROFILE_PATH,
+        packet_id=arguments["packet_id"],
+        message=arguments.get("message", "acknowledged"),
+        dismiss=bool(arguments.get("dismiss", False)),
+        instance=arguments.get("instance"),
+        relay=arguments.get("relay"),
+        idempotency_key=arguments.get("idempotency_key"),
     )
-    ack_packet.encrypted = True
-    signed = ack_packet.sign(local)
-
-    if recipient_nostr_pub is None:
-        return _error("No Nostr pubkey found for ACK recipient.")
-
-    relay_urls = profile.default_relays
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-    event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
-
-    if idempotency_key:
-        _record_idempotency(idempotency_key, signed.id, event_id)
-
-    return _text({"packet_id": signed.id, "event_id": event_id, "in_reply_to": full_packet_id})
+    if result.cached:
+        return _text({"event_id": result.event_id, "cached": True})
+    return _text(
+        {
+            "packet_id": result.packet.id if result.packet else "",
+            "event_id": result.event_id,
+            "in_reply_to": result.in_reply_to,
+            "to": result.to_label,
+            "relays_ok": result.relays_ok,
+            "relays_failed": result.relays_failed,
+        }
+    )
 
 
 async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
     packet_id = arguments["packet_id"]
     meta = arguments.get("meta", False)
 
-    from aya.packet import Packet
-    from aya.paths import PACKETS_DIR
+    from aya.adapters.paths import PACKETS_DIR
+    from aya.entities.packet import Packet
 
     if len(packet_id) < 8:
         return _error("Packet ID prefix must be at least 8 characters.")
 
     if not PACKETS_DIR.exists():
-        return _error("No stored packets found.")
+        return _error(NOT_INGESTED_HINT.format(packet_id=packet_id))
 
     matches = [f for f in PACKETS_DIR.glob("*.json") if f.stem.startswith(packet_id)]
     if not matches:
-        return _error(f"Packet '{packet_id}' not found.")
+        return _error(NOT_INGESTED_HINT.format(packet_id=packet_id))
     if len(matches) > 1:
         return _error(f"Ambiguous prefix '{packet_id}' -- matches {len(matches)} packets.")
 
@@ -637,7 +550,7 @@ async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_config_set(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.config import set_config_value
+    from aya.adapters.config import set_config_value
 
     key = arguments["key"]
     value = arguments["value"]
@@ -646,24 +559,24 @@ async def _handle_config_set(arguments: dict[str, Any]) -> list[types.TextConten
 
 
 async def _handle_config_show(_arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.config import load_config
+    from aya.adapters.config import load_config
 
     config = load_config()
     return _text(config)
 
 
 async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.packet import Packet
-    from aya.paths import PACKETS_DIR
+    from aya.adapters.paths import PACKETS_DIR
+    from aya.entities.packet import Packet
 
     limit = max(int(arguments.get("limit", 20)), 1)
 
     if not PACKETS_DIR.exists():
         return _text([])
 
-    def _safe_mtime(f: Any) -> float:
+    def _safe_mtime(f: Path) -> float:
         try:
-            return f.stat().st_mtime
+            return float(f.stat().st_mtime)
         except OSError:
             return 0.0
 
@@ -688,9 +601,9 @@ async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextContent]:
-    instance = arguments.get("instance", "default")
+    instance = arguments.get("instance")
     profile = _load_profile()
-    local = _resolve_instance(profile, instance)
+    local, instance_label = _resolve_instance_labelled(profile, instance)
 
     trusted = {label: tk.did for label, tk in profile.trusted_keys.items()}
 
@@ -698,7 +611,11 @@ async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextCont
     last_checked = {url: ts for url, ts in profile.last_checked.items() if url in relays}
 
     result: dict[str, Any] = {
-        "instance": instance,
+        # Resolved label, never the caller's (possibly omitted) argument — the
+        # answer must say which identity actually polled.
+        "instance": instance_label,
+        "instances": list(profile.instances.keys()),
+        "primary_instance": profile.primary_instance,
         "did": local.did,
         "relays": relays,
         "trusted_keys": trusted,
@@ -709,7 +626,9 @@ async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextCont
 
 # ── dispatcher ───────────────────────────────────────────────────────────────
 
-_HANDLERS: dict[str, Any] = {
+Handler = Callable[[dict[str, Any]], Awaitable[list[types.TextContent]]]
+
+_HANDLERS: dict[str, Handler] = {
     "aya_status": lambda args: _handle_status(),
     "aya_inbox": _handle_inbox,
     "aya_send": _handle_send,
@@ -721,11 +640,12 @@ _HANDLERS: dict[str, Any] = {
     "aya_config_set": _handle_config_set,
     "aya_config_show": _handle_config_show,
     "aya_packets": _handle_packets,
+    "aya_sent": _handle_sent,
     "aya_relay_status": _handle_relay_status,
 }
 
 
-@server.call_tool()
+@server.call_tool()  # type: ignore[untyped-decorator]
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
     handler = _HANDLERS.get(name)
     if handler is None:

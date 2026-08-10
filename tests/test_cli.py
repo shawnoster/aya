@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -12,12 +13,26 @@ import typer
 from rich.console import Console
 from typer.testing import CliRunner
 
-from aya.cli import app
-from aya.identity import Identity, Profile, TrustedKey
-from aya.packet import Packet
+from aya.adapters.cli import app
+from aya.adapters.profile_store import load_profile, save_profile
+from aya.entities.identity import Identity, Profile, TrustedKey
+from aya.entities.packet import Packet
 from aya.scheduler import add_reminder
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(output: str) -> str:
+    """Help text with styling removed.
+
+    Rich styles the two dashes of a long option separately, so ``--message``
+    is not a literal substring of coloured output. CI forces colour; local
+    runs usually do not, which is exactly the kind of difference that passes
+    here and fails there.
+    """
+    return _ANSI.sub("", output)
 
 
 # ── TestVersion ───────────────────────────────────────────────────────────────
@@ -38,28 +53,28 @@ class TestVersion:
 
 @pytest.fixture
 def profile_path(tmp_path: Path) -> Path:
-    return tmp_path / "assistant_profile.json"
+    return tmp_path / "profile.json"
 
 
 @pytest.fixture
 def profile_with_instance(profile_path: Path) -> Path:
     """Create a minimal profile with a 'default' instance already initialised."""
     identity = Identity.generate("default")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = identity
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
     return profile_path
 
 
 @pytest.fixture
 def profile_with_trusted(profile_with_instance: Path) -> Path:
     """Profile that also has a trusted 'home' key."""
-    p = Profile.load(profile_with_instance)
+    p = load_profile(profile_with_instance)
     home = Identity.generate("home")
     p.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
-    p.save(profile_with_instance)
+    save_profile(p, profile_with_instance)
     return profile_with_instance
 
 
@@ -67,34 +82,34 @@ def profile_with_trusted(profile_with_instance: Path) -> Path:
 def profile_with_named_instance(profile_path: Path) -> Path:
     """Profile with a single 'work' instance — no 'default' instance."""
     identity = Identity.generate("work")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["work"] = identity
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
     return profile_path
 
 
 @pytest.fixture
 def profile_with_multiple_instances(profile_path: Path) -> Path:
     """Profile with 'work' and 'laptop' instances — no 'default' instance."""
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["work"] = Identity.generate("work")
     profile.instances["laptop"] = Identity.generate("laptop")
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
     return profile_path
 
 
 @pytest.fixture
 def profile_with_no_instances(profile_path: Path) -> Path:
     """Profile with no instances registered — simulates pre-init state."""
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
-    profile.save(profile_path)
+    profile = Profile()
+    save_profile(profile, profile_path)
     return profile_path
 
 
 @pytest.fixture
 def profile_with_multiple_trusted(profile_with_instance: Path) -> Path:
     """Profile with two trusted keys — for testing ambiguous recipient errors."""
-    p = Profile.load(profile_with_instance)
+    p = load_profile(profile_with_instance)
     home = Identity.generate("home")
     laptop = Identity.generate("laptop")
     p.trusted_keys["home"] = TrustedKey(
@@ -103,7 +118,7 @@ def profile_with_multiple_trusted(profile_with_instance: Path) -> Path:
     p.trusted_keys["laptop"] = TrustedKey(
         did=laptop.did, label="laptop", nostr_pubkey=laptop.nostr_public_hex
     )
-    p.save(profile_with_instance)
+    save_profile(p, profile_with_instance)
     return profile_with_instance
 
 
@@ -236,14 +251,14 @@ class TestPair:
         label from the response content (which was the initiator's own label), so
         the peer DID overwrote the local self-trust entry.
         """
-        from aya.pair import TrustedKey as PairTrustedKey
+        from aya.usecases.pair import TrustedKey as PairTrustedKey
 
         local_identity = Identity.generate("guild-shawnoster")
         peer_identity = Identity.generate("sean-okeefe")
 
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.instances["guild-shawnoster"] = local_identity
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         # Simulate what poll_for_pair_response returns: TrustedKey whose label
         # is the initiator's own name (the bug: content["label"] was local label)
@@ -254,10 +269,10 @@ class TestPair:
         )
 
         with (
-            patch("aya.cli.generate_code", return_value="TEST-CODE-0001"),
-            patch("aya.cli.hash_code", return_value="deadbeef"),
-            patch("aya.cli.publish_pair_request", return_value="req_event_id"),
-            patch("aya.cli.poll_for_pair_response", return_value=buggy_trusted),
+            patch("aya.adapters.cli.pair_cmds.generate_code", return_value="TEST-CODE-0001"),
+            patch("aya.adapters.cli.pair_cmds.hash_code", return_value="deadbeef"),
+            patch("aya.adapters.cli.pair_cmds.publish_pair_request", return_value="req_event_id"),
+            patch("aya.adapters.cli.pair_cmds.poll_for_pair_response", return_value=buggy_trusted),
         ):
             result = runner.invoke(
                 app,
@@ -288,14 +303,14 @@ class TestPair:
 
     def test_joiner_stores_peer_under_peer_label(self, profile_with_instance: Path) -> None:
         """Joiner must store the initiator DID under --peer label."""
-        from aya.pair import TrustedKey as PairTrustedKey
+        from aya.usecases.pair import TrustedKey as PairTrustedKey
 
         local_identity = Identity.generate("sean-okeefe")
         initiator_identity = Identity.generate("guild-shawnoster")
 
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.instances["sean-okeefe"] = local_identity
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         # join_pairing returns TrustedKey with the initiator's label from request content
         initiator_trusted = PairTrustedKey(
@@ -304,7 +319,7 @@ class TestPair:
             nostr_pubkey=initiator_identity.nostr_public_hex,
         )
 
-        with patch("aya.cli.join_pairing", return_value=initiator_trusted):
+        with patch("aya.adapters.cli.pair_cmds.join_pairing", return_value=initiator_trusted):
             result = runner.invoke(
                 app,
                 [
@@ -339,8 +354,8 @@ class TestScheduleRemind:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(
             app,
@@ -363,7 +378,7 @@ class TestScheduleRemind:
     def test_remind_requires_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         scheduler_file = tmp_path / "scheduler.json"
         scheduler_file.write_text(json.dumps({"items": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
 
         result = runner.invoke(
             app,
@@ -388,8 +403,8 @@ class TestScheduleDismiss:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
 
         item = add_reminder("Dismiss me via CLI", "in 1 hour")
         prefix = item["id"][:8]
@@ -410,8 +425,8 @@ class TestScheduleDismiss:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(app, ["schedule", "dismiss", "nonexistent"])
         assert result.exit_code != 0
@@ -425,7 +440,7 @@ class TestSend:
         self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mock_publish = AsyncMock(return_value="a" * 64)
-        with patch("aya.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -449,7 +464,7 @@ class TestSend:
 
     def test_send_seed(self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_publish = AsyncMock(return_value="b" * 64)
-        with patch("aya.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -507,7 +522,7 @@ class TestSend:
     def test_send_default_resolves_to_single_trusted_key(self, profile_with_trusted: Path) -> None:
         """'--to default' should succeed when exactly one trusted key exists."""
         mock_publish = AsyncMock(return_value="b" * 64)
-        with patch("aya.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -553,12 +568,12 @@ class TestSend:
         Uses a multi-instance profile so the smart single-instance fallback doesn't
         silently succeed — the non-existent name must produce a non-zero exit.
         """
-        p = Profile.load(profile_with_multiple_instances)
+        p = load_profile(profile_with_multiple_instances)
         home = Identity.generate("home")
         p.trusted_keys["home"] = TrustedKey(
             did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
         )
-        p.save(profile_with_multiple_instances)
+        save_profile(p, profile_with_multiple_instances)
 
         result = runner.invoke(
             app,
@@ -579,10 +594,10 @@ class TestSend:
 
     def test_send_missing_nostr_pubkey_fails(self, profile_with_instance: Path) -> None:
         """Trusted key without a Nostr pubkey should exit with a clear message."""
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         home = Identity.generate("home")
         p.trusted_keys["home"] = TrustedKey(did=home.did, label="home", nostr_pubkey=None)
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -602,7 +617,7 @@ class TestSend:
 
     def test_send_relay_error_exits_cleanly(self, profile_with_trusted: Path) -> None:
         """Relay connection failure should print a friendly message, not a traceback."""
-        with patch("aya.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = AsyncMock(side_effect=Exception("conn refused"))
             result = runner.invoke(
                 app,
@@ -629,7 +644,7 @@ class TestSend:
             captured_packet = signed
             return "c" * 64
 
-        with patch("aya.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = AsyncMock(side_effect=_capture_publish)
             result = runner.invoke(
                 app,
@@ -658,7 +673,7 @@ class TestSend:
         async def _capture_publish(signed, *a, **kw):
             return "d" * 64
 
-        with patch("aya.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = AsyncMock(side_effect=_capture_publish)
             result = runner.invoke(
                 app,
@@ -694,8 +709,8 @@ def _isolate_scheduler(tmp_path, monkeypatch):
     scheduler_file.parent.mkdir(parents=True)
     scheduler_file.write_text(json.dumps({"items": []}))
     alerts_file.write_text(json.dumps({"alerts": []}))
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-    monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+    monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+    monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
 
 
 @pytest.mark.usefixtures("_isolate_scheduler")
@@ -714,8 +729,8 @@ class TestHookCrons:
         registered_file = sched_dir / "session_registered_crons.json"
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
         monkeypatch.setattr("aya.scheduler.REGISTERED_CRONS_FILE", registered_file)
         return sched_dir
 
@@ -1028,8 +1043,8 @@ class TestHookWatchPushUpdates:
         scheduler_file.parent.mkdir(parents=True)
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
         return scheduler_file, alerts_file
 
     def test_push_update_triggers_matching_watch_without_polling(self, tmp_path: Path, monkeypatch):
@@ -1084,10 +1099,10 @@ class TestHookWatchPushUpdates:
         }
 
         with (
-            patch("aya.cli.poll_watch") as mock_poll,
-            patch("aya.cli.rewake_emit") as mock_rewake,
+            patch("aya.usecases.watch_chains.poll_watch") as mock_poll,
+            patch("aya.usecases.watch_chains.rewake_emit") as mock_rewake,
         ):
-            from aya.cli import _hook_watch_impl
+            from aya.usecases.watch_chains import _hook_watch_impl
 
             result = _hook_watch_impl(payload)
 
@@ -1148,10 +1163,10 @@ class TestHookWatchPushUpdates:
         }
 
         with (
-            patch("aya.cli.poll_watch", return_value=(None, False)) as mock_poll,
-            patch("aya.cli.rewake_emit") as mock_rewake,
+            patch("aya.usecases.watch_chains.poll_watch", return_value=(None, False)) as mock_poll,
+            patch("aya.usecases.watch_chains.rewake_emit") as mock_rewake,
         ):
-            from aya.cli import _hook_watch_impl
+            from aya.usecases.watch_chains import _hook_watch_impl
 
             result = _hook_watch_impl(payload)
 
@@ -1218,8 +1233,8 @@ class TestScheduleStatusCLI:
             )
         )
         alerts_file.write_text(json.dumps({"alerts": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(app, ["schedule", "pending", "--format", "json"])
         assert result.exit_code == 0
@@ -1244,16 +1259,17 @@ class TestReceive:
     @pytest.fixture
     def profile_with_sender(self, profile_with_instance: Path, sender: Identity) -> Path:
         """Profile with a 'default' instance and 'work' registered as a trusted sender."""
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.trusted_keys["work"] = TrustedKey(
             did=sender.did, label="work", nostr_pubkey=sender.nostr_public_hex
         )
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
         return profile_with_instance
 
     def _signed_packet(self, sender: Identity, to_did: str, intent: str = "Test packet") -> Packet:
         pkt = Packet(
-            **{"from": sender.did, "to": to_did},
+            from_did=sender.did,
+            to_did=to_did,
             intent=intent,
             content="Test content.",
         )
@@ -1263,7 +1279,7 @@ class TestReceive:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """receive must call fetch_pending() with no since argument."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did)
 
         fetch_calls: list[tuple] = []
@@ -1272,7 +1288,7 @@ class TestReceive:
             fetch_calls.append((args, kwargs))
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             runner.invoke(
                 app,
@@ -1286,7 +1302,7 @@ class TestReceive:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """Packets whose IDs are already in ingested_ids must be silently skipped."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Already seen")
         recent_ts = (
             (datetime.now(UTC) - timedelta(days=1))
@@ -1295,12 +1311,12 @@ class TestReceive:
             .replace("+00:00", "Z")
         )
         p.ingested_ids.append({"id": packet.id, "ingested_at": recent_ts})
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1313,13 +1329,13 @@ class TestReceive:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """After auto-ingesting a trusted packet, its ID must be saved to ingested_ids."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="New packet")
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1327,7 +1343,7 @@ class TestReceive:
             )
 
         assert result.exit_code == 0, result.output
-        saved = Profile.load(profile_with_sender)
+        saved = load_profile(profile_with_sender)
         assert any(e["id"] == packet.id for e in saved.ingested_ids)
 
     def test_relay_error_shows_friendly_message(self, profile_with_sender: Path) -> None:
@@ -1338,27 +1354,38 @@ class TestReceive:
                 yield  # makes this an async generator
             raise OSError("connection refused")
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
-                ["receive", "--profile", str(profile_with_sender)],
+                ["receive", "--format", "text", "--profile", str(profile_with_sender)],
             )
 
         assert "Could not reach relay" in result.output
+
+        # Under --format json the same failure is machine-readable instead, so
+        # a caller can tell an unreachable relay from a genuinely empty inbox.
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = mock_fetch
+            result = runner.invoke(
+                app,
+                ["receive", "--format", "json", "--profile", str(profile_with_sender)],
+            )
+
+        assert json.loads(result.output)["relay_reachable"] is False
 
     def test_yes_flag_ingests_untrusted_packet_without_prompt(
         self, profile_with_instance: Path
     ) -> None:
         """--yes must ingest packets from untrusted senders without prompting."""
         unknown_sender = Identity.generate("unknown")
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         packet = self._signed_packet(unknown_sender, p.instances["default"].did, intent="Untrusted")
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             mock_cls.return_value.send_receipt = AsyncMock()
             result = runner.invoke(
@@ -1367,13 +1394,13 @@ class TestReceive:
             )
 
         assert result.exit_code == 0, result.output
-        saved = Profile.load(profile_with_instance)
+        saved = load_profile(profile_with_instance)
         assert any(e["id"] == packet.id for e in saved.ingested_ids)
 
     def test_yes_short_flag_works(self, profile_with_instance: Path) -> None:
         """-y must behave identically to --yes for untrusted senders and skip prompts."""
         unknown_sender = Identity.generate("unknown")
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         packet = self._signed_packet(
             unknown_sender, p.instances["default"].did, intent="Short flag"
         )
@@ -1385,7 +1412,7 @@ class TestReceive:
             mock_confirm.side_effect = AssertionError(
                 "typer.confirm should not be called when -y is used"
             )
-            with patch("aya.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.fetch_pending = mock_fetch
                 mock_cls.return_value.send_receipt = AsyncMock()
                 result = runner.invoke(
@@ -1394,7 +1421,7 @@ class TestReceive:
                 )
 
         assert result.exit_code == 0, result.output
-        saved = Profile.load(profile_with_instance)
+        saved = load_profile(profile_with_instance)
         assert any(e["id"] == packet.id for e in saved.ingested_ids)
 
     def test_receive_no_since_filter(self, profile_with_sender: Path, sender: Identity) -> None:
@@ -1405,7 +1432,7 @@ class TestReceive:
         ingested_ids is the authoritative dedup mechanism; the relay's 7-day TTL
         window is the correct bound.
         """
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did)
 
         relay_url = p.default_relays[0]
@@ -1413,7 +1440,7 @@ class TestReceive:
         p.last_checked[relay_url] = (
             last_check_time.replace(microsecond=0).isoformat().replace("+00:00", "Z")
         )
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         fetch_calls: list[tuple] = []
 
@@ -1421,7 +1448,7 @@ class TestReceive:
             fetch_calls.append((args, kwargs))
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             runner.invoke(
                 app,
@@ -1433,7 +1460,7 @@ class TestReceive:
 
     def test_receive_last_checked_persistence(self, profile_with_sender: Path) -> None:
         """receive saves last_checked for each relay even when inbox is empty."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         relay_url = p.default_relays[0]
         assert relay_url not in p.last_checked  # clean slate
 
@@ -1441,7 +1468,7 @@ class TestReceive:
             if False:  # pragma: no cover
                 yield  # makes this an async generator
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1449,13 +1476,13 @@ class TestReceive:
             )
 
         assert result.exit_code == 0, result.output
-        saved = Profile.load(profile_with_sender)
+        saved = load_profile(profile_with_sender)
         assert relay_url in saved.last_checked
         assert saved.last_checked[relay_url]  # non-empty ISO timestamp
 
     def test_receive_skip_untrusted(self, profile_with_sender: Path, sender: Identity) -> None:
         """--skip-untrusted must silently skip untrusted packets and ingest trusted ones."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         to_did = p.instances["default"].did
 
         trusted_packet = self._signed_packet(sender, to_did, intent="Trusted msg")
@@ -1470,7 +1497,7 @@ class TestReceive:
             mock_confirm.side_effect = AssertionError(
                 "typer.confirm should not be called with --skip-untrusted"
             )
-            with patch("aya.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.fetch_pending = mock_fetch
                 result = runner.invoke(
                     app,
@@ -1484,13 +1511,13 @@ class TestReceive:
                 )
 
         assert result.exit_code == 0, result.output
-        saved = Profile.load(profile_with_sender)
+        saved = load_profile(profile_with_sender)
         assert any(e["id"] == trusted_packet.id for e in saved.ingested_ids)
         assert not any(e["id"] == untrusted_packet.id for e in saved.ingested_ids)
 
     def test_receive_skip_untrusted_json(self, profile_with_sender: Path, sender: Identity) -> None:
         """--skip-untrusted with --format json must include skipped=true for untrusted packets."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         to_did = p.instances["default"].did
 
         trusted_packet = self._signed_packet(sender, to_did, intent="Trusted json")
@@ -1505,7 +1532,7 @@ class TestReceive:
             mock_confirm.side_effect = AssertionError(
                 "typer.confirm should not be called with --skip-untrusted"
             )
-            with patch("aya.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.fetch_pending = mock_fetch
                 result = runner.invoke(
                     app,
@@ -1539,13 +1566,13 @@ class TestReceive:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """receive --auto-ingest must print a text summary showing ingested count."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             mock_cls.return_value.send_receipt = AsyncMock()
             result = runner.invoke(
@@ -1574,16 +1601,17 @@ class TestInbox:
 
     @pytest.fixture
     def profile_with_sender(self, profile_with_instance: Path, sender: Identity) -> Path:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.trusted_keys["work"] = TrustedKey(
             did=sender.did, label="work", nostr_pubkey=sender.nostr_public_hex
         )
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
         return profile_with_instance
 
     def _signed_packet(self, sender: Identity, to_did: str, intent: str = "Test packet") -> Packet:
         pkt = Packet(
-            **{"from": sender.did, "to": to_did},
+            from_did=sender.did,
+            to_did=to_did,
             intent=intent,
             content="Test content.",
         )
@@ -1593,7 +1621,7 @@ class TestInbox:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """inbox must hide already-ingested packets unless --all is passed."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Old packet")
         recent_ts = (
             (datetime.now(UTC) - timedelta(days=1))
@@ -1602,12 +1630,12 @@ class TestInbox:
             .replace("+00:00", "Z")
         )
         p.ingested_ids.append({"id": packet.id, "ingested_at": recent_ts})
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1620,13 +1648,13 @@ class TestInbox:
 
     def test_shows_new_packets(self, profile_with_sender: Path, sender: Identity) -> None:
         """inbox must show packets not yet in ingested_ids."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Fresh packet")
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1640,7 +1668,7 @@ class TestInbox:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """inbox --all must show ingested packets marked as [ingested]."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Old packet")
         recent_ts = (
             (datetime.now(UTC) - timedelta(days=1))
@@ -1649,12 +1677,12 @@ class TestInbox:
             .replace("+00:00", "Z")
         )
         p.ingested_ids.append({"id": packet.id, "ingested_at": recent_ts})
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1669,7 +1697,7 @@ class TestInbox:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """inbox --all with some ingested packets must show a 'N total, M new' summary."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         ingested_packet = self._signed_packet(sender, p.instances["default"].did, intent="Ingested")
         new_packet = self._signed_packet(sender, p.instances["default"].did, intent="New")
         recent_ts = (
@@ -1679,13 +1707,13 @@ class TestInbox:
             .replace("+00:00", "Z")
         )
         p.ingested_ids.append({"id": ingested_packet.id, "ingested_at": recent_ts})
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         async def mock_fetch(*args, **kwargs):
             yield ingested_packet
             yield new_packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1699,7 +1727,7 @@ class TestInbox:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """inbox --all --format json must include an 'ingested' field for each packet."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Already seen")
         recent_ts = (
             (datetime.now(UTC) - timedelta(days=1))
@@ -1708,12 +1736,12 @@ class TestInbox:
             .replace("+00:00", "Z")
         )
         p.ingested_ids.append({"id": packet.id, "ingested_at": recent_ts})
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1726,17 +1754,22 @@ class TestInbox:
         assert len(data["packets"]) == 1
         assert data["packets"][0]["ingested"] is True
 
-    def test_json_output_no_ingested_field_without_all_flag(
+    def test_json_output_reports_ingested_for_every_packet(
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
-        """inbox --format json (default) must not include an 'ingested' field."""
-        p = Profile.load(profile_with_sender)
+        """inbox --format json reports `ingested` for every packet.
+
+        Both surfaces now return the same listing shape; the field used to be
+        omitted here and absent entirely over MCP, so a caller could not read
+        both.
+        """
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Fresh")
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1747,16 +1780,16 @@ class TestInbox:
         data = json.loads(result.output)
         assert "packets" in data
         assert len(data["packets"]) == 1
-        assert "ingested" not in data["packets"][0]
+        assert data["packets"][0]["ingested"] is False
 
 
 class TestAutoFormat:
     def test_auto_resolves_to_text_in_tty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When stdout is a TTY, AUTO should produce text output."""
-        from aya.cli import OutputFormat, resolve_format
+        from aya.adapters.cli._kernel import OutputFormat, resolve_format
 
         monkeypatch.delenv("AYA_FORMAT", raising=False)
-        with patch("aya.cli.sys") as mock_sys:
+        with patch("aya.adapters.cli._kernel.sys") as mock_sys:
             mock_sys.stdout.isatty.return_value = True
             assert resolve_format(OutputFormat.AUTO) == OutputFormat.TEXT
 
@@ -1823,7 +1856,7 @@ class TestAck:
         local = Identity.generate("default")
         home = Identity.generate("home")
 
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile.trusted_keys["home"] = TrustedKey(
             did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
@@ -1833,21 +1866,22 @@ class TestAck:
         from datetime import UTC, datetime
 
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="seed from home",
         )
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": home.did})
 
         profile_path = tmp_path / "profile.json"
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
         return profile_path, pkt.id, home
 
     def test_ack_happy_path(self, profile_with_ingested: tuple) -> None:
         """ack sends an ACK packet and prints confirmation."""
         profile_path, packet_id, _home = profile_with_ingested
         mock_publish = AsyncMock(return_value="c" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -1871,7 +1905,7 @@ class TestAck:
         profile_path, packet_id, _home = profile_with_ingested
         prefix = packet_id[:8]
         mock_publish = AsyncMock(return_value="d" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -1884,7 +1918,7 @@ class TestAck:
         """--dismiss sets the dismiss flag in the ACK content and uses default message."""
         profile_path, packet_id, _home = profile_with_ingested
         mock_publish = AsyncMock(return_value="e" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -1914,7 +1948,7 @@ class TestAck:
         """ACK packet must have intent='ack' and in_reply_to set to the original packet ID."""
         profile_path, packet_id, _home = profile_with_ingested
         mock_publish = AsyncMock(return_value="f" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             runner.invoke(
                 app,
@@ -1938,7 +1972,7 @@ class TestAck:
     def test_ack_no_trusted_peers_exits_nonzero(self, tmp_path: Path) -> None:
         """ack with no trusted peers (no Nostr pubkey) must exit non-zero."""
         local = Identity.generate("default")
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         # A trusted key without a Nostr pubkey
         other = Identity.generate("other")
@@ -1946,12 +1980,12 @@ class TestAck:
 
         from datetime import UTC, datetime
 
-        pkt = Packet(**{"from": other.did, "to": local.did}, intent="test")
+        pkt = Packet(from_did=other.did, to_did=local.did, intent="test")
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso})
 
         profile_path = tmp_path / "profile.json"
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
         result = runner.invoke(
             app,
@@ -1963,7 +1997,7 @@ class TestAck:
         """ack must exit non-zero when the relay publish fails."""
         profile_path, packet_id, _home = profile_with_ingested
         mock_publish = AsyncMock(side_effect=Exception("relay down"))
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -1979,7 +2013,7 @@ class TestAck:
         peer_a = Identity.generate("peer_a")
         peer_b = Identity.generate("peer_b")
 
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile.trusted_keys["peer_a"] = TrustedKey(
             did=peer_a.did, label="peer_a", nostr_pubkey=peer_a.nostr_public_hex
@@ -1989,15 +2023,15 @@ class TestAck:
         )
 
         # Ingest a packet from peer_a
-        pkt = Packet(**{"from": peer_a.did, "to": local.did}, intent="seed from A")
+        pkt = Packet(from_did=peer_a.did, to_did=local.did, intent="seed from A")
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": peer_a.did})
 
         profile_path = tmp_path / "profile.json"
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
         mock_publish = AsyncMock(return_value="a" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2014,22 +2048,22 @@ class TestAck:
         local = Identity.generate("default")
         peer = Identity.generate("peer")
 
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile.trusted_keys["peer"] = TrustedKey(
             did=peer.did, label="peer", nostr_pubkey=peer.nostr_public_hex
         )
 
         # Old-style entry without from_did
-        pkt = Packet(**{"from": peer.did, "to": local.did}, intent="old seed")
+        pkt = Packet(from_did=peer.did, to_did=local.did, intent="old seed")
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso})
 
         profile_path = tmp_path / "profile.json"
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
         mock_publish = AsyncMock(return_value="b" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2048,18 +2082,19 @@ class TestDryRun:
 
     def test_send_raw_dry_run(self, profile_with_trusted: Path, tmp_path: Path) -> None:
         """--dry-run prints packet JSON and does not call publish."""
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="dry run test",
             content="hello",
         )
         packet_file = tmp_path / "packet.json"
         packet_file.write_text(pkt.to_json())
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_publish = AsyncMock(return_value="a" * 64)
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
@@ -2082,7 +2117,7 @@ class TestDryRun:
         self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """--dry-run prints signed packet JSON and does not call publish."""
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_publish = AsyncMock(return_value="a" * 64)
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
@@ -2112,20 +2147,20 @@ class TestDryRun:
         local = Identity.generate("default")
         home = Identity.generate("home")
 
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["default"] = local
         profile.trusted_keys["home"] = TrustedKey(
             did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
         )
 
-        pkt = Packet(**{"from": home.did, "to": local.did}, intent="seed from home")
+        pkt = Packet(from_did=home.did, to_did=local.did, intent="seed from home")
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": home.did})
 
         profile_path = tmp_path / "profile.json"
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_publish = AsyncMock(return_value="c" * 64)
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
@@ -2146,8 +2181,8 @@ class TestDryRun:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(
             app,
@@ -2176,7 +2211,7 @@ class TestDryRun:
         scheduler_file = tmp_path / "assistant" / "memory" / "scheduler.json"
         scheduler_file.parent.mkdir(parents=True)
         scheduler_file.write_text(json.dumps({"items": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
 
         result = runner.invoke(
             app,
@@ -2205,12 +2240,44 @@ class TestDryRun:
         assert len(data["items"]) == 0
 
     def test_schedule_watch_dry_run_invalid_target(self) -> None:
-        """--dry-run with invalid github-pr target exits 1."""
+        """--dry-run with an invalid github-pr target is an argument error."""
         result = runner.invoke(
             app,
             ["schedule", "watch", "github-pr", "bad-format", "-m", "test", "--dry-run"],
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 2
+        assert "owner/repo#123" in result.output
+
+    def test_schedule_watch_accepts_ci_checks(self, tmp_path: Path) -> None:
+        """The CLI must accept every provider the scheduler supports.
+
+        A second, narrower gate in the CLI used to reject ci-checks while the
+        MCP surface accepted it — same input, opposite outcome.
+        """
+        result = runner.invoke(
+            app,
+            ["schedule", "watch", "ci-checks", "o/r#1", "-m", "test", "--dry-run"],
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_schedule_watch_rejects_unknown_condition(self) -> None:
+        """Condition validation reaches the CLI now that it shares the validator."""
+        result = runner.invoke(
+            app,
+            [
+                "schedule",
+                "watch",
+                "ci-checks",
+                "o/r#1",
+                "-m",
+                "t",
+                "--condition",
+                "nonsense",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "checks_failed" in result.output
 
     def test_schedule_recurring_dry_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2219,7 +2286,7 @@ class TestDryRun:
         scheduler_file = tmp_path / "assistant" / "memory" / "scheduler.json"
         scheduler_file.parent.mkdir(parents=True)
         scheduler_file.write_text(json.dumps({"items": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
 
         result = runner.invoke(
             app,
@@ -2290,16 +2357,16 @@ class TestStructuredErrors:
         """TTY stderr emits Rich-formatted text, not JSON."""
         import io
 
-        from aya.cli import ErrorCode, _emit_error
+        from aya.adapters.cli._kernel import ErrorCode, _emit_error
 
         fake_stderr = io.StringIO()
         fake_stderr.isatty = lambda: True  # type: ignore[attr-defined]
-        monkeypatch.setattr("aya.cli.sys.stderr", fake_stderr)
+        monkeypatch.setattr("aya.adapters.cli._kernel.sys.stderr", fake_stderr)
 
         # _emit_error writes to the module-level `err` Console, which
         # resolves sys.stderr lazily — so we also redirect the Console's
         # output to our fake stream for capture.
-        monkeypatch.setattr("aya.cli.err", Console(file=fake_stderr))
+        monkeypatch.setattr("aya.adapters.cli._kernel.err", Console(file=fake_stderr))
 
         with pytest.raises(typer.Exit):
             _emit_error(
@@ -2379,11 +2446,12 @@ class TestJsonFormat:
 
     def test_send_raw_json_format(self, profile_with_trusted: Path, tmp_path: Path) -> None:
         """send-raw --format json outputs JSON with packet_id and event_id."""
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="json format test",
             content="hello",
         )
@@ -2392,7 +2460,7 @@ class TestJsonFormat:
 
         mock_event_id = "e" * 64
         mock_publish = AsyncMock(return_value=mock_event_id)
-        with patch("aya.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2421,8 +2489,8 @@ class TestJsonFormat:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(
             app,
@@ -2457,9 +2525,9 @@ class TestPacketPersistence:
         """Set up a packets directory and patch PACKETS_DIR to point to it."""
         packets = tmp_path / "packets"
         packets.mkdir()
-        import aya.paths
+        import aya.adapters.paths
 
-        monkeypatch.setattr(aya.paths, "PACKETS_DIR", packets)
+        monkeypatch.setattr(aya.adapters.paths, "PACKETS_DIR", packets)
         return packets
 
     @pytest.fixture
@@ -2467,7 +2535,8 @@ class TestPacketPersistence:
         local = Identity.generate("default")
         home = Identity.generate("home")
         return Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="daily handoff",
             content="Here is today's summary.",
         )
@@ -2475,19 +2544,20 @@ class TestPacketPersistence:
     def test_ingest_persists_packet(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """After _ingest, a packet JSON file should exist in PACKETS_DIR."""
         packets = tmp_path / "packets"
-        import aya.paths
+        import aya.adapters.paths
 
-        monkeypatch.setattr(aya.paths, "PACKETS_DIR", packets)
+        monkeypatch.setattr(aya.adapters.paths, "PACKETS_DIR", packets)
 
         local = Identity.generate("default")
         home = Identity.generate("home")
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="seed from home",
             content="test content",
         )
 
-        from aya.cli import _ingest
+        from aya.usecases.ingest import ingest as _ingest
 
         _ingest(pkt, quiet=True)
 
@@ -2512,7 +2582,8 @@ class TestPacketPersistence:
         # Body contains text that Rich would normally treat as markup.
         body_with_markup = "log line: [error] something [bold]important[/bold] happened"
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="log",
             content=body_with_markup,
         )
@@ -2534,7 +2605,8 @@ class TestPacketPersistence:
         home = Identity.generate("home")
         for i in range(3):
             pkt = Packet(
-                **{"from": home.did, "to": local.did},
+                from_did=home.did,
+                to_did=local.did,
                 intent=f"packet {i}",
                 content=f"content {i}",
             )
@@ -2565,19 +2637,13 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
         monkeypatch.setenv("AYA_FORMAT", "json")
 
-        # Reload paths with patched env
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
-
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="idempotent test",
             content="hello",
         )
@@ -2585,7 +2651,7 @@ class TestIdempotency:
         packet_file.write_text(pkt.to_json())
 
         mock_publish = AsyncMock(return_value="e" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             # First send
             result1 = runner.invoke(
@@ -2606,7 +2672,7 @@ class TestIdempotency:
 
         # Second send with same key — should be cached
         mock_publish2 = AsyncMock(return_value="f" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls2:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls2:
             mock_cls2.return_value.publish = mock_publish2
             result2 = runner.invoke(
                 app,
@@ -2632,18 +2698,13 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
         monkeypatch.setenv("AYA_FORMAT", "json")
 
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
-
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="test",
             content="hello",
         )
@@ -2652,7 +2713,7 @@ class TestIdempotency:
 
         for key_name in ("key-a", "key-b"):
             mock_publish = AsyncMock(return_value="a" * 64)
-            with patch("aya.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.publish = mock_publish
                 result = runner.invoke(
                     app,
@@ -2675,14 +2736,8 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
         monkeypatch.setenv("AYA_FORMAT", "json")
 
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
-
         mock_publish = AsyncMock(return_value="d" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result1 = runner.invoke(
                 app,
@@ -2706,7 +2761,7 @@ class TestIdempotency:
 
         # Second send with same key — cached
         mock_publish2 = AsyncMock(return_value="e" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls2:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls2:
             mock_cls2.return_value.publish = mock_publish2
             result2 = runner.invoke(
                 app,
@@ -2736,12 +2791,6 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_HOME", str(aya_home))
         monkeypatch.setenv("AYA_FORMAT", "json")
 
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
-
         # Write an expired cache entry manually
         aya_home.mkdir(parents=True, exist_ok=True)
         expired_time = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
@@ -2754,12 +2803,13 @@ class TestIdempotency:
         }
         (aya_home / "sent_cache.json").write_text(json.dumps(cache))
 
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="after expiry",
             content="hello",
         )
@@ -2767,7 +2817,7 @@ class TestIdempotency:
         packet_file.write_text(pkt.to_json())
 
         mock_publish = AsyncMock(return_value="n" * 64)
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2792,18 +2842,13 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
         monkeypatch.setenv("AYA_FORMAT", "json")
 
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
-
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="no key test",
             content="hello",
         )
@@ -2812,7 +2857,7 @@ class TestIdempotency:
 
         for _ in range(2):
             mock_publish = AsyncMock(return_value="a" * 64)
-            with patch("aya.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.publish = mock_publish
                 result = runner.invoke(
                     app,
@@ -2837,9 +2882,9 @@ class TestRead:
     def packets_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         packets = tmp_path / "packets"
         packets.mkdir()
-        import aya.paths
+        import aya.adapters.paths
 
-        monkeypatch.setattr(aya.paths, "PACKETS_DIR", packets)
+        monkeypatch.setattr(aya.adapters.paths, "PACKETS_DIR", packets)
         return packets
 
     @pytest.fixture
@@ -2860,7 +2905,8 @@ class TestRead:
         local = Identity.generate("default")
         home = Identity.generate("home")
         return Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="markdown body",
             content="# Notes\n\nA short markdown body.",
         )
@@ -2928,12 +2974,13 @@ class TestRead:
         """Non-seed dict content must pass through as a structured object
         in JSON output mode, not be stringified. Callers that pipe
         ``aya read --format json | jq`` should get a real object back."""
-        from aya.packet import ContentType
+        from aya.entities.packet import ContentType
 
         local = Identity.generate("default")
         home = Identity.generate("home")
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="structured payload",
             content_type=ContentType.JSON,
             content={
@@ -2956,12 +3003,13 @@ class TestRead:
     def test_text_format_still_stringifies_json_content(self, packets_dir: Path) -> None:
         """Text mode output hasn't regressed: non-seed dicts still render as
         pretty-printed JSON for human reading."""
-        from aya.packet import ContentType
+        from aya.entities.packet import ContentType
 
         local = Identity.generate("default")
         home = Identity.generate("home")
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="structured payload",
             content_type=ContentType.JSON,
             content={"event": "deployed", "version": "1.2.3"},
@@ -2987,16 +3035,17 @@ class TestDrop:
 
     @pytest.fixture
     def profile_with_sender(self, profile_with_instance: Path, sender: Identity) -> Path:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.trusted_keys["work"] = TrustedKey(
             did=sender.did, label="work", nostr_pubkey=sender.nostr_public_hex
         )
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
         return profile_with_instance
 
     def _signed_packet(self, sender: Identity, to_did: str, intent: str = "Test packet") -> Packet:
         pkt = Packet(
-            **{"from": sender.did, "to": to_did},
+            from_did=sender.did,
+            to_did=to_did,
             intent=intent,
             content="Test content.",
         )
@@ -3005,13 +3054,13 @@ class TestDrop:
     def test_drop_full_id_persists_to_profile(
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3023,19 +3072,19 @@ class TestDrop:
         assert data["dropped"] == packet.id
         assert data["already_dropped"] is False
 
-        reloaded = Profile.load(profile_with_sender)
+        reloaded = load_profile(profile_with_sender)
         assert packet.id in reloaded.dropped_ids
 
     def test_drop_is_idempotent(self, profile_with_sender: Path, sender: Identity) -> None:
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did)
         p.dropped_ids.append(packet.id)
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3046,17 +3095,17 @@ class TestDrop:
         data = json.loads(result.output)
         assert data["already_dropped"] is True
 
-        reloaded = Profile.load(profile_with_sender)
+        reloaded = load_profile(profile_with_sender)
         assert reloaded.dropped_ids.count(packet.id) == 1
 
     def test_drop_resolves_prefix_from_ingested_ids(
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did)
         recent_ts = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         p.ingested_ids.append({"id": packet.id, "ingested_at": recent_ts})
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         # No relay mock — should resolve from ingested_ids without hitting the network
         result = runner.invoke(
@@ -3071,13 +3120,13 @@ class TestDrop:
     def test_drop_resolves_prefix_from_relay_when_not_ingested(
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3100,7 +3149,7 @@ class TestDrop:
             if False:  # pragma: no cover
                 yield
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3126,15 +3175,15 @@ class TestDrop:
     def test_inbox_filters_dropped_packets(
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Stuck packet")
         p.dropped_ids.append(packet.id)
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3149,15 +3198,15 @@ class TestDrop:
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
         """--all should also exclude dropped packets — drop is permanent ignore."""
-        p = Profile.load(profile_with_sender)
+        p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Dropped packet")
         p.dropped_ids.append(packet.id)
-        p.save(profile_with_sender)
+        save_profile(p, profile_with_sender)
 
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3189,7 +3238,7 @@ class TestDrop:
         """
         import asyncio as _asyncio
 
-        monkeypatch.setattr("aya.cli._RELAY_FETCH_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr("aya.adapters.cli.packet_cmds._RELAY_FETCH_TIMEOUT_SECONDS", 0.1)
 
         async def slow_fetch(*args, **kwargs):
             # Simulate a relay that keeps sending packets but each one
@@ -3201,7 +3250,7 @@ class TestDrop:
             if False:  # pragma: no cover
                 yield
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = slow_fetch
             result = runner.invoke(
                 app,
@@ -3230,14 +3279,14 @@ class TestDrop:
         that `RelayClient` raises when all connection retries are exhausted.
         The command should exit non-zero with RELAY_UNREACHABLE in the output.
         """
-        from aya.relay import RelayUnreachableError
+        from aya.adapters.relay import RelayUnreachableError
 
         async def unreachable_fetch(*args, **kwargs):
             raise RelayUnreachableError("wss://relay.example.com")
             if False:  # pragma: no cover
                 yield
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = unreachable_fetch
             result = runner.invoke(
                 app,
@@ -3273,12 +3322,13 @@ class TestSendSignatureValidation:
         self, profile_with_trusted: Path, tmp_path: Path
     ) -> None:
         """Empty-sig packet authored by local instance is auto-signed before send."""
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="hand-edited packet",
             content="hello",
         )
@@ -3293,7 +3343,7 @@ class TestSendSignatureValidation:
             captured["packet"] = packet
             return "e" * 64
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3309,12 +3359,13 @@ class TestSendSignatureValidation:
         self, profile_with_trusted: Path, tmp_path: Path
     ) -> None:
         """Garbage-sig packet authored by local instance is auto-resigned."""
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="bad sig packet",
             content="hello",
         )
@@ -3330,7 +3381,7 @@ class TestSendSignatureValidation:
             captured["packet"] = packet
             return "e" * 64
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3345,12 +3396,13 @@ class TestSendSignatureValidation:
         self, profile_with_trusted: Path, tmp_path: Path
     ) -> None:
         """Empty-sig packet claiming to be from a different sender is refused."""
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         home_key = p.trusted_keys["home"]
         other_sender = Identity.generate("offline")
 
         pkt = Packet(
-            **{"from": other_sender.did, "to": home_key.did},
+            from_did=other_sender.did,
+            to_did=home_key.did,
             intent="forged-looking packet",
             content="hello",
         )
@@ -3365,7 +3417,7 @@ class TestSendSignatureValidation:
             publish_calls += 1
             return "e" * 64
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3386,12 +3438,13 @@ class TestSendSignatureValidation:
         self, profile_with_trusted: Path, tmp_path: Path
     ) -> None:
         """Properly-signed packet sends without modification."""
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="properly signed",
             content="hello",
         ).sign(local)
@@ -3406,7 +3459,7 @@ class TestSendSignatureValidation:
             captured["packet"] = packet
             return "e" * 64
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3422,12 +3475,13 @@ class TestSendSignatureValidation:
     ) -> None:
         """When aya send-raw re-signs in interactive/text mode, the user
         should see a visible notice. Silent mutation is surprising."""
-        p = Profile.load(profile_with_trusted)
+        p = load_profile(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="silent resign",
             content="hello",
         )
@@ -3438,7 +3492,7 @@ class TestSendSignatureValidation:
         async def fake_publish(packet, *args, **kwargs):
             return "e" * 64
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3461,9 +3515,9 @@ class TestSendSignatureValidation:
 
 class TestRelayList:
     def test_list_text_shows_relays_in_order(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://relay.damus.io", "wss://nos.lol"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3476,9 +3530,9 @@ class TestRelayList:
         assert result.output.index("wss://relay.damus.io") < result.output.index("wss://nos.lol")
 
     def test_list_json_shape(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://a.example", "wss://b.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3503,9 +3557,9 @@ class TestRelayList:
 
 class TestRelayAdd:
     def test_add_appends_by_default(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://first.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3521,13 +3575,13 @@ class TestRelayAdd:
         )
         assert result.exit_code == 0, result.output
 
-        reloaded = Profile.load(profile_with_instance)
+        reloaded = load_profile(profile_with_instance)
         assert reloaded.default_relays == ["wss://first.example", "wss://second.example"]
 
     def test_add_first_prepends(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://existing.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3544,13 +3598,13 @@ class TestRelayAdd:
         )
         assert result.exit_code == 0, result.output
 
-        reloaded = Profile.load(profile_with_instance)
+        reloaded = load_profile(profile_with_instance)
         assert reloaded.default_relays == ["wss://new.example", "wss://existing.example"]
 
     def test_add_duplicate_is_noop(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://dup.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3570,7 +3624,7 @@ class TestRelayAdd:
         assert payload["relays"] == ["wss://dup.example"]
 
         # Profile unchanged
-        reloaded = Profile.load(profile_with_instance)
+        reloaded = load_profile(profile_with_instance)
         assert reloaded.default_relays == ["wss://dup.example"]
 
     def test_add_rejects_non_websocket_scheme(self, profile_with_instance: Path) -> None:
@@ -3603,7 +3657,7 @@ class TestRelayAdd:
             ],
         )
         assert result.exit_code == 2, result.output
-        reloaded = Profile.load(profile_with_instance)
+        reloaded = load_profile(profile_with_instance)
         assert "wss://" not in reloaded.default_relays
 
     def test_add_rejects_internal_whitespace(self, profile_with_instance: Path) -> None:
@@ -3625,9 +3679,9 @@ class TestRelayAdd:
 
 class TestRelayRemove:
     def test_remove_by_url(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://a.example", "wss://b.example", "wss://c.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3643,13 +3697,13 @@ class TestRelayRemove:
         )
         assert result.exit_code == 0, result.output
 
-        reloaded = Profile.load(profile_with_instance)
+        reloaded = load_profile(profile_with_instance)
         assert reloaded.default_relays == ["wss://a.example", "wss://c.example"]
 
     def test_remove_by_index(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://a.example", "wss://b.example", "wss://c.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3667,13 +3721,13 @@ class TestRelayRemove:
         payload = json.loads(result.output)
         assert payload["removed"] == "wss://b.example"
 
-        reloaded = Profile.load(profile_with_instance)
+        reloaded = load_profile(profile_with_instance)
         assert reloaded.default_relays == ["wss://a.example", "wss://c.example"]
 
     def test_remove_unknown_url_errors(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://a.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3690,13 +3744,13 @@ class TestRelayRemove:
         assert result.exit_code == 2, result.output
 
         # Profile unchanged
-        reloaded = Profile.load(profile_with_instance)
+        reloaded = load_profile(profile_with_instance)
         assert reloaded.default_relays == ["wss://a.example"]
 
     def test_remove_index_out_of_range_errors(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://only.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3713,9 +3767,9 @@ class TestRelayRemove:
         assert result.exit_code == 2, result.output
 
     def test_remove_last_requires_force(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://only.example"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         # Without --force: refuses
         result = runner.invoke(
@@ -3731,11 +3785,11 @@ class TestRelayRemove:
             ],
         )
         assert result.exit_code == 2, result.output
-        reloaded = Profile.load(profile_with_instance)
+        reloaded = load_profile(profile_with_instance)
         assert reloaded.default_relays == ["wss://only.example"]
 
         # With --force: allowed. The CLI response reports an empty list,
-        # but Profile.load() auto-refills from _DEFAULT_RELAYS on next read
+        # but load_profile() auto-refills from _DEFAULT_RELAYS on next read
         # (safety net in identity.py), so the disk state effectively resets
         # to the bootstrap defaults. We assert on the CLI response directly.
         result = runner.invoke(
@@ -3759,11 +3813,11 @@ class TestRelayRemove:
 
 class TestRelayStatus:
     def test_status_text_shows_instance_and_peers(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://relay.damus.io", "wss://nos.lol"]
         p.trusted_keys["home"] = TrustedKey(did="did:key:test123", label="home", nostr_pubkey=None)
         p.last_checked = {"wss://relay.damus.io": "2026-04-16T12:00:00Z"}
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3779,11 +3833,11 @@ class TestRelayStatus:
         assert "2026-04-16T12:00:00Z" in result.output
 
     def test_status_json_shape(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://relay.damus.io"]
         p.trusted_keys["home"] = TrustedKey(did="did:key:test456", label="home", nostr_pubkey=None)
         p.last_checked = {"wss://relay.damus.io": "2026-04-16T12:00:00Z"}
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3797,10 +3851,10 @@ class TestRelayStatus:
         assert payload["last_checked"] == {"wss://relay.damus.io": "2026-04-16T12:00:00Z"}
 
     def test_status_with_named_instance(self, profile_path: Path) -> None:
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["work"] = Identity.generate("work")
         profile.default_relays = ["wss://relay.example"]
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
         result = runner.invoke(
             app,
@@ -3811,10 +3865,10 @@ class TestRelayStatus:
         assert "wss://relay.example" in result.output
 
     def test_status_with_unknown_instance_errors(self, profile_path: Path) -> None:
-        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile = Profile()
         profile.instances["work"] = Identity.generate("work")
         profile.instances["home"] = Identity.generate("home")
-        profile.save(profile_path)
+        save_profile(profile, profile_path)
 
         result = runner.invoke(
             app,
@@ -3823,9 +3877,9 @@ class TestRelayStatus:
         assert result.exit_code != 0
 
     def test_status_text_no_peers_no_poll(self, profile_with_instance: Path) -> None:
-        p = Profile.load(profile_with_instance)
+        p = load_profile(profile_with_instance)
         p.default_relays = ["wss://relay.damus.io"]
-        p.save(profile_with_instance)
+        save_profile(p, profile_with_instance)
 
         result = runner.invoke(
             app,
@@ -3866,10 +3920,10 @@ class TestMaybeCreateCiWatchRepoParsing:
         }
         with (
             patch("subprocess.run", side_effect=self._make_subprocess_side_effect(responses)),
-            patch("aya.cli.get_active_watches", return_value=[]),
-            patch("aya.cli.add_watch") as mock_add,
+            patch("aya.usecases.watch_chains.get_active_watches", return_value=[]),
+            patch("aya.usecases.watch_chains.add_watch") as mock_add,
         ):
-            from aya.cli import _maybe_create_ci_watch
+            from aya.usecases.watch_chains import _maybe_create_ci_watch
 
             _maybe_create_ci_watch()
             mock_add.assert_called_once()
@@ -3886,10 +3940,10 @@ class TestMaybeCreateCiWatchRepoParsing:
         }
         with (
             patch("subprocess.run", side_effect=self._make_subprocess_side_effect(responses)),
-            patch("aya.cli.get_active_watches", return_value=[]),
-            patch("aya.cli.add_watch") as mock_add,
+            patch("aya.usecases.watch_chains.get_active_watches", return_value=[]),
+            patch("aya.usecases.watch_chains.add_watch") as mock_add,
         ):
-            from aya.cli import _maybe_create_ci_watch
+            from aya.usecases.watch_chains import _maybe_create_ci_watch
 
             _maybe_create_ci_watch()
             mock_add.assert_called_once()
@@ -3905,10 +3959,10 @@ class TestMaybeCreateCiWatchRepoParsing:
         }
         with (
             patch("subprocess.run", side_effect=self._make_subprocess_side_effect(responses)),
-            patch("aya.cli.get_active_watches", return_value=[]) as mock_watches,
-            patch("aya.cli.add_watch") as mock_add,
+            patch("aya.usecases.watch_chains.get_active_watches", return_value=[]) as mock_watches,
+            patch("aya.usecases.watch_chains.add_watch") as mock_add,
         ):
-            from aya.cli import _maybe_create_ci_watch
+            from aya.usecases.watch_chains import _maybe_create_ci_watch
 
             _maybe_create_ci_watch()
             mock_add.assert_not_called()
@@ -3923,10 +3977,10 @@ class TestMaybeCreateCiWatchRepoParsing:
         }
         with (
             patch("subprocess.run", side_effect=self._make_subprocess_side_effect(responses)),
-            patch("aya.cli.get_active_watches", return_value=[]) as mock_watches,
-            patch("aya.cli.add_watch") as mock_add,
+            patch("aya.usecases.watch_chains.get_active_watches", return_value=[]) as mock_watches,
+            patch("aya.usecases.watch_chains.add_watch") as mock_add,
         ):
-            from aya.cli import _maybe_create_ci_watch
+            from aya.usecases.watch_chains import _maybe_create_ci_watch
 
             _maybe_create_ci_watch()
             mock_add.assert_not_called()
@@ -3948,3 +4002,676 @@ class TestCommandHelpCrossReferences:
         result = runner.invoke(app, ["send", "--help"])
         assert result.exit_code == 0, result.output
         assert "send-raw" in result.output
+
+
+# ── silent-failure regressions ───────────────────────────────────────────────
+
+
+@pytest.fixture
+def profile_with_stub_default(profile_path: Path) -> Path:
+    """Profile shaped like a real machine: a labelled instance plus a 'default' stub.
+
+    This is what `aya init --label <name>` leaves behind, and the shape that
+    made every poll silently use the stub's unrelated Nostr keypair.
+    """
+    profile = Profile()
+    profile.instances["default"] = Identity.generate("default")
+    profile.instances["harbor"] = Identity.generate("harbor")
+    save_profile(profile, profile_path)
+    return profile_path
+
+
+class TestInstanceResolution:
+    def test_omitted_as_prefers_sole_non_default_instance(self, profile_with_stub_default: Path):
+        """`--as` omitted must not silently select the leftover 'default' stub."""
+        p = load_profile(profile_with_stub_default)
+        label, reason = p.resolve_instance_name(None)
+        assert label == "harbor"
+        assert reason == "sole-non-default"
+
+    def test_primary_instance_wins(self, profile_with_stub_default: Path):
+        p = load_profile(profile_with_stub_default)
+        p.primary_instance = "default"
+        assert p.resolve_instance_name(None)[0] == "default"
+
+    def test_primary_instance_round_trips(self, profile_with_stub_default: Path):
+        p = load_profile(profile_with_stub_default)
+        p.primary_instance = "harbor"
+        save_profile(p, profile_with_stub_default)
+        assert load_profile(profile_with_stub_default).primary_instance == "harbor"
+
+    def test_ambiguous_resolution_errors_rather_than_guessing(self, profile_path: Path):
+        profile = Profile()
+        profile.instances["work"] = Identity.generate("work")
+        profile.instances["home"] = Identity.generate("home")
+        save_profile(profile, profile_path)
+        p = load_profile(profile_path)
+        with pytest.raises(Exception, match="Multiple instances"):
+            p.resolve_instance_name(None)
+
+    def test_explicit_as_still_honoured(self, profile_with_stub_default: Path):
+        p = load_profile(profile_with_stub_default)
+        assert p.resolve_instance_name("default")[0] == "default"
+
+    def test_use_sets_primary_instance(self, profile_with_stub_default: Path):
+        result = runner.invoke(app, ["use", "harbor", "--profile", str(profile_with_stub_default)])
+        assert result.exit_code == 0, result.output
+        assert load_profile(profile_with_stub_default).primary_instance == "harbor"
+
+    def test_use_rejects_unknown_label(self, profile_with_stub_default: Path):
+        result = runner.invoke(app, ["use", "nope", "--profile", str(profile_with_stub_default)])
+        assert result.exit_code != 0
+
+
+class TestEmptyResultsAreSelfDescribing:
+    """An empty inbox must state which identity and relays produced it."""
+
+    def test_receive_empty_reports_instance_and_relays(self, profile_with_stub_default: Path):
+        async def empty_fetch(*args, **kwargs):
+            return
+            yield  # pragma: no cover
+
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = empty_fetch
+            result = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_stub_default),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["packets"] == []
+        assert payload["instance"] == "harbor"
+        assert payload["relay_reachable"] is True
+        assert payload["relays"]
+
+    def test_receive_unreachable_relay_is_distinguishable_from_empty(
+        self, profile_with_stub_default: Path
+    ):
+        async def failing_fetch(*args, **kwargs):
+            raise OSError("connection refused")
+            yield  # pragma: no cover
+
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = failing_fetch
+            result = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_stub_default),
+                ],
+            )
+        payload = json.loads(result.output)
+        assert payload["packets"] == []
+        assert payload["relay_reachable"] is False
+
+    def test_inbox_empty_reports_instance_and_relays(self, profile_with_stub_default: Path):
+        async def empty_fetch(*args, **kwargs):
+            return
+            yield  # pragma: no cover
+
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = empty_fetch
+            result = runner.invoke(
+                app,
+                ["inbox", "--format", "json", "--profile", str(profile_with_stub_default)],
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["instance"] == "harbor"
+        assert payload["relay_reachable"] is True
+
+    def test_inbox_unreachable_relay_is_distinguishable_from_empty(
+        self, profile_with_stub_default: Path
+    ):
+        async def failing_fetch(*args, **kwargs):
+            raise OSError("connection refused")
+            yield  # pragma: no cover
+
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = failing_fetch
+            result = runner.invoke(
+                app,
+                ["inbox", "--format", "json", "--profile", str(profile_with_stub_default)],
+            )
+        payload = json.loads(result.output)
+        assert payload["relay_reachable"] is False
+
+
+class TestSendBodySources:
+    def test_message_flag_populates_body(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app,
+            [
+                "send",
+                "--to",
+                "home",
+                "--intent",
+                "test",
+                "--message",
+                "# Hello\n\nbody text",
+                "--dry-run",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "body text" in result.output
+
+    def test_empty_body_is_rejected_not_silently_sent(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app,
+            [
+                "send",
+                "--to",
+                "home",
+                "--intent",
+                "test",
+                "--message",
+                "   ",
+                "--dry-run",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+        )
+        assert result.exit_code == 2
+        assert "body is empty" in result.output.lower()
+
+    def test_send_help_documents_every_body_source(self):
+        result = runner.invoke(app, ["send", "--help"])
+        assert result.exit_code == 0
+        for token in ("--message", "--files", "--opener", "stdin"):
+            assert token in plain(result.output)
+
+
+class TestWhoami:
+    def test_whoami_lists_instances_and_peers(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app, ["whoami", "--format", "json", "--profile", str(profile_with_trusted)]
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["active_instance"] == "default"
+        assert [i["label"] for i in payload["instances"]] == ["default"]
+        assert [p["label"] for p in payload["peers"]] == ["home"]
+
+    def test_whoami_marks_ambiguity_instead_of_guessing(self, profile_path: Path):
+        profile = Profile()
+        profile.instances["work"] = Identity.generate("work")
+        profile.instances["home"] = Identity.generate("home")
+        save_profile(profile, profile_path)
+        result = runner.invoke(app, ["whoami", "--format", "json", "--profile", str(profile_path)])
+        payload = json.loads(result.output)
+        assert payload["active_instance"] is None
+        assert "ambiguous" in payload["resolved_by"]
+
+
+# ── outbound log + per-relay delivery ────────────────────────────────────────
+
+
+class TestSentLog:
+    """`aya send` must leave a local trace with per-relay delivery status."""
+
+    def _fake_client(self, report):
+        class FakeClient:
+            last_publish_report = report
+
+            def __init__(self, *a, **kw):
+                type(self).last_publish_report = report
+
+            async def publish(self, packet, pubkey, encrypt=True):
+                return "evt" + packet.id[-8:]
+
+        return FakeClient
+
+    def test_send_records_outbound_packet(self, profile_with_trusted: Path):
+        report = [{"url": "wss://a", "ok": True, "error": None}]
+        with patch("aya.adapters.relay.RelayClient", self._fake_client(report)):
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "hello",
+                    "-m",
+                    "body",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["relays_ok"] == ["wss://a"]
+        assert payload["relays_failed"] == []
+
+        saved = load_profile(profile_with_trusted)
+        assert len(saved.sent_ids) == 1
+        assert saved.sent_ids[0]["to_label"] == "home"
+        assert saved.sent_ids[0]["intent"] == "hello"
+
+    def test_partial_delivery_is_reported_not_hidden(self, profile_with_trusted: Path):
+        """A relay that rejected must be named — publish succeeds if any accepts."""
+        report = [
+            {"url": "wss://good", "ok": True, "error": None},
+            {"url": "wss://bad", "ok": False, "error": "503"},
+        ]
+        with patch("aya.adapters.relay.RelayClient", self._fake_client(report)):
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "hello",
+                    "-m",
+                    "body",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["relays_ok"] == ["wss://good"]
+        assert payload["relays_failed"] == [{"url": "wss://bad", "error": "503"}]
+
+    def test_sent_command_lists_and_filters(self, profile_with_trusted: Path):
+        report = [
+            {"url": "wss://good", "ok": True, "error": None},
+            {"url": "wss://bad", "ok": False, "error": "503"},
+        ]
+        with patch("aya.adapters.relay.RelayClient", self._fake_client(report)):
+            runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "partial",
+                    "-m",
+                    "b",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        with patch(
+            "aya.adapters.relay.RelayClient",
+            self._fake_client([{"url": "wss://good", "ok": True, "error": None}]),
+        ):
+            runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "clean",
+                    "-m",
+                    "b",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+
+        result = runner.invoke(
+            app, ["sent", "--format", "json", "--profile", str(profile_with_trusted)]
+        )
+        assert result.exit_code == 0, result.output
+        intents = [p["intent"] for p in json.loads(result.output)["packets"]]
+        assert intents == ["clean", "partial"]  # newest first
+
+        result = runner.invoke(
+            app,
+            ["sent", "--failed", "--format", "json", "--profile", str(profile_with_trusted)],
+        )
+        failed = json.loads(result.output)["packets"]
+        assert [p["intent"] for p in failed] == ["partial"]
+
+    def test_sent_empty_by_default(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app, ["sent", "--format", "json", "--profile", str(profile_with_trusted)]
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["packets"] == []
+
+    def test_sent_ids_round_trip(self, profile_with_trusted: Path):
+        p = load_profile(profile_with_trusted)
+        p.sent_ids.append(
+            {
+                "id": "01KZN6N2Q4Q9NHRRQAHN0NFPCB",
+                "sent_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "to_did": "did:key:zAAA",
+                "to_label": "home",
+                "intent": "x",
+                "event_id": "evt",
+                "relays_ok": ["wss://a"],
+                "relays_failed": [],
+            }
+        )
+        save_profile(p, profile_with_trusted)
+        assert len(load_profile(profile_with_trusted).sent_ids) == 1
+
+    def test_sent_ids_pruned_after_ttl(self, profile_with_trusted: Path):
+        p = load_profile(profile_with_trusted)
+        old = (datetime.now(UTC) - timedelta(days=8)).isoformat().replace("+00:00", "Z")
+        p.sent_ids.append(
+            {
+                "id": "01KZN6N2Q4Q9NHRRQAHN0NFPCB",
+                "sent_at": old,
+                "to_did": "did:key:zAAA",
+                "to_label": "home",
+                "intent": "stale",
+                "event_id": "evt",
+                "relays_ok": [],
+                "relays_failed": [],
+            }
+        )
+        save_profile(p, profile_with_trusted)
+        assert load_profile(profile_with_trusted).sent_ids == []
+
+
+class TestDeliverySummary:
+    """The one-line relay summary must not read the same for 2/2 and 1/2."""
+
+    def test_summary_distinguishes_partial_from_complete(self):
+        from aya.adapters.outbox import delivery_summary
+
+        complete = delivery_summary(["wss://a", "wss://b"], 2)
+        partial = delivery_summary(["wss://a"], 2)
+        assert complete != partial
+        assert "2 of 2" in complete
+        assert "1 of 2" in partial
+
+    def test_summary_single_relay_stays_bare(self):
+        from aya.adapters.outbox import delivery_summary
+
+        assert delivery_summary(["wss://a"], 1) == "wss://a"
+
+    def test_send_json_relay_field_reflects_delivery(self, profile_with_trusted: Path):
+        report = [
+            {"url": "wss://good", "ok": True, "error": None},
+            {"url": "wss://bad", "ok": False, "error": "503"},
+        ]
+
+        class FakeClient:
+            last_publish_report = report
+
+            def __init__(self, *a, **kw):
+                pass
+
+            async def publish(self, packet, pubkey, encrypt=True):
+                return "evt" + packet.id[-8:]
+
+        with patch("aya.adapters.relay.RelayClient", FakeClient):
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "x",
+                    "-m",
+                    "b",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert "1 of 2" in json.loads(result.output)["relay"]
+
+    def test_send_help_warns_exit_code_is_not_delivery(self):
+        result = runner.invoke(app, ["send", "--help"])
+        assert "relays_failed" in result.output
+
+
+class TestNotIngestedErrorIsActionable:
+    """A packet visible in `aya inbox` must not error as a bare 'not found'."""
+
+    def test_read_names_the_remedy(self, profile_with_trusted: Path):
+        result = runner.invoke(app, ["read", "--format", "json", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"])
+        assert result.exit_code != 0
+        payload = json.loads(result.output)["error"]
+        assert payload["code"] == "PACKET_NOT_FOUND"
+        assert "aya receive" in payload["message"]
+        assert "inbox" in payload["message"]
+
+    def test_ack_names_the_remedy(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app,
+            [
+                "ack",
+                "01ZZZZZZZZZZZZZZZZZZZZZZZZ",
+                "hi",
+                "--format",
+                "json",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "aya receive" in json.loads(result.output)["error"]["message"]
+
+    def test_identity_less_commands_say_why(self):
+        for cmd in ("read", "packets"):
+            result = runner.invoke(app, [cmd, "--help"])
+            assert "no --as" in plain(result.output), cmd
+
+
+class TestRelayPromotion:
+    """Pairing proves a relay reaches the peer; that fact must be kept."""
+
+    def test_add_relay_appends_once(self, profile_with_instance: Path):
+        p = load_profile(profile_with_instance)
+        p.default_relays = ["wss://a"]
+        assert p.add_relay("wss://b") is True
+        assert p.default_relays == ["wss://a", "wss://b"]
+        assert p.add_relay("wss://b") is False
+
+    def test_first_moves_an_already_present_relay(self, profile_with_instance: Path):
+        p = load_profile(profile_with_instance)
+        p.default_relays = ["wss://a", "wss://b", "wss://c"]
+        assert p.add_relay("wss://c", first=True) is True
+        assert p.default_relays == ["wss://c", "wss://a", "wss://b"]
+
+    def test_first_is_noop_when_already_leading(self, profile_with_instance: Path):
+        p = load_profile(profile_with_instance)
+        p.default_relays = ["wss://a", "wss://b"]
+        assert p.add_relay("wss://a", first=True) is False
+        assert p.default_relays == ["wss://a", "wss://b"]
+
+    def test_relay_add_first_reorders_existing(self, profile_with_instance: Path):
+        p = load_profile(profile_with_instance)
+        p.default_relays = ["wss://a.example.com", "wss://b.example.com"]
+        save_profile(p, profile_with_instance)
+        result = runner.invoke(
+            app,
+            [
+                "relay",
+                "add",
+                "wss://b.example.com",
+                "--first",
+                "--format",
+                "json",
+                "--profile",
+                str(profile_with_instance),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert load_profile(profile_with_instance).default_relays[0] == "wss://b.example.com"
+
+    def test_pairing_promotes_the_relay_it_used(self, profile_with_instance: Path):
+        p = load_profile(profile_with_instance)
+        p.default_relays = ["wss://public.example.com"]
+        save_profile(p, profile_with_instance)
+
+        peer = Identity.generate("bob")
+        trusted = TrustedKey(did=peer.did, label="", nostr_pubkey=peer.nostr_public_hex)
+        from aya.adapters.cli._kernel import _record_pairing
+
+        p = load_profile(profile_with_instance)
+        promoted = _record_pairing(
+            p, profile_with_instance, "bob", trusted, ["wss://private.example.com"]
+        )
+        assert promoted == "wss://private.example.com"
+
+        saved = load_profile(profile_with_instance)
+        assert saved.default_relays[0] == "wss://private.example.com"
+        assert "wss://public.example.com" in saved.default_relays  # fallback kept
+        assert saved.trusted_keys["bob"].label == "bob"
+
+    def test_pairing_over_existing_primary_reports_no_change(self, profile_with_instance: Path):
+        p = load_profile(profile_with_instance)
+        p.default_relays = ["wss://a.example.com", "wss://b.example.com"]
+        save_profile(p, profile_with_instance)
+        peer = Identity.generate("bob")
+        trusted = TrustedKey(did=peer.did, label="", nostr_pubkey=peer.nostr_public_hex)
+        from aya.adapters.cli._kernel import _record_pairing
+
+        p = load_profile(profile_with_instance)
+        assert (
+            _record_pairing(p, profile_with_instance, "bob", trusted, ["wss://a.example.com"])
+            is None
+        )
+
+
+class TestReceivePersistGuard:
+    """A failed body write must not advance the ingest cursor."""
+
+    def test_cursor_not_advanced_when_persist_fails(self, profile_with_trusted: Path):
+        p = load_profile(profile_with_trusted)
+        sender = Identity.generate("home")
+        p.trusted_keys["home"] = TrustedKey(
+            did=sender.did, label="home", nostr_pubkey=sender.nostr_public_hex
+        )
+        save_profile(p, profile_with_trusted)
+
+        packet = Packet(
+            from_did=sender.did,
+            to_did=p.instances["default"].did,
+            intent="persist-fail",
+            content="body",
+        ).sign(sender)
+
+        async def fetch(*a, **kw):
+            yield packet
+
+        with (
+            patch("aya.adapters.relay.RelayClient") as mock_cls,
+            patch("aya.usecases.relay_ops.ingest_packet", return_value=False),
+        ):
+            mock_cls.return_value.fetch_pending = fetch
+            result = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)["packets"][0]
+        assert summary["ingested"] is False
+        assert summary["error"] == "persist_failed"
+        assert load_profile(profile_with_trusted).ingested_ids == []
+
+
+class TestDropSurvivesReceive:
+    """`aya drop` must stop a packet resurfacing on *every* path, not just inbox."""
+
+    def test_dropped_packet_is_not_reingested(self, profile_with_trusted: Path):
+        p = load_profile(profile_with_trusted)
+        sender = Identity.generate("home")
+        p.trusted_keys["home"] = TrustedKey(
+            did=sender.did, label="home", nostr_pubkey=sender.nostr_public_hex
+        )
+        save_profile(p, profile_with_trusted)
+
+        packet = Packet(
+            from_did=sender.did,
+            to_did=p.instances["default"].did,
+            intent="spam",
+            content="unwanted",
+        ).sign(sender)
+
+        async def fetch(*a, **kw):
+            yield packet
+
+        # Drop it, then poll. It must not come back.
+        p = load_profile(profile_with_trusted)
+        p.dropped_ids.append(packet.id)
+        save_profile(p, profile_with_trusted)
+
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = fetch
+            received = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+            listed = runner.invoke(
+                app,
+                ["inbox", "--format", "json", "--profile", str(profile_with_trusted)],
+            )
+
+        assert received.exit_code == 0, received.output
+        assert json.loads(received.output)["packets"] == []
+        assert json.loads(listed.output)["packets"] == []
+        assert load_profile(profile_with_trusted).ingested_ids == []
+
+
+class TestSendRawRequiresPubkey:
+    """send-raw was the one publish path with no recipient-pubkey check."""
+
+    def test_unpaired_recipient_is_rejected(self, profile_with_instance: Path, tmp_path: Path):
+        p = load_profile(profile_with_instance)
+        p.trusted_keys["bob"] = TrustedKey(did="did:key:zBOB", label="bob", nostr_pubkey=None)
+        save_profile(p, profile_with_instance)
+
+        packet_file = tmp_path / "pkt.json"
+        packet = Packet(
+            from_did=p.instances["default"].did,
+            to_did="did:key:zBOB",
+            intent="orphan",
+            content="body",
+        ).sign(p.instances["default"])
+        packet_file.write_text(packet.to_json())
+
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            result = runner.invoke(
+                app,
+                ["send-raw", str(packet_file), "--profile", str(profile_with_instance)],
+            )
+            # Never reaches the relay: an event addressed to nobody would be
+            # accepted by every relay and matched by none.
+            mock_cls.return_value.publish.assert_not_called()
+
+        assert result.exit_code != 0
+        assert "Nostr pubkey" in result.output

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
-import sys
 from datetime import datetime, timedelta
 from typing import Any, cast
+
+from aya.adapters import clock
 
 from .display import _create_alert, _format_watch_alert
 from .providers import _evaluate_auto_remove, poll_watch
@@ -65,29 +66,12 @@ from .types import (
 logger = logging.getLogger(__name__)
 
 
-def _dt_now(tz: object) -> datetime:
-    """Resolve ``datetime.now`` through the package namespace.
-
-    Tests that ``patch("aya.scheduler.datetime")`` expect the mock to affect
-    every ``datetime.now()`` call in the old monolithic module.  After the
-    split, ``core.py`` has its own ``datetime`` reference so the patch no
-    longer propagates.  This helper looks up ``datetime`` on the *package*
-    first, falling back to the stdlib class if the attribute is absent or
-    hasn't been patched.
-    """
-    pkg = sys.modules.get("aya.scheduler")
-    dt_cls = getattr(pkg, "datetime", None) if pkg else None
-    if dt_cls is None or dt_cls is datetime:
-        return datetime.now(tz)  # type: ignore[arg-type]
-    return dt_cls.now(tz)  # type: ignore[no-any-return]
-
-
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
 
 def add_reminder(message: str, due_text: str, tags: str = "") -> SchedulerItem:
     """Add a one-shot reminder. Returns the created item."""
-    now = _dt_now(_get_local_tz())
+    now = clock.now(_get_local_tz())
     due = parse_due(due_text, now)
     item: SchedulerItem = {
         "id": _new_id(),
@@ -108,17 +92,22 @@ def add_reminder(message: str, due_text: str, tags: str = "") -> SchedulerItem:
     return item
 
 
-def add_watch(
+def validate_watch(
     provider: str,
     target: str,
-    message: str,
-    tags: str = "",
     condition: str = "",
     interval: int = 30,
-    remove_when: str = "",
-) -> SchedulerItem:
-    """Add a condition-based watch. Returns the created item."""
-    now = _dt_now(_get_local_tz())
+) -> tuple[GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig, str, int]:
+    """Validate a watch spec and normalise it to ``(config, condition, interval)``.
+
+    Separate from :func:`add_watch` so a caller can check a spec without
+    creating anything — the CLI needs that for ``--dry-run``. Keeping it here
+    means there is one definition of which providers and conditions are valid;
+    the CLI previously re-implemented a narrower gate that never learned about
+    ``ci-checks`` and rejected specs the MCP surface accepted.
+
+    Raises ``ValueError`` describing the problem.
+    """
     watch_config: GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig
 
     if provider == "github-pr":
@@ -169,6 +158,22 @@ def add_watch(
             )
     else:
         raise ValueError(f"Unknown provider: {provider}")
+
+    return watch_config, condition, interval
+
+
+def add_watch(
+    provider: str,
+    target: str,
+    message: str,
+    tags: str = "",
+    condition: str = "",
+    interval: int = 30,
+    remove_when: str = "",
+) -> SchedulerItem:
+    """Add a condition-based watch. Returns the created item."""
+    now = clock.now(_get_local_tz())
+    watch_config, condition, interval = validate_watch(provider, target, condition, interval)
 
     item: SchedulerItem = {
         "id": _new_id(),
@@ -221,7 +226,7 @@ def add_recurring(
     if only_during:
         parse_work_hours(only_during)  # raises ValueError on bad input
 
-    now = _dt_now(_get_local_tz())
+    now = clock.now(_get_local_tz())
     item: SchedulerItem = {
         "id": _new_id(),
         "type": "recurring",
@@ -253,7 +258,7 @@ def add_seed_alert(
     packet_id: str = "",
 ) -> AlertItem:
     """Persist a seed packet as an unseen alert so it surfaces via pending on next session start."""
-    now = _dt_now(_get_local_tz())
+    now = clock.now(_get_local_tz())
     detail_lines = [f"**From:** {from_label}", f"**Opener:** {opener}"]
     if context_summary:
         detail_lines.append(f"**Context:** {context_summary}")
@@ -304,7 +309,7 @@ def check_due() -> tuple[list[SchedulerItem], list[AlertItem]]:
     """
     with _file_lock():
         items = _load_items_unlocked()
-        now = _dt_now(_get_local_tz())
+        now = clock.now(_get_local_tz())
         modified = False
         due_items = []
 
@@ -342,7 +347,7 @@ def dismiss_item(item_id: str) -> SchedulerItem:
             raise ValueError(f"Item {item_id} not found.")
         item["status"] = "dismissed"
         if item["type"] == "reminder":
-            item["delivered_at"] = _dt_now(_get_local_tz()).isoformat()
+            item["delivered_at"] = clock.now(_get_local_tz()).isoformat()
         _atomic_write(_scheduler_file(), _scheduler_data(items))
     return item
 
@@ -354,7 +359,7 @@ def snooze_item(item_id: str, until_text: str) -> tuple[SchedulerItem, datetime]
         item = _find(items, item_id)
         if not item:
             raise ValueError(f"Item {item_id} not found.")
-        now = _dt_now(_get_local_tz())
+        now = clock.now(_get_local_tz())
         snooze_until = parse_due(until_text, now)
         item["status"] = "snoozed"
         item["snoozed_until"] = snooze_until.isoformat()
@@ -374,7 +379,7 @@ def run_poll(quiet: bool = False) -> None:
     with _file_lock():
         items = _load_items_unlocked()
         alerts = _load_alerts_unlocked()
-        now = _dt_now(_get_local_tz())
+        now = clock.now(_get_local_tz())
         items_modified = False
         alerts_modified = False
         existing_sources = {a["source_item_id"] for a in alerts if not a.get("seen")}
@@ -511,7 +516,7 @@ def expire_old_alerts(max_age_days: int = _ALERT_MAX_AGE_DAYS) -> int:
         alerts = _load_alerts_unlocked()
         if not alerts:
             return 0
-        now = _dt_now(_get_local_tz())
+        now = clock.now(_get_local_tz())
         cutoff = now - timedelta(days=max_age_days)
         original_count = len(alerts)
         alerts = [a for a in alerts if datetime.fromisoformat(a["created_at"]) > cutoff]
@@ -592,7 +597,7 @@ def get_pending(
 
     # Stamp delivery receipts on claimed alerts
     if claimed_ids:
-        now = _dt_now(_get_local_tz())
+        now = clock.now(_get_local_tz())
         with _file_lock():
             alerts = _load_alerts_unlocked()
             for a in alerts:
@@ -622,7 +627,7 @@ def get_session_crons() -> tuple[list[SchedulerItem], list[SuppressedCron]]:
     Returns (active_crons, suppressed_crons) without any alert side effects.
     Use this when you only need crons — get_pending() also claims alerts.
     """
-    now = _dt_now(_get_local_tz())
+    now = clock.now(_get_local_tz())
     items = load_items()
     active = [
         i
@@ -661,7 +666,7 @@ def get_due_reminders(now: datetime | None = None) -> list[SchedulerItem]:
     """Return pending reminders that are due. No side effects."""
     items = load_items()
     if now is None:
-        now = _dt_now(_get_local_tz())
+        now = clock.now(_get_local_tz())
     due = []
     for item in items:
         if item.get("type") != "reminder" or item.get("status") not in ("pending", "snoozed"):
@@ -684,7 +689,7 @@ def get_upcoming_reminders(now: datetime | None = None, hours: int = 24) -> list
     """Return pending reminders due within N hours."""
     items = load_items()
     if now is None:
-        now = _dt_now(_get_local_tz())
+        now = clock.now(_get_local_tz())
     horizon = now + timedelta(hours=hours)
     upcoming = []
     for item in items:
@@ -713,7 +718,7 @@ def get_scheduler_status() -> SchedulerStatus:
     """
     items = load_items()
     alerts = load_alerts()
-    now = _dt_now(_get_local_tz())
+    now = clock.now(_get_local_tz())
 
     active_watches = [i for i in items if i.get("type") == "watch" and i.get("status") == "active"]
     pending_reminders = [

@@ -2,7 +2,201 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--format json` is no longer coloured.** `_output_json` and `_emit_error`
+  wrote through the Rich console, which highlights JSON-looking text — so in
+  any environment that forces colour (much of CI) both stdout and stderr
+  carried ANSI escapes and no parser could read them. Machine output now
+  bypasses the renderer entirely.
+- **`aya drop` now survives a poll.** The drop filter was applied in the two
+  `inbox` paths and neither `receive` path, so a dropped packet vanished from
+  the listing and was silently re-ingested by the very next poll. All four
+  filter sites (CLI and MCP, receive and inbox) now share `aya/usecases/triage.py`.
+- **The CLI accepts every provider the scheduler supports.** `schedule watch`
+  re-implemented a narrower provider gate that never learned about
+  `ci-checks`, so the CLI rejected specs the MCP surface accepted. Both now
+  call `scheduler.validate_watch`, which also means condition validation
+  reaches the CLI for the first time. Invalid specs now exit 2
+  (`INVALID_ARGUMENT`) rather than 1, matching the other argument errors.
+- **The profile is written atomically, under a lock, at 0600.** `save()` was
+  read-then-`write_text`, so a crash mid-write truncated the only copy of every
+  instance private key, and two writers spanning a relay round-trip silently
+  lost one side's changes. The scheduler already had lock + atomic-replace;
+  those primitives now live in `aya/adapters/atomic.py` and both use them. The mode is
+  applied before the rename, closing the window where the key file existed at
+  the umask default.
+- **Packet ledgers moved out of the key file** into `ledger.json`, with their
+  own lock and TTL. Every poll used to rewrite the profile just to advance a
+  cursor — the highest-frequency write against the highest-value payload. The
+  profile is now only rewritten when it actually changes. Existing profiles
+  migrate on first save; entries with unparseable timestamps are kept rather
+  than silently dropped, since dropping one causes the packet to be re-ingested.
+- **`publish` no longer sleeps after its final retry.** A fully rate-limited
+  relay waited out one last backoff (up to the 60s cap) with no attempt left
+  to make, delaying an already-failed publish. Found once the retry loop
+  became testable.
+- **`aya relay add --first` now reorders a relay that is already present.** It
+  returned "already in default_relays — no change", so "make this primary" was
+  a silent no-op whenever the relay existed further down the list.
+- **Polling no longer fails silently.** `receive` and `inbox` (CLI and MCP)
+  now return `instance`, `relays`, and `relay_reachable` alongside `packets`.
+  An empty result used to be indistinguishable from polling the wrong
+  identity or an unreachable relay — all three returned `{"packets": []}`
+  with exit 0. `inbox` also gained the relay error handling `receive`
+  already had, instead of letting the exception escape.
+- **`--as` no longer defaults to the literal `default` instance.** On a
+  profile holding both a real instance and a leftover `default` stub from
+  `aya init`, every command silently acted as the stub — a different Nostr
+  keypair, so every poll came back empty. Omitting `--as` now resolves the
+  primary instance (`aya use`, else the sole instance, else the sole
+  non-`default` one) and *errors* when the choice is ambiguous rather than
+  guessing. The MCP tools no longer default `instance` to `"default"`.
+- **`aya send` no longer ships an empty packet.** The body came from
+  `sys.stdin.read()` with no guard and no mention in `--help`; with no pipe
+  it hung on a terminal or sent an empty body in a script. Missing or
+  whitespace-only bodies now exit 2 and name every way to supply one.
+- **`aya receive` no longer aborts mid-poll without a terminal.** The
+  per-packet confirm had no non-interactive fallback. It now exits 2 naming
+  `--auto-ingest`/`--yes`, and only when packets actually need confirming.
+
+### Added
+
+- **`aya pair` now makes the relay it paired over the primary relay.** Pairing
+  proves both sides can reach that relay, but the fact was discarded — so on a
+  fresh install (where `aya init` seeds only public relays) every later
+  `send`/`receive` needed `--relay` to rediscover it. Existing relays are kept
+  as fallbacks. This is what made the flag feel mandatory.
+- `aya sent` — the outbound log, counterpart to `aya inbox`. `aya send` left
+  no local trace at all, so "did that actually go out?" was unanswerable
+  (`aya packets` lists received packets only). Entries record recipient,
+  intent, event id, and per-relay delivery, and are pruned after 7 days.
+  `--failed` filters to packets some relay rejected. Sent bodies are now
+  persisted too, so `aya read <id>` works on them. Also exposed as the
+  `aya_sent` MCP tool.
+- **Per-relay delivery reporting on `send` and `ack`.** `publish` succeeds
+  when *any* relay accepts, so a partial failure was invisible — if the peer
+  polled only the rejecting relay, the packet was silently undeliverable
+  despite a green checkmark. Both commands now list each relay with its
+  outcome, warn when delivery was partial, and return `relays_ok` /
+  `relays_failed` under `--format json` and from the MCP tools.
+- `aya whoami` — active local identity, how it was resolved, every
+  registered instance, every trusted peer, and the relay list. Previously
+  the only way to enumerate instances was to pass a bad `--as` and read the
+  error.
+- `aya use <label>` — set the instance commands act as when `--as` is omitted.
+- `aya send --message/-m` — supply a markdown body inline. `--help` now
+  documents all four body sources (`--seed --opener`, `-m`, `--files`, stdin).
+- `relay` parameter on `aya_send`, `aya_receive`, `aya_inbox`, and `aya_ack`,
+  matching the CLI's `--relay`. There was previously no way to override the
+  relay over MCP at all.
+- `from_label` on `aya_inbox` results, removing the `aya_relay_status`
+  round-trip previously needed to map a sender DID to a human label.
+
+#### Testing
+
+- **`tests/conftest.py` isolates `AYA_HOME` for every test.** The suite wrote
+  packet files into the developer's real `~/.aya/packets`, where `ingest`
+  unlinks anything older than 7 days — running the tests destroyed real
+  packets. Isolation was previously opt-in per test class and inconsistent.
+- **`tests/test_architecture.py`** makes the layering executable: entities
+  import no outer layer, entities and usecases import no typer/rich/mcp,
+  usecases import no driving adapter, the two surfaces do not import each
+  other, and no module sits loose at the package root.
+- **Advertised MCP tools must have a handler.** A tool in `_TOOLS` with no
+  `_HANDLERS` entry returned `{"error": "Unknown tool"}` as a *successful*
+  result, and `_HANDLERS` appeared in no test at all.
+- **`adapters/clock.py` is the one place time is read.** `datetime.now()` was
+  called at ~40 sites, so time-dependent behaviour could only be tested by
+  patching `datetime` itself — which had already grown production
+  scaffolding (`scheduler.core._dt_now`, and a `datetime` re-export commented
+  "exposed for test monkeypatching"). Both are deleted; freezing time is now
+  one patch of `aya.adapters.clock.now`.
+- **`RelayClient` takes an injectable `sleep`.** One rejection test spent
+  29.4s in real `asyncio.sleep` — 74% of the suite — which is why the retry
+  matrix had no other coverage. Suite runtime: 42.6s → ~20s.
+
+### Changed
+
+#### Package structure
+
+The package is laid out in Clean Architecture layers, and the boundaries are
+enforced by `tests/test_architecture.py` rather than left to convention:
+
+    entities/   packet, identity, encryption            no I/O, no framework
+    usecases/   relay_ops, ingest, pair, resolve,
+                triage, status, context, log,
+                watch_chains                            no printing, no exit codes
+    adapters/   cli/, mcp_server, status_view, relay,
+                clock, paths, atomic, ledger, outbox,
+                profile_store, config, credentials,
+                install, rewake                         everything external
+    scheduler/  unchanged bounded subsystem, layered internally
+
+**Breaking: every module path changes.** The console entry point is now
+`aya.adapters.cli:app`.
+
+- **The four relay operations are single-sourced.** `send`, `ack`, `receive`
+  and `inbox` existed twice — a Typer command and an MCP handler, each with
+  its own packet construction, signing, publishing, cursor advancement and
+  ledger bookkeeping. `usecases/relay_ops.py` is that logic once; both
+  surfaces became adapters over it. `mcp_server` no longer imports from `cli`,
+  so the two are peers rather than a cycle.
+- **`cli.py` is a package.** It was 3,804 lines holding 43 commands, their
+  helpers, and a 635-line watch-chain state machine that was application
+  logic, not presentation. Now: `_kernel` (app, sub-apps, plumbing),
+  `_render` (all terminal output), and one module per command group —
+  `send_cmds`, `poll_cmds`, `packet_cmds`, `pair_cmds`, `schedule_cmds`,
+  `config_cmds`, `identity_cmds`, `hook_cmds`, `workspace_cmds`. Largest is
+  500 lines.
+- **Profile no longer persists itself.** `load_profile` / `save_profile` live
+  in `adapters/profile_store.py`; the entity keeps `resolve_instance_name`,
+  `add_relay` and `is_trusted` — rules about the data, not about where it
+  lives. **Breaking: `Profile.load` and `Profile.save` are gone.**
+- **`aya status` gathers and renders separately.** Gathering stays in
+  `usecases/status.py`; the JSON, plain and Rich presenters moved to
+  `adapters/status_view.py`.
+
+#### Type checking
+
+- **The whole package is type-checked.** Six modules — the six largest — were
+  excluded from mypy under a note about pre-existing errors. The exclusion
+  list is gone and `mypy src/aya/` passes strict on every file.
+- **Breaking:** `Packet` is constructed with `from_did=` / `to_did=` rather
+  than `**{"from": …, "to": …}`. The model has always accepted the field
+  names via `populate_by_name`; the aliased-dict form defeated type checking
+  at 62 call sites. The wire format is unchanged.
+- Watch-chain bookkeeping keys are declared on `SchedulerItem` alongside the
+  reminder, watch and recurring variants, instead of every helper taking
+  `dict[str, Any]`.
+
+#### Other
+
+- `aya_inbox` and `aya_receive` return `{"packets": [...], ...}` instead of a
+  bare list, matching the CLI. **Breaking** for callers that indexed the
+  result directly.
+- `aya relay status` reports the resolved instance label rather than echoing
+  the caller's argument.
+
 ### Removed
+
+Dead code and back-compat shims with no remaining consumers. There is no
+migration path from these — they are gone, not deprecated.
+
+- `aya/profile.py` and its tests. Despite the name it held no `Profile` (that
+  is in `identity.py`) — it was an assistant persona generator with no
+  production caller, whose `recent_activity` was always empty, making the
+  activity-themed naming unreachable. `aya status` reads the persona keys
+  straight from the profile JSON and is unaffected.
+- `Profile.alias` / `.ship_mind_name` / `.user_name` — required constructor
+  arguments that `save()` never wrote back.
+- `Profile.default_relay` and `RelayClient.relay_url` back-compat aliases,
+  `Profile.active_instance`, and `install.py`'s `cron_line` property.
+- Legacy profile migrations: the `assistant_sync` → `aya` rename, the
+  `default_relay` string → `default_relays` list coercion, bare-string entries
+  in `ingested_ids`, and reading ledgers from inside `profile.json`.
+- `AyaPaths` — an injection abstraction added in the same series with no
+  callers. The dynamic path constants it wrapped are the live interface.
 
 - `aya pack` — `aya send` is the canonical pack-and-publish flow. The pack
   command had no callers in skills, hooks, or MCP — its help even redirected

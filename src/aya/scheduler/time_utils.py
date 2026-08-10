@@ -9,6 +9,8 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from aya.adapters import clock
+
 logger = logging.getLogger(__name__)
 
 # ── timezone ─────────────────────────────────────────────────────────────────
@@ -123,7 +125,7 @@ def parse_due(text: str, now: datetime | None = None) -> datetime:
     weekday + time, eod/end of day.
     """
     if now is None:
-        now = datetime.now(_get_local_tz())
+        now = clock.now(_get_local_tz())
 
     # Try ISO 8601 first (before lowercasing — the 'T' separator is case-sensitive).
     # fromisoformat() handles timezone offsets like -06:00 correctly in Python 3.7+.
@@ -234,7 +236,7 @@ def is_within_work_hours(only_during: str, now: datetime | None = None) -> bool:
     if not only_during:
         return True
     if now is None:
-        now = datetime.now(_get_local_tz())
+        now = clock.now(_get_local_tz())
     (sh, sm), (eh, em) = parse_work_hours(only_during)
     start_minutes = sh * 60 + sm
     end_minutes = eh * 60 + em
@@ -259,7 +261,7 @@ def record_activity(now: datetime | None = None) -> None:
     from .storage import _activity_file, _atomic_write, _file_lock, write_session_lock
 
     if now is None:
-        now = datetime.now(_get_local_tz())
+        now = clock.now(_get_local_tz())
     path = _activity_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock():
@@ -305,7 +307,7 @@ def is_idle(threshold_str: str, now: datetime | None = None) -> bool:
         logger.debug("idle check: threshold=%s, last_activity=never, idle=False", threshold_str)
         return False
     if now is None:
-        now = datetime.now(_get_local_tz())
+        now = clock.now(_get_local_tz())
     result = (now - last) >= threshold
     logger.debug(
         "idle check: threshold=%s, last_activity=%s, idle=%s",

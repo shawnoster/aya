@@ -143,7 +143,6 @@ class InstallResult:
     opencode_plugin_already_present: bool = False
     errors: list[str] = field(default_factory=list)
 
-    @property
     def cron_line(self) -> str:
         """Backwards-compat: first line of cron_lines, or empty string."""
         return self.cron_lines[0] if self.cron_lines else ""

@@ -7,11 +7,28 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from aya.mcp_server import _TOOLS, call_tool
+from aya.adapters.mcp_server import _TOOLS, call_tool
+from aya.adapters.profile_store import save_profile
 
 # ---------------------------------------------------------------------------
 # list_tools
 # ---------------------------------------------------------------------------
+
+
+def test_every_advertised_tool_has_a_handler():
+    """A tool in _TOOLS with no _HANDLERS entry fails at runtime, not in CI.
+
+    call_tool returns {"error": "Unknown tool"} as a *successful* TextContent,
+    so the caller sees a normal result and the suite stays green.
+    """
+    from aya.adapters.mcp_server import _HANDLERS
+
+    advertised = {t.name for t in _TOOLS}
+    handled = set(_HANDLERS)
+    assert advertised == handled, (
+        f"advertised but unhandled: {sorted(advertised - handled)}; "
+        f"handled but unadvertised: {sorted(handled - advertised)}"
+    )
 
 
 def test_list_tools_names():
@@ -28,6 +45,7 @@ def test_list_tools_names():
         "aya_read",
         "aya_config_set",
         "aya_config_show",
+        "aya_sent",
         "aya_packets",
         "aya_relay_status",
     }
@@ -50,7 +68,7 @@ def _mock_gather_status(monkeypatch):
     """Patch _gather_status so we don't need a real profile on disk."""
     from datetime import UTC, datetime
 
-    from aya.credentials import CredentialsReport
+    from aya.adapters.credentials import CredentialsReport
 
     fake_data = {
         "now_local": datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
@@ -66,7 +84,7 @@ def _mock_gather_status(monkeypatch):
         "upcoming": [],
         "active_watches": [],
     }
-    monkeypatch.setattr("aya.status._gather_status", lambda: fake_data)
+    monkeypatch.setattr("aya.usecases.status._gather_status", lambda: fake_data)
 
 
 @pytest.mark.usefixtures("_mock_gather_status")
@@ -117,14 +135,11 @@ async def test_schedule_remind_tool(tmp_path, monkeypatch):
 
 async def test_send_tool():
     """aya_send builds a packet and publishes it via a mocked RelayClient."""
-    from aya.identity import Identity, Profile, TrustedKey
+    from aya.entities.identity import Identity, Profile, TrustedKey
 
     fake_identity = Identity.generate("default")
     peer_identity = Identity.generate("peer")
     fake_profile = Profile(
-        alias="Test",
-        ship_mind_name="GSV Test",
-        user_name="Tester",
         instances={"default": fake_identity},
         trusted_keys={
             "peer": TrustedKey(
@@ -141,8 +156,8 @@ async def test_send_tool():
     mock_publish = AsyncMock(return_value="abc123eventid")
 
     with (
-        patch("aya.mcp_server._load_profile", return_value=fake_profile),
-        patch("aya.relay.RelayClient.publish", mock_publish),
+        patch("aya.adapters.mcp_server._load_profile", return_value=fake_profile),
+        patch("aya.adapters.relay.RelayClient.publish", mock_publish),
     ):
         result = await call_tool(
             "aya_send",
@@ -162,14 +177,11 @@ async def test_send_tool():
 
 async def test_send_tool_with_in_reply_to(tmp_path):
     """aya_send with in_reply_to sets the field on the published packet."""
-    from aya.identity import Identity, Profile, TrustedKey
+    from aya.entities.identity import Identity, Profile, TrustedKey
 
     fake_identity = Identity.generate("default")
     peer_identity = Identity.generate("peer")
     fake_profile = Profile(
-        alias="Test",
-        ship_mind_name="",
-        user_name="Tester",
         instances={"default": fake_identity},
         trusted_keys={
             "peer": TrustedKey(
@@ -186,8 +198,8 @@ async def test_send_tool_with_in_reply_to(tmp_path):
     mock_publish = AsyncMock(return_value="def456eventid")
 
     with (
-        patch("aya.mcp_server._load_profile", return_value=fake_profile),
-        patch("aya.relay.RelayClient.publish", mock_publish),
+        patch("aya.adapters.mcp_server._load_profile", return_value=fake_profile),
+        patch("aya.adapters.relay.RelayClient.publish", mock_publish),
     ):
         result = await call_tool(
             "aya_send",
@@ -213,31 +225,33 @@ async def test_send_tool_with_in_reply_to(tmp_path):
 
 async def test_inbox_tool(tmp_path):
     """aya_inbox returns a list of packets (empty when relay yields nothing)."""
-    from aya.identity import Identity, Profile, TrustedKey
+    from aya.entities.identity import Identity, Profile, TrustedKey
 
     local = Identity.generate("default")
     home = Identity.generate("home")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     async def mock_fetch(*args, **kwargs):
         if False:  # pragma: no cover
             yield
 
     with (
-        patch("aya.paths.PROFILE_PATH", profile_path),
-        patch("aya.relay.RelayClient") as mock_cls,
+        patch("aya.adapters.paths.PROFILE_PATH", profile_path),
+        patch("aya.adapters.relay.RelayClient") as mock_cls,
     ):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_inbox", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    assert isinstance(payload, list)
+    assert isinstance(payload["packets"], list)
+    assert payload["instance"] == "default"
+    assert payload["relay_reachable"] is True
 
 
 async def test_inbox_filters_dropped_packets(tmp_path):
@@ -247,40 +261,40 @@ async def test_inbox_filters_dropped_packets(tmp_path):
     filter that CLI inbox already applied, causing `aya drop` to silence CLI
     but not MCP.
     """
-    from aya.identity import Identity, Profile, TrustedKey
-    from aya.packet import Packet
+    from aya.entities.identity import Identity, Profile, TrustedKey
+    from aya.entities.packet import Packet
 
     local = Identity.generate("default")
     sender = Identity.generate("work")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["work"] = TrustedKey(
         did=sender.did, label="work", nostr_pubkey=sender.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
 
-    kept = Packet(**{"from": sender.did, "to": local.did}, intent="kept packet").sign(sender)
-    dropped = Packet(**{"from": sender.did, "to": local.did}, intent="dropped packet").sign(sender)
+    kept = Packet(from_did=sender.did, to_did=local.did, intent="kept packet").sign(sender)
+    dropped = Packet(from_did=sender.did, to_did=local.did, intent="dropped packet").sign(sender)
 
     # Pre-populate dropped_ids with the second packet's ID.
     profile.dropped_ids.append(dropped.id)
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     async def mock_fetch(*args, **kwargs):
         yield kept
         yield dropped
 
     with (
-        patch("aya.paths.PROFILE_PATH", profile_path),
-        patch("aya.mcp_server._load_profile", return_value=profile),
-        patch("aya.relay.RelayClient") as mock_cls,
+        patch("aya.adapters.paths.PROFILE_PATH", profile_path),
+        patch("aya.adapters.mcp_server._load_profile", return_value=profile),
+        patch("aya.adapters.relay.RelayClient") as mock_cls,
     ):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_inbox", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    assert isinstance(payload, list)
-    returned_ids = [p["id"] for p in payload]
+    assert isinstance(payload["packets"], list)
+    returned_ids = [p["id"] for p in payload["packets"]]
     assert kept.id in returned_ids, "non-dropped packet must appear in inbox"
     assert dropped.id not in returned_ids, "dropped packet must be filtered from inbox"
 
@@ -291,25 +305,25 @@ async def test_inbox_includes_trusted_flag(tmp_path):
     Ensures callers (agents) can distinguish trusted vs untrusted senders
     without a separate lookup, matching the CLI inbox JSON output.
     """
-    from aya.identity import Identity, Profile, TrustedKey
-    from aya.packet import Packet
+    from aya.entities.identity import Identity, Profile, TrustedKey
+    from aya.entities.packet import Packet
 
     local = Identity.generate("default")
     trusted_sender = Identity.generate("friend")
     untrusted_sender = Identity.generate("stranger")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["friend"] = TrustedKey(
         did=trusted_sender.did, label="friend", nostr_pubkey=trusted_sender.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
-    trusted_pkt = Packet(
-        **{"from": trusted_sender.did, "to": local.did}, intent="trusted msg"
-    ).sign(trusted_sender)
+    trusted_pkt = Packet(from_did=trusted_sender.did, to_did=local.did, intent="trusted msg").sign(
+        trusted_sender
+    )
     untrusted_pkt = Packet(
-        **{"from": untrusted_sender.did, "to": local.did}, intent="untrusted msg"
+        from_did=untrusted_sender.did, to_did=local.did, intent="untrusted msg"
     ).sign(untrusted_sender)
 
     async def mock_fetch(*args, **kwargs):
@@ -317,15 +331,15 @@ async def test_inbox_includes_trusted_flag(tmp_path):
         yield untrusted_pkt
 
     with (
-        patch("aya.paths.PROFILE_PATH", profile_path),
-        patch("aya.mcp_server._load_profile", return_value=profile),
-        patch("aya.relay.RelayClient") as mock_cls,
+        patch("aya.adapters.paths.PROFILE_PATH", profile_path),
+        patch("aya.adapters.mcp_server._load_profile", return_value=profile),
+        patch("aya.adapters.relay.RelayClient") as mock_cls,
     ):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_inbox", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    by_id = {p["id"]: p for p in payload}
+    by_id = {p["id"]: p for p in payload["packets"]}
 
     assert by_id[trusted_pkt.id]["trusted"] is True
     assert by_id[untrusted_pkt.id]["trusted"] is False
@@ -344,39 +358,39 @@ async def test_receive_writes_packet_body_to_disk(tmp_path):
     subsequent polls skipped the event and the content was unreachable via
     ``aya_read``/``aya_packets``.
     """
-    from aya.identity import Identity, Profile, TrustedKey
-    from aya.packet import Packet
+    from aya.entities.identity import Identity, Profile, TrustedKey
+    from aya.entities.packet import Packet
 
     local = Identity.generate("default")
     home = Identity.generate("home")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     packets_dir = tmp_path / "packets"
 
-    signed = Packet(**{"from": home.did, "to": local.did}, intent="regression check").sign(home)
+    signed = Packet(from_did=home.did, to_did=local.did, intent="regression check").sign(home)
 
     async def mock_fetch(*args, **kwargs):
         yield signed
 
     with (
-        patch("aya.paths.PROFILE_PATH", profile_path),
-        patch("aya.paths.PACKETS_DIR", packets_dir),
-        patch("aya.mcp_server._load_profile", return_value=profile),
-        patch("aya.relay.RelayClient") as mock_cls,
+        patch("aya.adapters.paths.PROFILE_PATH", profile_path),
+        patch("aya.adapters.paths.PACKETS_DIR", packets_dir),
+        patch("aya.adapters.mcp_server._load_profile", return_value=profile),
+        patch("aya.adapters.relay.RelayClient") as mock_cls,
     ):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_receive", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    assert len(payload) == 1
-    assert payload[0]["id"] == signed.id
-    assert payload[0]["ingested"] is True
+    assert len(payload["packets"]) == 1
+    assert payload["packets"][0]["id"] == signed.id
+    assert payload["packets"][0]["ingested"] is True
 
     written = packets_dir / f"{signed.id}.json"
     assert written.exists(), "packet body must be persisted to PACKETS_DIR"
@@ -390,45 +404,43 @@ async def test_receive_skips_cursor_when_persist_fails(tmp_path):
     Otherwise we re-introduce the original cursor-advances-but-body-discarded
     bug under a different failure mode (disk full, permission denied, etc.).
     """
-    from aya.identity import Identity, Profile, TrustedKey
-    from aya.packet import Packet
+    from aya.entities.identity import Identity, Profile, TrustedKey
+    from aya.entities.packet import Packet
 
     local = Identity.generate("default")
     home = Identity.generate("home")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
-    # Point PACKETS_DIR at an empty directory; stub _ingest to a no-op so the
-    # expected file never gets written. Mirrors _ingest's real behavior when
-    # its best-effort write step hits OSError (disk full, permissions, etc.)
-    # and is swallowed by its blanket except.
+    # Simulate the body write failing: persist_packet reports False when the
+    # file is not on disk afterwards (disk full, permissions, etc.).
     empty_dir = tmp_path / "packets_empty"
     empty_dir.mkdir()
 
-    signed = Packet(**{"from": home.did, "to": local.did}, intent="persist-fail").sign(home)
+    signed = Packet(from_did=home.did, to_did=local.did, intent="persist-fail").sign(home)
 
     async def mock_fetch(*args, **kwargs):
         yield signed
 
     with (
-        patch("aya.paths.PROFILE_PATH", profile_path),
-        patch("aya.paths.PACKETS_DIR", empty_dir),
-        patch("aya.mcp_server._load_profile", return_value=profile),
-        patch("aya.relay.RelayClient") as mock_cls,
-        patch("aya.ingest.ingest", lambda pkt, *, quiet=False: None),
+        patch("aya.adapters.paths.PROFILE_PATH", profile_path),
+        patch("aya.adapters.paths.PACKETS_DIR", empty_dir),
+        patch("aya.adapters.mcp_server._load_profile", return_value=profile),
+        patch("aya.adapters.relay.RelayClient") as mock_cls,
+        patch("aya.usecases.relay_ops.ingest_packet", lambda pkt, **kw: False),
     ):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_receive", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    assert len(payload) == 1
-    assert payload[0]["ingested"] is False
-    assert payload[0]["error"] == "persist_failed"
+    assert len(payload["packets"]) == 1
+    assert payload["packets"][0]["ingested"] is False
+    assert payload["packets"][0]["error"] == "persist_failed"
     assert all(entry["id"] != signed.id for entry in profile.ingested_ids)
 
 
@@ -441,10 +453,10 @@ async def test_receive_no_since_filter(tmp_path):
     """
     from datetime import UTC, datetime, timedelta
 
-    from aya.identity import Identity, Profile
+    from aya.entities.identity import Identity, Profile
 
     local = Identity.generate("default")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     relay_url = "wss://relay.example.com"
     profile.default_relays = [relay_url]
@@ -453,7 +465,7 @@ async def test_receive_no_since_filter(tmp_path):
         last_check_time.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     fetch_calls: list[tuple] = []
 
@@ -463,9 +475,9 @@ async def test_receive_no_since_filter(tmp_path):
             yield  # makes this an async generator
 
     with (
-        patch("aya.paths.PROFILE_PATH", profile_path),
-        patch("aya.mcp_server._load_profile", return_value=profile),
-        patch("aya.relay.RelayClient") as mock_cls,
+        patch("aya.adapters.paths.PROFILE_PATH", profile_path),
+        patch("aya.adapters.mcp_server._load_profile", return_value=profile),
+        patch("aya.adapters.relay.RelayClient") as mock_cls,
     ):
         mock_cls.return_value.fetch_pending = mock_fetch
         await call_tool("aya_receive", {"instance": "default"})
@@ -483,26 +495,26 @@ async def test_ack_tool(tmp_path):
     """aya_ack sends an ACK packet and returns confirmation."""
     from datetime import UTC, datetime
 
-    from aya.identity import Identity, Profile, TrustedKey
-    from aya.packet import Packet
+    from aya.entities.identity import Identity, Profile, TrustedKey
+    from aya.entities.packet import Packet
 
     local = Identity.generate("default")
     home = Identity.generate("home")
-    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile = Profile()
     profile.instances["default"] = local
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
-    pkt = Packet(**{"from": home.did, "to": local.did}, intent="test")
+    pkt = Packet(from_did=home.did, to_did=local.did, intent="test")
     now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": home.did})
     profile_path = tmp_path / "profile.json"
-    profile.save(profile_path)
+    save_profile(profile, profile_path)
 
     mock_publish = AsyncMock(return_value="ack" * 21 + "aa")
     with (
-        patch("aya.paths.PROFILE_PATH", profile_path),
-        patch("aya.relay.RelayClient") as mock_cls,
+        patch("aya.adapters.paths.PROFILE_PATH", profile_path),
+        patch("aya.adapters.relay.RelayClient") as mock_cls,
     ):
         mock_cls.return_value.publish = mock_publish
         result = await call_tool("aya_ack", {"packet_id": pkt.id})
@@ -520,15 +532,15 @@ async def test_ack_tool(tmp_path):
 
 async def test_read_tool_content_only(tmp_path):
     """aya_read returns content only by default."""
-    from aya.packet import Packet
+    from aya.entities.packet import Packet
 
-    pkt = Packet(**{"from": "did:key:sender", "to": "did:key:receiver"}, intent="test")
+    pkt = Packet(from_did="did:key:sender", to_did="did:key:receiver", intent="test")
     pkt.content = "Hello world"
     packets_dir = tmp_path / "packets"
     packets_dir.mkdir()
     (packets_dir / f"{pkt.id}.json").write_text(pkt.to_json())
 
-    with patch("aya.paths.PACKETS_DIR", packets_dir):
+    with patch("aya.adapters.paths.PACKETS_DIR", packets_dir):
         result = await call_tool("aya_read", {"packet_id": pkt.id[:8]})
 
     payload = json.loads(result[0].text)
@@ -537,15 +549,15 @@ async def test_read_tool_content_only(tmp_path):
 
 async def test_read_tool_with_meta(tmp_path):
     """aya_read with meta=True returns full metadata."""
-    from aya.packet import Packet
+    from aya.entities.packet import Packet
 
-    pkt = Packet(**{"from": "did:key:sender", "to": "did:key:receiver"}, intent="test")
+    pkt = Packet(from_did="did:key:sender", to_did="did:key:receiver", intent="test")
     pkt.content = "Hello world"
     packets_dir = tmp_path / "packets"
     packets_dir.mkdir()
     (packets_dir / f"{pkt.id}.json").write_text(pkt.to_json())
 
-    with patch("aya.paths.PACKETS_DIR", packets_dir):
+    with patch("aya.adapters.paths.PACKETS_DIR", packets_dir):
         result = await call_tool("aya_read", {"packet_id": pkt.id[:8], "meta": True})
 
     payload = json.loads(result[0].text)
@@ -570,7 +582,7 @@ async def test_config_show_tool():
     """aya_config_show returns current config."""
     fake_config = {"instance_label": "home"}
 
-    with patch("aya.config.load_config", return_value=fake_config):
+    with patch("aya.adapters.config.load_config", return_value=fake_config):
         result = await call_tool("aya_config_show", {})
 
     payload = json.loads(result[0].text)
@@ -586,7 +598,7 @@ async def test_config_set_tool():
     """aya_config_set sets a value and returns updated config."""
     fake_result = {"instance_label": "home", "foo": "bar"}
 
-    with patch("aya.config.set_config_value", return_value=fake_result):
+    with patch("aya.adapters.config.set_config_value", return_value=fake_result):
         result = await call_tool("aya_config_set", {"key": "foo", "value": "bar"})
 
     payload = json.loads(result[0].text)
@@ -601,19 +613,20 @@ async def test_config_set_tool():
 
 async def test_packets_tool(tmp_path):
     """aya_packets lists stored packets."""
-    from aya.packet import Packet
+    from aya.entities.packet import Packet
 
     packets_dir = tmp_path / "packets"
     packets_dir.mkdir()
 
     for i in range(3):
         pkt = Packet(
-            **{"from": "did:key:sender", "to": "did:key:receiver"},
+            from_did="did:key:sender",
+            to_did="did:key:receiver",
             intent=f"test-{i}",
         )
         (packets_dir / f"{pkt.id}.json").write_text(pkt.to_json())
 
-    with patch("aya.paths.PACKETS_DIR", packets_dir):
+    with patch("aya.adapters.paths.PACKETS_DIR", packets_dir):
         result = await call_tool("aya_packets", {"limit": 2})
 
     payload = json.loads(result[0].text)
@@ -624,7 +637,7 @@ async def test_packets_tool(tmp_path):
 async def test_packets_tool_empty(tmp_path):
     """aya_packets returns empty list when no packets dir."""
     missing_dir = tmp_path / "no_packets"
-    with patch("aya.paths.PACKETS_DIR", missing_dir):
+    with patch("aya.adapters.paths.PACKETS_DIR", missing_dir):
         result = await call_tool("aya_packets", {})
 
     payload = json.loads(result[0].text)
@@ -638,14 +651,11 @@ async def test_packets_tool_empty(tmp_path):
 
 async def test_relay_status_tool():
     """aya_relay_status returns relay info."""
-    from aya.identity import Identity, Profile, TrustedKey
+    from aya.entities.identity import Identity, Profile, TrustedKey
 
     local = Identity.generate("default")
     peer = Identity.generate("peer")
     profile = Profile(
-        alias="Test",
-        ship_mind_name="",
-        user_name="Tester",
         instances={"default": local},
         trusted_keys={
             "peer": TrustedKey(
@@ -659,7 +669,7 @@ async def test_relay_status_tool():
         last_checked={"wss://relay.example.com": "2026-04-01T10:00:00Z"},
     )
 
-    with patch("aya.mcp_server._load_profile", return_value=profile):
+    with patch("aya.adapters.mcp_server._load_profile", return_value=profile):
         result = await call_tool("aya_relay_status", {"instance": "default"})
 
     payload = json.loads(result[0].text)
@@ -694,8 +704,8 @@ async def test_schedule_watch_tool(tmp_path, monkeypatch):
     sched_file.write_text(json.dumps({"schema_version": 2, "items": []}))
     lock_file = tmp_path / ".scheduler.lock"
 
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", sched_file)
-    monkeypatch.setattr("aya.scheduler.LOCK_FILE", lock_file)
+    monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", sched_file)
+    monkeypatch.setattr("aya.adapters.paths.LOCK_FILE", lock_file)
 
     result = await call_tool(
         "aya_schedule_watch",
@@ -719,8 +729,8 @@ async def test_schedule_watch_tool_with_condition(tmp_path, monkeypatch):
     sched_file.write_text(json.dumps({"schema_version": 2, "items": []}))
     lock_file = tmp_path / ".scheduler.lock"
 
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", sched_file)
-    monkeypatch.setattr("aya.scheduler.LOCK_FILE", lock_file)
+    monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", sched_file)
+    monkeypatch.setattr("aya.adapters.paths.LOCK_FILE", lock_file)
 
     result = await call_tool(
         "aya_schedule_watch",
@@ -753,7 +763,7 @@ def test_schedule_watch_schema_includes_condition():
 
 async def test_tool_error_handling():
     """A tool that raises returns a graceful error response."""
-    with patch("aya.mcp_server._handle_status", side_effect=RuntimeError("boom")):
+    with patch("aya.adapters.mcp_server._handle_status", side_effect=RuntimeError("boom")):
         result = await call_tool("aya_status", {})
 
     payload = json.loads(result[0].text)

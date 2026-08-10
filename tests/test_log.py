@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 import pytest
 from typer.testing import CliRunner
 
-from aya.cli import app
-from aya.log import (
+from aya.adapters.cli import app
+from aya.usecases.log import (
     _PROGRESS_HEADING,
     _append_under_progress,
     _format_entry,
@@ -38,10 +38,10 @@ def _isolate_log(tmp_path, monkeypatch):
     packets_dir = tmp_path / "packets"
     packets_dir.mkdir()
 
-    monkeypatch.setattr("aya.log.LOG_STATE_FILE", log_state)
-    monkeypatch.setattr("aya.log.PACKETS_DIR", packets_dir)
-    monkeypatch.setattr("aya.log.get_notebook_path", lambda: notebook)
-    monkeypatch.setattr("aya.config.CONFIG_PATH", config_path)
+    monkeypatch.setattr("aya.adapters.paths.LOG_STATE_FILE", log_state)
+    monkeypatch.setattr("aya.adapters.paths.PACKETS_DIR", packets_dir)
+    monkeypatch.setattr("aya.usecases.log.get_notebook_path", lambda: notebook)
+    monkeypatch.setattr("aya.adapters.paths.CONFIG_PATH", config_path)
 
 
 # ── format_entry ─────────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ class TestAutoLog:
         now = datetime(2026, 4, 3, 14, 30, tzinfo=MDT)
         # Mock get_last_activity to return recent time
         monkeypatch.setattr(
-            "aya.log.get_last_activity",
+            "aya.usecases.log.get_last_activity",
             lambda: now,
         )
         result = auto_log(now=now)
@@ -253,7 +253,7 @@ class TestLogCLI:
     def test_auto_json_no_activity(self, tmp_path, monkeypatch):
         monkeypatch.setenv("AYA_FORMAT", "json")
         # Ensure no recent activity signal
-        monkeypatch.setattr("aya.log.get_last_activity", lambda: None)
+        monkeypatch.setattr("aya.usecases.log.get_last_activity", lambda: None)
         result = runner.invoke(app, ["log", "auto"])
         assert result.exit_code == 0
         data = json.loads(result.output)

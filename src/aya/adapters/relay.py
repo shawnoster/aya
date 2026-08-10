@@ -7,15 +7,17 @@ import hashlib
 import json
 import logging
 import random
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import websockets
 from coincurve import PrivateKey as Secp256k1PrivateKey
 from websockets.asyncio.client import ClientConnection
 
-from aya.encryption import nip44_decrypt, nip44_encrypt
-from aya.packet import Packet
+from aya.adapters import clock
+from aya.entities.encryption import nip44_decrypt, nip44_encrypt
+from aya.entities.packet import Packet
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +54,10 @@ def _backoff_delay(attempt: int) -> float:
     """
     base = min(_BACKOFF_BASE * (2**attempt), _BACKOFF_CAP)
     jitter = base * _BACKOFF_JITTER * (2 * random.random() - 1)  # noqa: S311
-    return max(0.0, base + jitter)
+    return float(max(0.0, base + jitter))
 
 
-def _is_rate_limited(response: list) -> bool:
+def _is_rate_limited(response: list[Any]) -> bool:
     """Return True if an OK response indicates rate-limiting."""
     return (
         len(response) >= 4
@@ -92,6 +94,7 @@ class RelayClient:
         relay_urls: str | list[str],
         nostr_private_hex: str,
         nostr_public_hex: str,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         if isinstance(relay_urls, str):
             self._relay_urls: list[str] = [relay_urls]
@@ -103,26 +106,12 @@ class RelayClient:
             raise ValueError("relay_urls must contain at least one non-empty string URL")
         self._private_key_hex = nostr_private_hex
         self.public_key_hex = nostr_public_hex
-
-    @property
-    def relay_url(self) -> str:
-        """Return the first relay URL. Backward compatibility alias for _relay_urls[0]."""
-        return self._relay_urls[0]
-
-    @relay_url.setter
-    def relay_url(self, url: str) -> None:
-        """Set the primary relay URL, updating the first entry in _relay_urls.
-
-        This preserves backward compatibility for code that previously did
-        ``client.relay_url = "wss://..."`` when relay_url was a plain attribute.
-        """
-        if not isinstance(url, str) or not url.strip():
-            raise ValueError("relay_url must be a non-empty string URL")
-        if self._relay_urls:
-            self._relay_urls[0] = url
-        else:
-            # Defensive fallback; in normal use _relay_urls is non-empty.
-            self._relay_urls.append(url)
+        # Populated by publish(); one entry per relay, in polling order.
+        self.last_publish_report: list[dict[str, str | bool | None]] = []
+        # Injectable so retry/backoff behaviour can be exercised without
+        # spending the real delay — the retry matrix is otherwise too slow
+        # to cover (one end-to-end rejection test cost 30s of wall clock).
+        self._sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
 
     async def publish(
         self, packet: Packet, recipient_nostr_pubkey: str, encrypt: bool = True
@@ -150,13 +139,22 @@ class RelayClient:
         event = self._build_event(packet, recipient_nostr_pubkey, encrypt=encrypt)
         errors: list[str] = []
         last_event_id: str | None = None
+        # Per-relay outcome for the caller to surface. `publish` succeeds when
+        # *any* relay accepts, so a bare success hides a peer-visible partial
+        # failure: the one relay that rejected may be the only one the
+        # recipient polls.
+        report: list[dict[str, str | bool | None]] = []
 
         for relay_url in self._relay_urls:
-            event_id = await self._publish_to_relay(event, relay_url, packet)
+            event_id, error = await self._publish_to_relay(event, relay_url, packet)
             if event_id is not None:
                 last_event_id = event_id
+                report.append({"url": relay_url, "ok": True, "error": None})
             else:
                 errors.append(relay_url)
+                report.append({"url": relay_url, "ok": False, "error": error})
+
+        self.last_publish_report = report
 
         if last_event_id is not None:
             logger.debug("Packet %s published as event %s", packet.id[:8], last_event_id[:8])
@@ -164,8 +162,13 @@ class RelayClient:
 
         raise RelayError(f"All relays rejected the event: {errors}")
 
-    async def _publish_to_relay(self, event: dict, relay_url: str, packet: Packet) -> str | None:
-        """Try to publish *event* to *relay_url* with retries. Returns event ID or None."""
+    async def _publish_to_relay(
+        self, event: dict[str, Any], relay_url: str, packet: Packet
+    ) -> tuple[str | None, str | None]:
+        """Try to publish *event* to *relay_url* with retries.
+
+        Returns ``(event_id, None)`` on success or ``(None, reason)`` on failure.
+        """
         for attempt in range(_MAX_RETRIES_PUBLISH):
             try:
                 async with websockets.connect(relay_url) as ws:
@@ -178,8 +181,13 @@ class RelayClient:
                             event["id"][:8],
                             relay_url,
                         )
-                        return event["id"]
+                        return event["id"], None
                     if _is_rate_limited(response):
+                        # No sleep after the final attempt — there is no retry
+                        # left to wait for, and the cap makes that a ~60s delay
+                        # on top of an already-failed publish.
+                        if attempt == _MAX_RETRIES_PUBLISH - 1:
+                            break
                         delay = _backoff_delay(attempt)
                         logger.warning(
                             "Rate-limited by %s (attempt %d/%d), retrying in %.1fs",
@@ -188,10 +196,11 @@ class RelayClient:
                             _MAX_RETRIES_PUBLISH,
                             delay,
                         )
-                        await asyncio.sleep(delay)
+                        await self._sleep(delay)
                         continue
                     logger.warning("Relay %s rejected event: %s", relay_url, response)
-                    return None
+                    reason = str(response[3]) if len(response) > 3 and response[3] else "rejected"
+                    return None, reason
             except Exception as exc:
                 if _is_transient_error(exc) and attempt < _MAX_RETRIES_PUBLISH - 1:
                     delay = _backoff_delay(attempt)
@@ -203,11 +212,11 @@ class RelayClient:
                         exc,
                         delay,
                     )
-                    await asyncio.sleep(delay)
+                    await self._sleep(delay)
                 else:
                     logger.warning("Failed to publish to %s: %s", relay_url, exc)
-                    return None
-        return None
+                    return None, f"{type(exc).__name__}: {exc}"
+        return None, "rate-limited (retries exhausted)"
 
     async def fetch_pending(
         self,
@@ -274,7 +283,7 @@ class RelayClient:
         the scan is bounded to the live-packet window.  Pass an explicit *since*
         to override this lower bound.
         """
-        now = datetime.now(UTC)
+        now = clock.now(UTC)
         effective_since = (
             since if since is not None else (now - timedelta(days=_DEFAULT_FETCH_WINDOW_DAYS))
         )
@@ -282,7 +291,7 @@ class RelayClient:
         seen_event_ids: set[str] = set()  # intra-relay dedup for inclusive cursor
 
         while True:
-            filter_: dict = {
+            filter_: dict[str, Any] = {
                 "kinds": [AYA_KIND],
                 "#p": [self.public_key_hex],
                 "limit": _FETCH_PAGE_SIZE,
@@ -295,7 +304,7 @@ class RelayClient:
 
             # Collect the raw events for this page so we can count them and
             # determine the oldest timestamp before deciding whether to paginate.
-            page_events: list[dict] = []
+            page_events: list[dict[str, Any]] = []
             fetch_ok = False
 
             for attempt in range(_MAX_RETRIES_FETCH):
@@ -326,7 +335,7 @@ class RelayClient:
                             exc,
                             delay,
                         )
-                        await asyncio.sleep(delay)
+                        await self._sleep(delay)
                     else:
                         logger.warning("Failed to fetch from %s: %s", relay_url, exc)
 
@@ -434,7 +443,7 @@ class RelayClient:
 
     def _build_event(
         self, packet: Packet, recipient_nostr_pubkey: str, encrypt: bool = True
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Build a NIP-01 compliant Nostr event wrapping the Assistant Sync packet.
 
         When *encrypt* is True (default), the packet JSON is NIP-44 encrypted to the
@@ -448,12 +457,15 @@ class RelayClient:
             content = packet.to_json()
         tags = [
             ["p", recipient_pubkey],
-            ["expiration", str(int(datetime.fromisoformat(packet.expires_at).timestamp()))],
+            [
+                "expiration",
+                str(int(datetime.fromisoformat(packet.expires_at or packet.sent_at).timestamp())),
+            ],
             ["aya-version", "0.2"],
             ["aya-packet-id", packet.id],
         ]
 
-        created_at = int(datetime.now(UTC).timestamp())
+        created_at = int(clock.now(UTC).timestamp())
         event_id = _compute_event_id(
             pubkey=self.public_key_hex,
             created_at=created_at,
@@ -473,7 +485,7 @@ class RelayClient:
             "sig": sig,
         }
 
-    def _build_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> dict:
+    def _build_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> dict[str, Any]:
         content = json.dumps({"packet_id": packet.id, "status": "received"})
         recipient_pubkey = sender_nostr_pubkey
         tags = [
@@ -481,7 +493,7 @@ class RelayClient:
             ["aya-packet-id", packet.id],
             ["aya-version", "0.2"],
         ]
-        created_at = int(datetime.now(UTC).timestamp())
+        created_at = int(clock.now(UTC).timestamp())
         event_id = _compute_event_id(
             pubkey=self.public_key_hex,
             created_at=created_at,
@@ -506,7 +518,7 @@ _EOSE_TIMEOUT = 30.0  # seconds to wait for EOSE before giving up
 
 async def _read_until_eose(
     ws: ClientConnection, sub_id: str, eose_timeout: float = _EOSE_TIMEOUT
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[dict[str, Any]]:
     """Yield EVENT payloads until EOSE (end of stored events) from the relay.
 
     Raises `TimeoutError` if EOSE is not received within *eose_timeout* seconds.
@@ -529,7 +541,7 @@ def _compute_event_id(
     pubkey: str,
     created_at: int,
     kind: int,
-    tags: list,
+    tags: list[Any],
     content: str,
 ) -> str:
     """NIP-01: event ID is SHA-256 of canonical serialisation."""

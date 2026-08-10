@@ -4431,3 +4431,80 @@ class TestNotIngestedErrorIsActionable:
         for cmd in ("read", "packets"):
             result = runner.invoke(app, [cmd, "--help"])
             assert "no --as" in result.output, cmd
+
+
+class TestRelayPromotion:
+    """Pairing proves a relay reaches the peer; that fact must be kept."""
+
+    def test_add_relay_appends_once(self, profile_with_instance: Path):
+        p = Profile.load(profile_with_instance)
+        p.default_relays = ["wss://a"]
+        assert p.add_relay("wss://b") is True
+        assert p.default_relays == ["wss://a", "wss://b"]
+        assert p.add_relay("wss://b") is False
+
+    def test_first_moves_an_already_present_relay(self, profile_with_instance: Path):
+        p = Profile.load(profile_with_instance)
+        p.default_relays = ["wss://a", "wss://b", "wss://c"]
+        assert p.add_relay("wss://c", first=True) is True
+        assert p.default_relays == ["wss://c", "wss://a", "wss://b"]
+
+    def test_first_is_noop_when_already_leading(self, profile_with_instance: Path):
+        p = Profile.load(profile_with_instance)
+        p.default_relays = ["wss://a", "wss://b"]
+        assert p.add_relay("wss://a", first=True) is False
+        assert p.default_relays == ["wss://a", "wss://b"]
+
+    def test_relay_add_first_reorders_existing(self, profile_with_instance: Path):
+        p = Profile.load(profile_with_instance)
+        p.default_relays = ["wss://a.example.com", "wss://b.example.com"]
+        p.save(profile_with_instance)
+        result = runner.invoke(
+            app,
+            [
+                "relay",
+                "add",
+                "wss://b.example.com",
+                "--first",
+                "--format",
+                "json",
+                "--profile",
+                str(profile_with_instance),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert Profile.load(profile_with_instance).default_relays[0] == "wss://b.example.com"
+
+    def test_pairing_promotes_the_relay_it_used(self, profile_with_instance: Path):
+        p = Profile.load(profile_with_instance)
+        p.default_relays = ["wss://public.example.com"]
+        p.save(profile_with_instance)
+
+        peer = Identity.generate("bob")
+        trusted = TrustedKey(did=peer.did, label="", nostr_pubkey=peer.nostr_public_hex)
+        from aya.cli import _record_pairing
+
+        p = Profile.load(profile_with_instance)
+        promoted = _record_pairing(
+            p, profile_with_instance, "bob", trusted, ["wss://private.example.com"]
+        )
+        assert promoted == "wss://private.example.com"
+
+        saved = Profile.load(profile_with_instance)
+        assert saved.default_relays[0] == "wss://private.example.com"
+        assert "wss://public.example.com" in saved.default_relays  # fallback kept
+        assert saved.trusted_keys["bob"].label == "bob"
+
+    def test_pairing_over_existing_primary_reports_no_change(self, profile_with_instance: Path):
+        p = Profile.load(profile_with_instance)
+        p.default_relays = ["wss://a.example.com", "wss://b.example.com"]
+        p.save(profile_with_instance)
+        peer = Identity.generate("bob")
+        trusted = TrustedKey(did=peer.did, label="", nostr_pubkey=peer.nostr_public_hex)
+        from aya.cli import _record_pairing
+
+        p = Profile.load(profile_with_instance)
+        assert (
+            _record_pairing(p, profile_with_instance, "bob", trusted, ["wss://a.example.com"])
+            is None
+        )

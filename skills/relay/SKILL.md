@@ -336,6 +336,7 @@ state.
 | `aya read <id>` → `PACKET_NOT_FOUND` | Not ingested yet | Run verb 1 (Check) first |
 | `Unknown recipient '<label>'` | Not in `trusted_keys` | `aya pair`, or `aya trust <did> --peer <label>` |
 | `No Nostr pubkey found for recipient` | Trust entry lacks `nostr_pubkey` | Re-pair via `aya pair` |
+| Peer unreachable on a fresh install | Only public relays seeded; peer is on a private one | Re-pair once with `aya pair --relay <url>` — it becomes primary |
 | Relay returns HTTP 503 | Transient outage | aya retries 5×; wait 30s |
 | Peer says they never got a packet you sent | Partial delivery — a relay they poll rejected it | `aya sent --failed`; re-send once the relay recovers |
 

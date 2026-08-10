@@ -269,6 +269,25 @@ class Profile:
         """Set a single relay, replacing the list. Backward-compat alias."""
         self.default_relays = [value]
 
+    def add_relay(self, url: str, *, first: bool = False) -> bool:
+        """Ensure *url* is in ``default_relays``. Returns True if the list changed.
+
+        With ``first=True`` the relay is moved to the front even when already
+        present — "make this the primary relay" must hold regardless of where
+        it started, since polling order is what decides reachability.
+        """
+        relays = list(self.default_relays)
+        if not first:
+            if url in relays:
+                return False
+            relays.append(url)
+        else:
+            if relays[:1] == [url]:
+                return False
+            relays = [url, *(u for u in relays if u != url)]
+        self.default_relays = relays
+        return True
+
     @classmethod
     def load(cls, path: Path) -> Profile:
         """Load from assistant_profile.json.

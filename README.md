@@ -62,6 +62,8 @@ aya sent
 
 Labels can be anything — `home`/`work`, names, machine hostnames. They're local aliases for the keypair on each side.
 
+Pairing over a specific relay (`aya pair --relay wss://…`) makes that relay primary for both sides, since the exchange proves it reaches the peer. Public relays seeded by `aya init` stay on as fallbacks, so later `send`/`receive` calls need no `--relay`.
+
 ### Identity flags: `--as`, `--label`, `--peer`
 
 Three flags name *who* you're talking about, and they're easy to confuse:

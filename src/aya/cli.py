@@ -403,6 +403,28 @@ _NOT_INGESTED_HINT = (
 )
 
 
+def _record_pairing(
+    p: Profile,
+    profile_path: Path,
+    peer: str,
+    trusted: TrustedKey,
+    relay_urls: list[str],
+) -> str | None:
+    """Persist everything a successful pairing just proved.
+
+    The relay that carried the exchange is demonstrably one both sides can
+    reach, so it becomes the primary. Without this the fact is discarded and
+    every later send/receive needs ``--relay`` to rediscover it.
+
+    Returns the promoted relay URL, or None if the order was already right.
+    """
+    trusted.label = peer
+    p.trusted_keys[peer] = trusted
+    promoted = relay_urls and p.add_relay(relay_urls[0], first=True)
+    p.save(profile_path)
+    return relay_urls[0] if promoted else None
+
+
 def _delivery_summary(relays_ok: list[str], attempted: int) -> str:
     """One-line delivery summary that never overstates reach.
 
@@ -1574,12 +1596,17 @@ def pair(
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
 
-        trusted.label = peer
-        p.trusted_keys[peer] = trusted
-        p.save(profile)
+        promoted = _record_pairing(p, profile, peer, trusted, relay_urls)
 
         if format_ == OutputFormat.JSON:
-            _output_json({"status": "paired", "peer_label": peer, "peer_did": trusted.did})
+            _output_json(
+                {
+                    "status": "paired",
+                    "peer_label": peer,
+                    "peer_did": trusted.did,
+                    "primary_relay": promoted,
+                }
+            )
             raise typer.Exit(0)
 
         lines = [
@@ -1592,6 +1619,11 @@ def pair(
             lines.append(
                 f"Nostr:   [dim]{trusted.nostr_pubkey[:16]}…[/dim]  "
                 "[dim italic](secp256k1 · relay transport)[/dim italic]"
+            )
+        if promoted:
+            lines.append(
+                f"Relay:   [dim]{promoted}[/dim]  "
+                "[dim italic](now primary — no --relay needed)[/dim italic]"
             )
         console.print(
             Panel.fit(
@@ -1652,12 +1684,17 @@ def pair(
             )
             raise typer.Exit(1)
 
-        trusted.label = peer
-        p.trusted_keys[peer] = trusted
-        p.save(profile)
+        promoted = _record_pairing(p, profile, peer, trusted, relay_urls)
 
         if format_ == OutputFormat.JSON:
-            _output_json({"status": "paired", "peer_label": peer, "peer_did": trusted.did})
+            _output_json(
+                {
+                    "status": "paired",
+                    "peer_label": peer,
+                    "peer_did": trusted.did,
+                    "primary_relay": promoted,
+                }
+            )
             raise typer.Exit(0)
 
         lines = [
@@ -1670,6 +1707,11 @@ def pair(
             lines.append(
                 f"Nostr:   [dim]{trusted.nostr_pubkey[:16]}…[/dim]  "
                 "[dim italic](secp256k1 · relay transport)[/dim italic]"
+            )
+        if promoted:
+            lines.append(
+                f"Relay:   [dim]{promoted}[/dim]  "
+                "[dim italic](now primary — no --relay needed)[/dim italic]"
             )
         console.print(
             Panel.fit(
@@ -3534,19 +3576,17 @@ def relay_add(
     _validate_relay_url(url)
     p = _load_profile_for_relay(profile)
 
-    relays = list(p.default_relays)
-    if url in relays:
+    # `--first` must reorder an already-present relay, not no-op: "make this
+    # primary" is about polling order, which is what decides reachability.
+    if not p.add_relay(url, first=first):
+        relays = list(p.default_relays)
         if format_ == OutputFormat.JSON:
             _output_json({"ok": True, "already_present": True, "relays": relays})
             return
         console.print(f"[dim]{url} is already in default_relays — no change.[/dim]")
         return
 
-    if first:
-        relays.insert(0, url)
-    else:
-        relays.append(url)
-    p.default_relays = relays
+    relays = list(p.default_relays)
     p.save(profile)
 
     if format_ == OutputFormat.JSON:

@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- **`aya relay add --first` now reorders a relay that is already present.** It
+  returned "already in default_relays — no change", so "make this primary" was
+  a silent no-op whenever the relay existed further down the list.
 - **Polling no longer fails silently.** `receive` and `inbox` (CLI and MCP)
   now return `instance`, `relays`, and `relay_reachable` alongside `packets`.
   An empty result used to be indistinguishable from polling the wrong
@@ -27,6 +30,11 @@
 
 ### Added
 
+- **`aya pair` now makes the relay it paired over the primary relay.** Pairing
+  proves both sides can reach that relay, but the fact was discarded — so on a
+  fresh install (where `aya init` seeds only public relays) every later
+  `send`/`receive` needed `--relay` to rediscover it. Existing relays are kept
+  as fallbacks. This is what made the flag feel mandatory.
 - `aya sent` — the outbound log, counterpart to `aya inbox`. `aya send` left
   no local trace at all, so "did that actually go out?" was unanswerable
   (`aya packets` lists received packets only). Entries record recipient,

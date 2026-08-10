@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from aya.adapters import clock
 from aya.adapters import paths as _paths
 from aya.adapters.credentials import check_credentials
 from aya.scheduler import (
@@ -107,7 +108,7 @@ def _perspective() -> str:
         "The answer is 42, but the method is: observe, decide, act, iterate.",
         "Hydrate. Stretch. The biological subsystems are not optional peripherals.",
     ]
-    return lines[datetime.now(UTC).toordinal() % len(lines)]
+    return lines[clock.now(UTC).toordinal() % len(lines)]
 
 
 def _parse_next_eval(next_eval: Any, now_local: datetime) -> tuple[str, int] | None:
@@ -134,7 +135,7 @@ def _active_scheduler_items() -> list[dict[str, Any]]:
 
 def _gather_status() -> dict[str, Any]:
     """Collect all status data into a plain dict."""
-    now_local = datetime.now(LOCAL_TZ)
+    now_local = clock.now(LOCAL_TZ)
 
     profile = _read_json(_paths.PROFILE_PATH)
     ship = profile.get("ship_mind_name", "GSV Unknown Vessel") if profile else "GSV Unknown Vessel"

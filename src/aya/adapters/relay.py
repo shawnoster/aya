@@ -14,6 +14,7 @@ import websockets
 from coincurve import PrivateKey as Secp256k1PrivateKey
 from websockets.asyncio.client import ClientConnection
 
+from aya.adapters import clock
 from aya.entities.encryption import nip44_decrypt, nip44_encrypt
 from aya.entities.packet import Packet
 
@@ -281,7 +282,7 @@ class RelayClient:
         the scan is bounded to the live-packet window.  Pass an explicit *since*
         to override this lower bound.
         """
-        now = datetime.now(UTC)
+        now = clock.now(UTC)
         effective_since = (
             since if since is not None else (now - timedelta(days=_DEFAULT_FETCH_WINDOW_DAYS))
         )
@@ -460,7 +461,7 @@ class RelayClient:
             ["aya-packet-id", packet.id],
         ]
 
-        created_at = int(datetime.now(UTC).timestamp())
+        created_at = int(clock.now(UTC).timestamp())
         event_id = _compute_event_id(
             pubkey=self.public_key_hex,
             created_at=created_at,
@@ -488,7 +489,7 @@ class RelayClient:
             ["aya-packet-id", packet.id],
             ["aya-version", "0.2"],
         ]
-        created_at = int(datetime.now(UTC).timestamp())
+        created_at = int(clock.now(UTC).timestamp())
         event_id = _compute_event_id(
             pubkey=self.public_key_hex,
             created_at=created_at,

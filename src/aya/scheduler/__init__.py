@@ -17,7 +17,6 @@ Usage (via CLI):
 
 from __future__ import annotations
 
-from datetime import datetime  # exposed for test monkeypatching
 from typing import Any
 
 # ── types & constants ────────────────────────────────────────────────────────

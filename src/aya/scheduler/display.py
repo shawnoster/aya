@@ -6,6 +6,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import cast
 
+from aya.adapters import clock
+
 from .storage import (
     _alerts_file,
     _atomic_write,
@@ -158,13 +160,13 @@ def format_pending(pending: PendingResult, show_all: bool = False) -> str:
 
         if actionable:
             lines.append(f"\U0001f4cb {len(actionable)} pending alert(s):")
-            now = datetime.now(_get_local_tz())
+            now = clock.now(_get_local_tz())
             for a in actionable:
                 lines.append(f"  \u2022 {a['message'][:70]} ({_format_ago(a, now)})")
 
         if non_actionable and show_all:
             lines.append(f"\n\u2139\ufe0f {len(non_actionable)} info/heartbeat alert(s):")
-            now = datetime.now(_get_local_tz())
+            now = clock.now(_get_local_tz())
             for a in non_actionable:
                 sev = a.get("severity", "info")
                 lines.append(f"  \u2022 [{sev}] {a['message'][:65]} ({_format_ago(a, now)})")
@@ -206,7 +208,7 @@ def format_pending(pending: PendingResult, show_all: bool = False) -> str:
 def format_scheduler_status(status: SchedulerStatus) -> str:
     """Format scheduler status as human-readable text."""
     lines: list[str] = []
-    now = datetime.now(_get_local_tz())
+    now = clock.now(_get_local_tz())
 
     watches = status["active_watches"]
     if watches:
@@ -267,7 +269,7 @@ def _display_items(items: list[SchedulerItem]) -> None:
     if not items:
         return
 
-    now = datetime.now(_get_local_tz())
+    now = clock.now(_get_local_tz())
 
     status_icons = {
         STATUS_PENDING: "\u23f3",

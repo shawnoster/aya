@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from aya.adapters import clock
 from aya.adapters import paths as _paths
 from aya.adapters.profile_store import save_profile
 from aya.entities.identity import Profile, _assert_valid_ulid
@@ -68,7 +69,7 @@ def check_idempotency(key: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         return None
     try:
-        if datetime.fromisoformat(entry["sent_at"]) > datetime.now(UTC) - timedelta(hours=24):
+        if datetime.fromisoformat(entry["sent_at"]) > clock.now(UTC) - timedelta(hours=24):
             return entry
     except (KeyError, ValueError, TypeError):
         return None
@@ -93,10 +94,10 @@ def record_idempotency(key: str, packet_id: str, event_id: str) -> None:
             cache[hashed] = {
                 "packet_id": packet_id,
                 "event_id": event_id,
-                "sent_at": datetime.now(UTC).isoformat(),
+                "sent_at": clock.now(UTC).isoformat(),
             }
             # Prune entries older than 24 hours
-            cutoff = datetime.now(UTC) - timedelta(hours=24)
+            cutoff = clock.now(UTC) - timedelta(hours=24)
             pruned: dict[str, object] = {}
             for k, v in cache.items():
                 if not isinstance(v, dict):

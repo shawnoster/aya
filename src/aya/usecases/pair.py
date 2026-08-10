@@ -7,10 +7,11 @@ import hashlib
 import json
 import logging
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC
 
 import websockets
 
+from aya.adapters import clock
 from aya.adapters.relay import (
     _PAIR_TAG_REQ,
     _PAIR_TAG_RESP,
@@ -382,16 +383,16 @@ async def poll_for_pair_response(
         trusted = asyncio.run(poll_for_pair_response(relay_url, my_pubkey, event_id))
     """
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
-    since_ts = int(datetime.now(UTC).timestamp()) - 5
-    deadline = datetime.now(UTC).timestamp() + timeout_seconds
+    since_ts = int(clock.now(UTC).timestamp()) - 5
+    deadline = clock.now(UTC).timestamp() + timeout_seconds
     relay_failures: dict[str, int] = dict.fromkeys(relay_urls, 0)
 
-    while datetime.now(UTC).timestamp() < deadline:
+    while clock.now(UTC).timestamp() < deadline:
         for url in relay_urls:
             failures = relay_failures[url]
             if failures > 0:
                 delay = _backoff_delay(failures - 1)
-                remaining = deadline - datetime.now(UTC).timestamp()
+                remaining = deadline - clock.now(UTC).timestamp()
                 if remaining <= 0:
                     return None
                 await asyncio.sleep(min(delay, remaining))
@@ -401,7 +402,7 @@ async def poll_for_pair_response(
             if result is not None:
                 return result
             relay_failures[url] = (failures + 1) if had_error else 0
-        remaining = deadline - datetime.now(UTC).timestamp()
+        remaining = deadline - clock.now(UTC).timestamp()
         if remaining <= 0:
             break
         await asyncio.sleep(min(PAIR_POLL_INTERVAL, remaining))
@@ -432,10 +433,10 @@ async def _poll_single_relay(
                 "since": since_ts,
                 "limit": 1,
             }
-            sub_id = f"pair-poll-{datetime.now(UTC).timestamp():.0f}"
+            sub_id = f"pair-poll-{clock.now(UTC).timestamp():.0f}"
             await ws.send(json.dumps(["REQ", sub_id, filter_]))
             try:
-                eose_timeout = max(1.0, deadline - datetime.now(UTC).timestamp())
+                eose_timeout = max(1.0, deadline - clock.now(UTC).timestamp())
                 async for event in _read_until_eose(ws, sub_id, eose_timeout=eose_timeout):
                     await ws.send(json.dumps(["CLOSE", sub_id]))
                     content = json.loads(event["content"])
@@ -533,7 +534,7 @@ def _build_pair_request(
     relay_url: str,  # noqa: ARG001
 ) -> dict:
     """Build a Nostr event for a pairing request."""
-    created_at = int(datetime.now(UTC).timestamp())
+    created_at = int(clock.now(UTC).timestamp())
     expiration = created_at + PAIR_TTL_SECONDS
     content = json.dumps({"did": identity.did, "label": label})
     tags = [
@@ -569,7 +570,7 @@ def _build_pair_response(
     relay_url: str,  # noqa: ARG001
 ) -> dict:
     """Build a Nostr event responding to a pairing request."""
-    created_at = int(datetime.now(UTC).timestamp())
+    created_at = int(clock.now(UTC).timestamp())
     expiration = created_at + PAIR_TTL_SECONDS
     content = json.dumps({"did": identity.did, "label": label})
     tags = [
@@ -604,7 +605,7 @@ def _build_pair_response(
 async def _find_pair_request(relay_url: str | list[str], code_hash: str) -> dict | None:
     """Find a pair-request on any of the configured relays matching the given code hash."""
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
-    since_ts = int(datetime.now(UTC).timestamp()) - PAIR_TTL_SECONDS
+    since_ts = int(clock.now(UTC).timestamp()) - PAIR_TTL_SECONDS
     filter_ = {
         "kinds": [AYA_KIND],
         "#t": [_TAG_PAIR_REQ],
@@ -614,7 +615,7 @@ async def _find_pair_request(relay_url: str | list[str], code_hash: str) -> dict
     }
     for url in relay_urls:
         try:
-            sub_id = f"pair-find-{datetime.now(UTC).timestamp():.0f}"
+            sub_id = f"pair-find-{clock.now(UTC).timestamp():.0f}"
             async with websockets.connect(url) as ws:
                 await ws.send(json.dumps(["REQ", sub_id, filter_]))
                 async for event in _read_until_eose(ws, sub_id):

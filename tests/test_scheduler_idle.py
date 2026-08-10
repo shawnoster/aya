@@ -238,9 +238,7 @@ class TestGetPendingFiltering:
         from unittest.mock import patch
 
         check_time = datetime(2026, 3, 27, 10, 0, tzinfo=LOCAL_TZ)
-        with patch("aya.scheduler.datetime") as mock_dt:
-            mock_dt.now.return_value = check_time
-            mock_dt.fromisoformat = datetime.fromisoformat
+        with patch("aya.adapters.clock.now", return_value=check_time):
             pending = get_pending("test-instance")
 
         assert len(pending["session_crons"]) == 0
@@ -256,9 +254,7 @@ class TestGetPendingFiltering:
 
         from unittest.mock import patch
 
-        with patch("aya.scheduler.datetime") as mock_dt:
-            mock_dt.now.return_value = now
-            mock_dt.fromisoformat = datetime.fromisoformat
+        with patch("aya.adapters.clock.now", return_value=now):
             pending = get_pending("test-instance")
 
         assert len(pending["session_crons"]) == 1
@@ -271,9 +267,7 @@ class TestGetPendingFiltering:
 
         # 22:00 is outside 08:00-18:00
         outside_time = datetime(2026, 3, 27, 22, 0, tzinfo=LOCAL_TZ)
-        with patch("aya.scheduler.datetime") as mock_dt:
-            mock_dt.now.return_value = outside_time
-            mock_dt.fromisoformat = datetime.fromisoformat
+        with patch("aya.adapters.clock.now", return_value=outside_time):
             pending = get_pending("test-instance")
 
         assert len(pending["session_crons"]) == 0
@@ -286,9 +280,7 @@ class TestGetPendingFiltering:
         from unittest.mock import patch
 
         inside_time = datetime(2026, 3, 27, 10, 0, tzinfo=LOCAL_TZ)
-        with patch("aya.scheduler.datetime") as mock_dt:
-            mock_dt.now.return_value = inside_time
-            mock_dt.fromisoformat = datetime.fromisoformat
+        with patch("aya.adapters.clock.now", return_value=inside_time):
             pending = get_pending("test-instance")
 
         assert len(pending["session_crons"]) == 1
@@ -315,9 +307,7 @@ class TestGetPendingFiltering:
         from unittest.mock import patch
 
         outside_time = datetime(2026, 3, 27, 20, 0, tzinfo=LOCAL_TZ)
-        with patch("aya.scheduler.datetime") as mock_dt:
-            mock_dt.now.return_value = outside_time
-            mock_dt.fromisoformat = datetime.fromisoformat
+        with patch("aya.adapters.clock.now", return_value=outside_time):
             pending = get_pending("test-instance")
 
         assert len(pending["suppressed_crons"]) == 1

@@ -22,6 +22,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from aya.adapters import clock
 from aya.adapters import relay as _relay
 from aya.adapters.outbox import (
     NOT_INGESTED_HINT,
@@ -235,7 +236,7 @@ def _factory(client_factory: ClientFactory | None) -> ClientFactory:
 
 
 def _now_iso(now: datetime | None = None) -> str:
-    return (now or datetime.now(UTC)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (now or clock.now(UTC)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 async def _publish(

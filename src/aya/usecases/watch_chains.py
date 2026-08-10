@@ -15,6 +15,7 @@ import subprocess
 from datetime import datetime, timedelta
 from typing import Any, cast
 
+from aya.adapters import clock
 from aya.adapters.rewake import emit as rewake_emit
 from aya.scheduler import (
     SEVERITY_ACTIONABLE,
@@ -39,7 +40,7 @@ DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES = 120
 
 def _hook_watch_now() -> datetime:
     """Clock helper for hook-watch tests."""
-    return datetime.now().astimezone()
+    return clock.now().astimezone()
 
 
 def _is_watch_chain(item: dict[str, Any]) -> bool:

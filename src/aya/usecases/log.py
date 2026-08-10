@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from aya.adapters import clock
 from aya.adapters import paths as _paths
 from aya.adapters.config import get_notebook_path
 from aya.scheduler.storage import _atomic_write
@@ -175,7 +176,7 @@ def append_entry(
         raise ValueError(msg)
 
     if now is None:
-        now = datetime.now(_get_local_tz())
+        now = clock.now(_get_local_tz())
 
     daily = _daily_path(notebook, now)
     _ensure_daily_file(daily, now)
@@ -208,7 +209,7 @@ def show_entries(
         raise ValueError(msg)
 
     if date is None:
-        date = datetime.now(_get_local_tz())
+        date = clock.now(_get_local_tz())
 
     daily = _daily_path(notebook, date)
     if not daily.exists():
@@ -250,7 +251,7 @@ def auto_log(now: datetime | None = None) -> tuple[Path, str] | None:
     nothing noteworthy was detected or the dedup window hasn't elapsed.
     """
     if now is None:
-        now = datetime.now(_get_local_tz())
+        now = clock.now(_get_local_tz())
 
     # Dedup check
     state = _load_state()

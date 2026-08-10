@@ -1085,8 +1085,8 @@ class TestHookWatchPushUpdates:
         }
 
         with (
-            patch("aya.adapters.cli.poll_watch") as mock_poll,
-            patch("aya.adapters.cli.rewake_emit") as mock_rewake,
+            patch("aya.usecases.watch_chains.poll_watch") as mock_poll,
+            patch("aya.usecases.watch_chains.rewake_emit") as mock_rewake,
         ):
             from aya.adapters.cli import _hook_watch_impl
 
@@ -1149,8 +1149,8 @@ class TestHookWatchPushUpdates:
         }
 
         with (
-            patch("aya.adapters.cli.poll_watch", return_value=(None, False)) as mock_poll,
-            patch("aya.adapters.cli.rewake_emit") as mock_rewake,
+            patch("aya.usecases.watch_chains.poll_watch", return_value=(None, False)) as mock_poll,
+            patch("aya.usecases.watch_chains.rewake_emit") as mock_rewake,
         ):
             from aya.adapters.cli import _hook_watch_impl
 
@@ -3884,10 +3884,10 @@ class TestMaybeCreateCiWatchRepoParsing:
         }
         with (
             patch("subprocess.run", side_effect=self._make_subprocess_side_effect(responses)),
-            patch("aya.adapters.cli.get_active_watches", return_value=[]),
-            patch("aya.adapters.cli.add_watch") as mock_add,
+            patch("aya.usecases.watch_chains.get_active_watches", return_value=[]),
+            patch("aya.usecases.watch_chains.add_watch") as mock_add,
         ):
-            from aya.adapters.cli import _maybe_create_ci_watch
+            from aya.usecases.watch_chains import _maybe_create_ci_watch
 
             _maybe_create_ci_watch()
             mock_add.assert_called_once()
@@ -3904,10 +3904,10 @@ class TestMaybeCreateCiWatchRepoParsing:
         }
         with (
             patch("subprocess.run", side_effect=self._make_subprocess_side_effect(responses)),
-            patch("aya.adapters.cli.get_active_watches", return_value=[]),
-            patch("aya.adapters.cli.add_watch") as mock_add,
+            patch("aya.usecases.watch_chains.get_active_watches", return_value=[]),
+            patch("aya.usecases.watch_chains.add_watch") as mock_add,
         ):
-            from aya.adapters.cli import _maybe_create_ci_watch
+            from aya.usecases.watch_chains import _maybe_create_ci_watch
 
             _maybe_create_ci_watch()
             mock_add.assert_called_once()
@@ -3923,10 +3923,10 @@ class TestMaybeCreateCiWatchRepoParsing:
         }
         with (
             patch("subprocess.run", side_effect=self._make_subprocess_side_effect(responses)),
-            patch("aya.adapters.cli.get_active_watches", return_value=[]) as mock_watches,
-            patch("aya.adapters.cli.add_watch") as mock_add,
+            patch("aya.usecases.watch_chains.get_active_watches", return_value=[]) as mock_watches,
+            patch("aya.usecases.watch_chains.add_watch") as mock_add,
         ):
-            from aya.adapters.cli import _maybe_create_ci_watch
+            from aya.usecases.watch_chains import _maybe_create_ci_watch
 
             _maybe_create_ci_watch()
             mock_add.assert_not_called()
@@ -3941,10 +3941,10 @@ class TestMaybeCreateCiWatchRepoParsing:
         }
         with (
             patch("subprocess.run", side_effect=self._make_subprocess_side_effect(responses)),
-            patch("aya.adapters.cli.get_active_watches", return_value=[]) as mock_watches,
-            patch("aya.adapters.cli.add_watch") as mock_add,
+            patch("aya.usecases.watch_chains.get_active_watches", return_value=[]) as mock_watches,
+            patch("aya.usecases.watch_chains.add_watch") as mock_add,
         ):
-            from aya.adapters.cli import _maybe_create_ci_watch
+            from aya.usecases.watch_chains import _maybe_create_ci_watch
 
             _maybe_create_ci_watch()
             mock_add.assert_not_called()

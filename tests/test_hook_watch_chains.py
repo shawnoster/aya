@@ -92,9 +92,9 @@ class TestHookWatchChains:
         }
         _write_items(isolated_scheduler["scheduler_file"], [chain])
 
-        monkeypatch.setattr("aya.adapters.cli._hook_watch_now", lambda: now)
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
         monkeypatch.setattr(
-            "aya.adapters.cli.poll_watch",
+            "aya.usecases.watch_chains.poll_watch",
             lambda item: (
                 (_gh_state(comment_count=3), True)
                 if item["condition"] == "new_comments"
@@ -103,7 +103,7 @@ class TestHookWatchChains:
         )
 
         rewake_messages: list[str] = []
-        monkeypatch.setattr("aya.adapters.cli.rewake_emit", rewake_messages.append)
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", rewake_messages.append)
 
         exit_code = _hook_watch_impl({})
 
@@ -152,9 +152,9 @@ class TestHookWatchChains:
         }
         _write_items(isolated_scheduler["scheduler_file"], [chain])
 
-        monkeypatch.setattr("aya.adapters.cli._hook_watch_now", lambda: now)
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
         rewake_messages: list[str] = []
-        monkeypatch.setattr("aya.adapters.cli.rewake_emit", rewake_messages.append)
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", rewake_messages.append)
 
         exit_code = _hook_watch_impl({})
 
@@ -196,9 +196,9 @@ class TestHookWatchChains:
         }
         _write_items(isolated_scheduler["scheduler_file"], [chain])
 
-        monkeypatch.setattr("aya.adapters.cli._hook_watch_now", lambda: now)
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
         rewake_messages: list[str] = []
-        monkeypatch.setattr("aya.adapters.cli.rewake_emit", rewake_messages.append)
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", rewake_messages.append)
 
         exit_code = _hook_watch_impl({})
 

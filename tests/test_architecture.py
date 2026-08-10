@@ -23,6 +23,7 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "aya"
 
 PRESENTATION_PACKAGES = {"typer", "rich", "mcp", "click"}
 
+
 def _modules(layer: str) -> list[Path]:
     return sorted(p for p in (SRC / layer).glob("*.py") if p.name != "__init__.py")
 

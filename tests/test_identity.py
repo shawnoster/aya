@@ -252,8 +252,9 @@ class TestIngestedIdsTTL:
         p.ingested_ids.append({"id": valid_id, "ingested_at": recent_ts})
         p.save(profile_path)
 
-        raw = json.loads(profile_path.read_text())
-        ids = raw["aya"]["ingested_ids"]
+        from aya.ledger import Ledger
+
+        ids = Ledger.load().ingested
         assert len(ids) == 1
         assert ids[0]["id"] == valid_id
         assert ids[0]["ingested_at"] == recent_ts
@@ -305,8 +306,9 @@ class TestTruncatedUlidMigration:
         p.ingested_ids.append({"id": full_id, "ingested_at": recent_ts})
         p.save(profile_path)
 
-        raw = json.loads(profile_path.read_text())
-        ids = raw["aya"]["ingested_ids"]
+        from aya.ledger import Ledger
+
+        ids = Ledger.load().ingested
         assert len(ids) == 1
         assert ids[0]["id"] == full_id
         assert len(ids[0]["id"]) == 26

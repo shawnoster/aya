@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **The profile is written atomically, under a lock, at 0600.** `save()` was
+  read-then-`write_text`, so a crash mid-write truncated the only copy of every
+  instance private key, and two writers spanning a relay round-trip silently
+  lost one side's changes. The scheduler already had lock + atomic-replace;
+  those primitives now live in `aya/atomic.py` and both use them. The mode is
+  applied before the rename, closing the window where the key file existed at
+  the umask default.
+- **Packet ledgers moved out of the key file** into `ledger.json`, with their
+  own lock and TTL. Every poll used to rewrite the profile just to advance a
+  cursor — the highest-frequency write against the highest-value payload. The
+  profile is now only rewritten when it actually changes. Existing profiles
+  migrate on first save; entries with unparseable timestamps are kept rather
+  than silently dropped, since dropping one causes the packet to be re-ingested.
 - **`publish` no longer sleeps after its final retry.** A fully rate-limited
   relay waited out one last backoff (up to the 60s cap) with no attempt left
   to make, delaying an already-failed publish. Found once the retry loop

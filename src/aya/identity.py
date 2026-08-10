@@ -6,7 +6,7 @@ import json
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 from ulid import ULID
+
+from aya.atomic import atomic_write_json, file_lock
+from aya.ledger import Ledger
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +101,11 @@ class TrustedKey:
 
 
 _DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"]
+
+
+def _profile_lock_path(profile_path: Path) -> Path:
+    """Lock co-located with the profile, so a custom --profile locks itself."""
+    return profile_path.parent / ".profile.lock"
 
 
 class InstanceResolutionError(ValueError):
@@ -384,6 +392,8 @@ class Profile:
         else:
             relays = list(_DEFAULT_RELAYS)
 
+        ledger = Ledger.load()
+
         return cls(
             alias=data.get("alias", "Ace"),
             ship_mind_name=data.get("ship_mind_name", ""),
@@ -397,76 +407,75 @@ class Profile:
             trusted_keys=trusted,
             default_relays=relays,
             last_checked=aya_data.get("last_checked", {}),
-            ingested_ids=_normalize_ingested_ids(aya_data.get("ingested_ids", [])),
+            ingested_ids=_normalize_ingested_ids(
+                ledger.ingested or aya_data.get("ingested_ids", [])
+            ),
             sent_ids=[
                 e
-                for e in (aya_data.get("sent_ids") or [])
+                for e in (ledger.sent or aya_data.get("sent_ids") or [])
                 if isinstance(e, dict) and _is_valid_ulid(str(e.get("id", "")))
             ],
-            dropped_ids=_normalize_dropped_ids(aya_data.get("dropped_ids")),
+            dropped_ids=_normalize_dropped_ids(ledger.dropped or aya_data.get("dropped_ids")),
         )
 
     def save(self, path: Path) -> None:
-        """Write aya fields back into the profile without clobbering other keys."""
+        """Persist the profile, and the packet ledgers alongside it.
+
+        The ledgers live in their own file with their own lock: they change on
+        every poll, while this file holds private keys and changes rarely.
+        Writing both together meant an empty ``aya receive`` rewrote the
+        keystore just to move a cursor.
+
+        The profile itself is only rewritten when its contents actually
+        change, and always via an atomic replace under an exclusive lock — a
+        crash mid-write previously truncated the sole copy of the identity.
+        """
         logger.debug("Saving profile to %s", path)
-        data = json.loads(path.read_text()) if path.exists() else {}
-        # Drop legacy key on first save with new format
-        data.pop("assistant_sync", None)
-        data.setdefault("aya", {})
-        data["aya"]["schema_version"] = PROFILE_SCHEMA_VERSION
-        data["aya"]["instances"] = {
-            k: {
-                "did": v.did,
-                "label": v.label,
-                "private_key_hex": v.private_key_hex,
-                "public_key_hex": v.public_key_hex,
-                "nostr_private_hex": v.nostr_private_hex,
-                "nostr_public_hex": v.nostr_public_hex,
+
+        Ledger(
+            ingested=self.ingested_ids,
+            sent=self.sent_ids,
+            dropped=self.dropped_ids,
+        ).save()
+
+        with file_lock(_profile_lock_path(path)):
+            data = json.loads(path.read_text()) if path.exists() else {}
+            before = json.dumps(data, sort_keys=True)
+
+            data.pop("assistant_sync", None)  # legacy key
+            aya = data.setdefault("aya", {})
+            aya["schema_version"] = PROFILE_SCHEMA_VERSION
+            aya["instances"] = {
+                k: {
+                    "did": v.did,
+                    "label": v.label,
+                    "private_key_hex": v.private_key_hex,
+                    "public_key_hex": v.public_key_hex,
+                    "nostr_private_hex": v.nostr_private_hex,
+                    "nostr_public_hex": v.nostr_public_hex,
+                }
+                for k, v in self.instances.items()
             }
-            for k, v in self.instances.items()
-        }
-        if self.primary_instance:
-            data["aya"]["primary_instance"] = self.primary_instance
-        else:
-            data["aya"].pop("primary_instance", None)
-        data["aya"]["trusted_keys"] = {
-            k: {"did": v.did, "label": v.label, "nostr_pubkey": v.nostr_pubkey}
-            for k, v in self.trusted_keys.items()
-        }
-        # Always write the list form and remove the legacy scalar key so that
-        # profiles migrated from older versions don't keep a stale default_relay entry.
-        data["aya"].pop("default_relay", None)
-        data["aya"]["default_relays"] = self.default_relays
-        data["aya"]["last_checked"] = self.last_checked
-        cutoff = datetime.now(UTC) - timedelta(days=7)
-        pruned: list[dict[str, str]] = []
-        for entry in self.ingested_ids:
-            raw_ts = entry.get("ingested_at", "")
-            try:
-                ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=UTC)
-                if ts >= cutoff:
-                    pruned.append(entry)
-            except (ValueError, AttributeError):
-                pass  # unparseable timestamp — treat as expired
-        data["aya"]["ingested_ids"] = pruned
-        # Same 7-day TTL as ingested_ids — the outbound log is an operational
-        # record, not an archive.
-        pruned_sent: list[dict[str, Any]] = []
-        for entry in self.sent_ids:
-            try:
-                ts = datetime.fromisoformat(str(entry.get("sent_at", "")).replace("Z", "+00:00"))
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=UTC)
-                if ts >= cutoff:
-                    pruned_sent.append(entry)
-            except (ValueError, AttributeError):
-                pass  # unparseable timestamp — treat as expired
-        data["aya"]["sent_ids"] = pruned_sent
-        data["aya"]["dropped_ids"] = self.dropped_ids
-        path.write_text(json.dumps(data, indent=2))
-        path.chmod(0o600)  # private keys live here — owner-read only
+            if self.primary_instance:
+                aya["primary_instance"] = self.primary_instance
+            else:
+                aya.pop("primary_instance", None)
+            aya["trusted_keys"] = {
+                k: {"did": v.did, "label": v.label, "nostr_pubkey": v.nostr_pubkey}
+                for k, v in self.trusted_keys.items()
+            }
+            # Always write the list form and drop the legacy scalar so migrated
+            # profiles don't keep a stale default_relay entry.
+            aya.pop("default_relay", None)
+            aya["default_relays"] = self.default_relays
+            aya["last_checked"] = self.last_checked
+            # Ledgers moved to ledger.json; clear any legacy copies here.
+            for legacy in ("ingested_ids", "sent_ids", "dropped_ids"):
+                aya.pop(legacy, None)
+
+            if json.dumps(data, sort_keys=True) == before:
+                return
+            atomic_write_json(path, data, mode=0o600)
 
     def active_instance(self, label: str = "default") -> Identity | None:
         return self.instances.get(label) or next(iter(self.instances.values()), None)

@@ -1,6 +1,14 @@
-"""Initialize or rotate the persistent assistant profile.
+"""Assistant persona: the ship-mind name shown by ``aya status``.
 
-Canonical location: ~/.aya/profile.json
+Despite the module name this holds no :class:`~aya.identity.Profile` — that
+lives in ``identity.py``. What is here is the personality document written to
+the *top level* of ``profile.json``, alongside (not inside) the ``aya`` key.
+
+Currently unwired: :func:`ensure_profile` has no production caller, so the
+``ship_mind_name`` keys are never written and ``aya status`` always shows its
+hardcoded fallback. ``recent_activity`` is likewise always empty, which makes
+the activity-themed naming below unreachable. Either wire this into ``status``
+or delete it — but do not leave it writing the key file untracked.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from aya import paths as _paths
+from aya.atomic import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +187,7 @@ def ensure_profile(path: Path | None = None, now: datetime | None = None) -> dic
             "activity_items_considered": len(recent_activity),
         }
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(profile, indent=2))
+    # 0600: this shares a file with the instance private keys, and a plain
+    # write_text would leave it at the umask default.
+    atomic_write_json(path, profile, mode=0o600)
     return profile

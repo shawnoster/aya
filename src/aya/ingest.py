@@ -20,6 +20,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
+from aya import paths as _paths
 from aya.packet import Packet
 
 logger = logging.getLogger(__name__)
@@ -48,22 +49,21 @@ def persist_packet(packet: Packet, *, now: datetime | None = None) -> bool:
     """
     try:
         from aya.identity import _assert_valid_ulid
-        from aya.paths import PACKETS_DIR
 
         # Defence in depth: packets come from the network. Reject anything that
         # could escape PACKETS_DIR via path separators before building the path.
         _assert_valid_ulid(packet.id)
 
-        PACKETS_DIR.mkdir(parents=True, exist_ok=True)
+        _paths.PACKETS_DIR.mkdir(parents=True, exist_ok=True)
         with suppress(OSError):
-            PACKETS_DIR.chmod(0o700)
-        packet_file = PACKETS_DIR / f"{packet.id}.json"
+            _paths.PACKETS_DIR.chmod(0o700)
+        packet_file = _paths.PACKETS_DIR / f"{packet.id}.json"
         packet_file.write_text(packet.to_json())
         with suppress(OSError):
             packet_file.chmod(0o600)
 
         cutoff = (now or datetime.now(UTC)).timestamp() - _PACKET_TTL_SECONDS
-        for old in PACKETS_DIR.glob("*.json"):
+        for old in _paths.PACKETS_DIR.glob("*.json"):
             try:
                 if old.stat().st_mtime < cutoff:
                     old.unlink(missing_ok=True)

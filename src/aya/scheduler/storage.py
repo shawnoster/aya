@@ -35,56 +35,26 @@ logger = logging.getLogger(__name__)
 # Otherwise they delegate to the canonical paths in aya.paths.
 
 
-def _get_package_globals() -> dict[str, Any]:
-    """Return the package __init__ globals dict for monkeypatch support."""
-    import aya.scheduler as _pkg
-
-    return vars(_pkg)
-
-
 def _scheduler_file() -> Path:
-    pkg = _get_package_globals()
-    return pkg.get("SCHEDULER_FILE") or _paths.SCHEDULER_FILE
+    return _paths.SCHEDULER_FILE
 
 
 def _alerts_file() -> Path:
-    pkg = _get_package_globals()
-    return pkg.get("ALERTS_FILE") or _paths.ALERTS_FILE
+    return _paths.ALERTS_FILE
 
 
 def _activity_file() -> Path:
-    pkg = _get_package_globals()
-    return pkg.get("ACTIVITY_FILE") or _paths.ACTIVITY_FILE
+    return _paths.ACTIVITY_FILE
 
 
 def _lock_file() -> Path:
-    """Return the advisory lock file path, co-located with scheduler.json."""
-    pkg = _get_package_globals()
-    if "LOCK_FILE" in pkg and pkg["LOCK_FILE"] is not None:
-        val = pkg["LOCK_FILE"]
-        if isinstance(val, Path):
-            return val
-    # Derive from scheduler file parent so test isolation via SCHEDULER_FILE works.
-    if "SCHEDULER_FILE" in pkg and pkg["SCHEDULER_FILE"] is not None:
-        val = pkg["SCHEDULER_FILE"]
-        if isinstance(val, Path):
-            return val.parent / ".scheduler.lock"
-    return _paths.LOCK_FILE
+    """Advisory lock, co-located with scheduler.json so both move together."""
+    return _scheduler_file().parent / ".scheduler.lock"
 
 
 def _claims_dir() -> Path:
-    """Return the claims directory, co-located with scheduler.json."""
-    pkg = _get_package_globals()
-    if "CLAIMS_DIR" in pkg and pkg["CLAIMS_DIR"] is not None:
-        val = pkg["CLAIMS_DIR"]
-        if isinstance(val, Path):
-            return val
-    # Derive from scheduler file parent so test isolation via SCHEDULER_FILE works.
-    if "SCHEDULER_FILE" in pkg and pkg["SCHEDULER_FILE"] is not None:
-        val = pkg["SCHEDULER_FILE"]
-        if isinstance(val, Path):
-            return val.parent / "claims"
-    return _paths.CLAIMS_DIR
+    """Claims directory, co-located with scheduler.json."""
+    return _scheduler_file().parent / "claims"
 
 
 # ── locking ──────────────────────────────────────────────────────────────────
@@ -346,11 +316,6 @@ _SESSION_LOCK_STALE_MINUTES = 15
 
 def _session_lock_file() -> Path:
     """Return the session lock file path."""
-    pkg = _get_package_globals()
-    if "SESSION_LOCK_FILE" in pkg and pkg["SESSION_LOCK_FILE"] is not None:
-        val = pkg["SESSION_LOCK_FILE"]
-        if isinstance(val, Path):
-            return val
     return _paths.AYA_HOME / "session.lock"
 
 
@@ -467,14 +432,8 @@ def is_session_active() -> bool:
 def _registered_crons_file() -> Path:
     """Return the per-session registered crons tracker file path.
 
-    Honors a package-level override (``REGISTERED_CRONS_FILE``) so tests
-    can redirect the path without touching ``AYA_HOME``.
+    Redirect by pointing AYA_HOME at a scratch directory.
     """
-    pkg = _get_package_globals()
-    if "REGISTERED_CRONS_FILE" in pkg and pkg["REGISTERED_CRONS_FILE"] is not None:
-        val = pkg["REGISTERED_CRONS_FILE"]
-        if isinstance(val, Path):
-            return val
     return _paths.AYA_HOME / "session_registered_crons.json"
 
 

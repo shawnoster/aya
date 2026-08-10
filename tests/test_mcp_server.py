@@ -713,8 +713,8 @@ async def test_schedule_watch_tool(tmp_path, monkeypatch):
     sched_file.write_text(json.dumps({"schema_version": 2, "items": []}))
     lock_file = tmp_path / ".scheduler.lock"
 
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", sched_file)
-    monkeypatch.setattr("aya.scheduler.LOCK_FILE", lock_file)
+    monkeypatch.setattr("aya.paths.SCHEDULER_FILE", sched_file)
+    monkeypatch.setattr("aya.paths.LOCK_FILE", lock_file)
 
     result = await call_tool(
         "aya_schedule_watch",
@@ -738,8 +738,8 @@ async def test_schedule_watch_tool_with_condition(tmp_path, monkeypatch):
     sched_file.write_text(json.dumps({"schema_version": 2, "items": []}))
     lock_file = tmp_path / ".scheduler.lock"
 
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", sched_file)
-    monkeypatch.setattr("aya.scheduler.LOCK_FILE", lock_file)
+    monkeypatch.setattr("aya.paths.SCHEDULER_FILE", sched_file)
+    monkeypatch.setattr("aya.paths.LOCK_FILE", lock_file)
 
     result = await call_tool(
         "aya_schedule_watch",

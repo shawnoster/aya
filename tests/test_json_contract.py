@@ -34,14 +34,14 @@ def _isolate(tmp_path, monkeypatch):
     scheduler_file.write_text(json.dumps({"items": []}))
     alerts_file.write_text(json.dumps({"alerts": []}))
 
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-    monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+    monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+    monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
 
     # Status module reads its own PROFILE and checks _paths.SCHEDULER_FILE —
     # patch both so contract tests never touch real ~/.aya files.
     fake_profile = tmp_path / "profile.json"
     fake_profile.write_text(json.dumps({"aya": {"instances": {}, "trusted_keys": {}}}))
-    monkeypatch.setattr("aya.status.PROFILE", fake_profile)
+    monkeypatch.setattr("aya.paths.PROFILE_PATH", fake_profile)
     monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
 
     # Stub scheduler helpers so _gather_status doesn't touch real disk.

@@ -38,10 +38,10 @@ def _isolate_log(tmp_path, monkeypatch):
     packets_dir = tmp_path / "packets"
     packets_dir.mkdir()
 
-    monkeypatch.setattr("aya.log.LOG_STATE_FILE", log_state)
-    monkeypatch.setattr("aya.log.PACKETS_DIR", packets_dir)
+    monkeypatch.setattr("aya.paths.LOG_STATE_FILE", log_state)
+    monkeypatch.setattr("aya.paths.PACKETS_DIR", packets_dir)
     monkeypatch.setattr("aya.log.get_notebook_path", lambda: notebook)
-    monkeypatch.setattr("aya.config.CONFIG_PATH", config_path)
+    monkeypatch.setattr("aya.paths.CONFIG_PATH", config_path)
 
 
 # ── format_entry ─────────────────────────────────────────────────────────────

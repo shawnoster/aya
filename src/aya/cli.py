@@ -24,6 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from aya import __version__
+from aya import paths as _paths
 from aya.config import get_notebook_path, load_config, set_config_value
 from aya.context import build_context_block
 from aya.identity import (
@@ -62,7 +63,6 @@ from aya.pair import (
     poll_for_pair_response,
     publish_pair_request,
 )
-from aya.paths import CONFIG_PATH, PROFILE_PATH
 from aya.relay import RelayClient, RelayUnreachableError
 from aya.resolve import (
     NoNostrPubkeyError,
@@ -259,7 +259,14 @@ def _emit_error(
 # ── Idempotency helpers ────────────────────────────────────────────────────
 
 
-DEFAULT_PROFILE = PROFILE_PATH
+def DEFAULT_PROFILE() -> Path:  # noqa: N802 — used as a Typer option default
+    """Resolve the profile path per invocation.
+
+    A module-level constant would snapshot AYA_HOME at import, so a process
+    that changes it later (or a test) could never redirect the default.
+    Typer calls a callable default at parse time.
+    """
+    return _paths.PROFILE_PATH
 
 
 def _load_profile(profile_path: Path) -> Profile:
@@ -3383,7 +3390,7 @@ def config_set(
     """Set a config value in ~/.aya/config.json."""
     set_config_value(key, value)
     console.print(f"[green]✓[/green] {key} = {value}")
-    console.print(f"[dim]Saved to {CONFIG_PATH}[/dim]")
+    console.print(f"[dim]Saved to {_paths.CONFIG_PATH}[/dim]")
 
 
 @config_app.command("show")

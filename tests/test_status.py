@@ -152,7 +152,7 @@ class TestRenderRich:
                 }
             )
         )
-        monkeypatch.setattr("aya.status.PROFILE", profile_file)
+        monkeypatch.setattr("aya.paths.PROFILE_PATH", profile_file)
         monkeypatch.setattr("aya.status.get_unseen_alerts", list)
         monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
         monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
@@ -245,7 +245,7 @@ class TestRenderPlain:
                 }
             )
         )
-        monkeypatch.setattr("aya.status.PROFILE", profile_path)
+        monkeypatch.setattr("aya.paths.PROFILE_PATH", profile_path)
         monkeypatch.setattr("aya.status.get_unseen_alerts", list)
         monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
         monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])

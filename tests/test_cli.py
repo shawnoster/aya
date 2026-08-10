@@ -339,8 +339,8 @@ class TestScheduleRemind:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(
             app,
@@ -363,7 +363,7 @@ class TestScheduleRemind:
     def test_remind_requires_message(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         scheduler_file = tmp_path / "scheduler.json"
         scheduler_file.write_text(json.dumps({"items": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
 
         result = runner.invoke(
             app,
@@ -388,8 +388,8 @@ class TestScheduleDismiss:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
 
         item = add_reminder("Dismiss me via CLI", "in 1 hour")
         prefix = item["id"][:8]
@@ -410,8 +410,8 @@ class TestScheduleDismiss:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(app, ["schedule", "dismiss", "nonexistent"])
         assert result.exit_code != 0
@@ -694,8 +694,8 @@ def _isolate_scheduler(tmp_path, monkeypatch):
     scheduler_file.parent.mkdir(parents=True)
     scheduler_file.write_text(json.dumps({"items": []}))
     alerts_file.write_text(json.dumps({"alerts": []}))
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-    monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+    monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+    monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
 
 
 @pytest.mark.usefixtures("_isolate_scheduler")
@@ -714,8 +714,8 @@ class TestHookCrons:
         registered_file = sched_dir / "session_registered_crons.json"
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
         monkeypatch.setattr("aya.scheduler.REGISTERED_CRONS_FILE", registered_file)
         return sched_dir
 
@@ -1028,8 +1028,8 @@ class TestHookWatchPushUpdates:
         scheduler_file.parent.mkdir(parents=True)
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
         return scheduler_file, alerts_file
 
     def test_push_update_triggers_matching_watch_without_polling(self, tmp_path: Path, monkeypatch):
@@ -1218,8 +1218,8 @@ class TestScheduleStatusCLI:
             )
         )
         alerts_file.write_text(json.dumps({"alerts": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(app, ["schedule", "pending", "--format", "json"])
         assert result.exit_code == 0
@@ -2157,8 +2157,8 @@ class TestDryRun:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(
             app,
@@ -2187,7 +2187,7 @@ class TestDryRun:
         scheduler_file = tmp_path / "assistant" / "memory" / "scheduler.json"
         scheduler_file.parent.mkdir(parents=True)
         scheduler_file.write_text(json.dumps({"items": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
 
         result = runner.invoke(
             app,
@@ -2230,7 +2230,7 @@ class TestDryRun:
         scheduler_file = tmp_path / "assistant" / "memory" / "scheduler.json"
         scheduler_file.parent.mkdir(parents=True)
         scheduler_file.write_text(json.dumps({"items": []}))
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
 
         result = runner.invoke(
             app,
@@ -2432,8 +2432,8 @@ class TestJsonFormat:
         scheduler_file.write_text(json.dumps({"items": []}))
         alerts_file.write_text(json.dumps({"alerts": []}))
 
-        monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-        monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
+        monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+        monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
 
         result = runner.invoke(
             app,
@@ -2576,13 +2576,6 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
         monkeypatch.setenv("AYA_FORMAT", "json")
 
-        # Reload paths with patched env
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
-
         p = Profile.load(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
@@ -2643,12 +2636,6 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
         monkeypatch.setenv("AYA_FORMAT", "json")
 
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
-
         p = Profile.load(profile_with_trusted)
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
@@ -2685,12 +2672,6 @@ class TestIdempotency:
         """Send with --idempotency-key dedup works the same as send-raw."""
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
         monkeypatch.setenv("AYA_FORMAT", "json")
-
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
 
         mock_publish = AsyncMock(return_value="d" * 64)
         with patch("aya.cli.RelayClient") as mock_cls:
@@ -2747,12 +2728,6 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_HOME", str(aya_home))
         monkeypatch.setenv("AYA_FORMAT", "json")
 
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
-
         # Write an expired cache entry manually
         aya_home.mkdir(parents=True, exist_ok=True)
         expired_time = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
@@ -2802,12 +2777,6 @@ class TestIdempotency:
         """Without --idempotency-key, every send-raw calls publish."""
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "aya_home"))
         monkeypatch.setenv("AYA_FORMAT", "json")
-
-        import importlib
-
-        import aya.paths
-
-        importlib.reload(aya.paths)
 
         p = Profile.load(profile_with_trusted)
         local = p.instances["default"]

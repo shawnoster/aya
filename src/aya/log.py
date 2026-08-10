@@ -19,8 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from aya import paths as _paths
 from aya.config import get_notebook_path
-from aya.paths import LOG_STATE_FILE, PACKETS_DIR
 from aya.scheduler.storage import _atomic_write
 from aya.scheduler.time_utils import _get_local_tz, get_last_activity
 
@@ -34,8 +34,8 @@ _DEDUP_SECONDS = 300  # 5 minutes
 
 
 def _log_lock_file() -> Path:
-    """Derive lock path from LOG_STATE_FILE at call time (monkeypatch-safe)."""
-    return LOG_STATE_FILE.parent / ".log.lock"
+    """Derive lock path from _paths.LOG_STATE_FILE at call time (monkeypatch-safe)."""
+    return _paths.LOG_STATE_FILE.parent / ".log.lock"
 
 
 @contextmanager
@@ -56,7 +56,7 @@ def _load_state() -> dict[str, Any]:
     """Read log state under a shared lock. Returns {} if missing or corrupt."""
     with _log_lock(shared=True):
         try:
-            data = json.loads(LOG_STATE_FILE.read_text())
+            data = json.loads(_paths.LOG_STATE_FILE.read_text())
             return data if isinstance(data, dict) else {}
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return {}
@@ -65,20 +65,20 @@ def _load_state() -> dict[str, Any]:
 def _save_state(state: dict[str, Any]) -> None:
     """Write log state atomically under an exclusive lock."""
     with _log_lock():
-        _atomic_write(LOG_STATE_FILE, state)
+        _atomic_write(_paths.LOG_STATE_FILE, state)
 
 
 def _update_state(updates: dict[str, Any]) -> None:
     """Read-modify-write log state under a single exclusive lock."""
     with _log_lock():
         try:
-            data = json.loads(LOG_STATE_FILE.read_text())
+            data = json.loads(_paths.LOG_STATE_FILE.read_text())
             if not isinstance(data, dict):
                 data = {}
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             data = {}
         data.update(updates)
-        _atomic_write(LOG_STATE_FILE, data)
+        _atomic_write(_paths.LOG_STATE_FILE, data)
 
 
 # ── daily note helpers ───────────────────────────────────────────────────────
@@ -325,11 +325,11 @@ def _recent_git_commits(notebook: Path | None, since_minutes: int = 30) -> list[
 
 def _recent_packet_count(now: datetime, window_minutes: int = 30) -> int:
     """Count packets ingested within the recent window."""
-    if not PACKETS_DIR.exists():
+    if not _paths.PACKETS_DIR.exists():
         return 0
     cutoff = now.timestamp() - (window_minutes * 60)
     count = 0
-    for p in PACKETS_DIR.iterdir():
+    for p in _paths.PACKETS_DIR.iterdir():
         if p.suffix == ".json" and p.stat().st_mtime > cutoff:
             count += 1
     return count

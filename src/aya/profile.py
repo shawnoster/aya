@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aya.paths import PROFILE_PATH
+from aya import paths as _paths
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,8 @@ def _default_profile(now: datetime) -> dict[str, Any]:
     }
 
 
-def ensure_profile(path: Path = PROFILE_PATH, now: datetime | None = None) -> dict[str, Any]:
+def ensure_profile(path: Path | None = None, now: datetime | None = None) -> dict[str, Any]:
+    path = path or _paths.PROFILE_PATH
     now_dt = now or datetime.now(UTC)
     profile = _default_profile(now_dt)
 

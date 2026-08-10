@@ -200,10 +200,14 @@ _LAZY_ATTRS: dict[str, Any] = {
 
 
 def __getattr__(name: str) -> Any:
+    """Resolve path/tz attributes on each access.
+
+    This used to cache the result into module globals, so the first read
+    permanently pinned whatever AYA_HOME was in effect at that moment — and a
+    later patch of aya.paths was silently ignored for the rest of the process.
+    """
     if name in _LAZY_ATTRS:
-        value = _LAZY_ATTRS[name]()
-        globals()[name] = value
-        return value
+        return _LAZY_ATTRS[name]()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

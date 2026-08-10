@@ -38,16 +38,14 @@ def _isolate_scheduler(tmp_path, monkeypatch):
     """Point scheduler at a temp directory so tests don't touch real data."""
     scheduler_file = tmp_path / "assistant" / "memory" / "scheduler.json"
     alerts_file = tmp_path / "assistant" / "memory" / "alerts.json"
-    registered_file = tmp_path / "assistant" / "memory" / "session_registered_crons.json"
     lock_file = tmp_path / "assistant" / "memory" / ".scheduler.lock"
     scheduler_file.parent.mkdir(parents=True)
     scheduler_file.write_text(json.dumps({"items": []}))
     alerts_file.write_text(json.dumps({"alerts": []}))
 
-    monkeypatch.setattr("aya.scheduler.SCHEDULER_FILE", scheduler_file)
-    monkeypatch.setattr("aya.scheduler.ALERTS_FILE", alerts_file)
-    monkeypatch.setattr("aya.scheduler.REGISTERED_CRONS_FILE", registered_file)
-    monkeypatch.setattr("aya.scheduler.LOCK_FILE", lock_file)
+    monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+    monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
+    monkeypatch.setattr("aya.paths.LOCK_FILE", lock_file)
 
 
 # ── Timezone configuration ──────────────────────────────────────────────────────

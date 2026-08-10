@@ -27,7 +27,6 @@ from aya.scheduler import (
 logger = logging.getLogger(__name__)
 
 # ── aya data paths (from ~/.aya) ────────────────────────────────────────────
-PROFILE = _paths.PROFILE_PATH
 
 
 # ── data ──────────────────────────────────────────────────────────────────────
@@ -141,13 +140,13 @@ def _gather_status() -> dict[str, Any]:
     """Collect all status data into a plain dict."""
     now_local = datetime.now(LOCAL_TZ)
 
-    profile = _read_json(PROFILE)
+    profile = _read_json(_paths.PROFILE_PATH)
     ship = profile.get("ship_mind_name", "GSV Unknown Vessel") if profile else "GSV Unknown Vessel"
     user = profile.get("user_name", "Shawn") if profile else "Shawn"
     next_eval = profile.get("name_next_reevaluation_at", "unknown") if profile else "unknown"
 
     checks: list[CheckResult] = [
-        CheckResult("profile", profile is not None, str(PROFILE)),
+        CheckResult("profile", profile is not None, str(_paths.PROFILE_PATH)),
         CheckResult(
             name="scheduler",
             ok=_paths.SCHEDULER_FILE.exists(),

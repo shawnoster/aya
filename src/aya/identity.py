@@ -100,6 +100,18 @@ class TrustedKey:
 _DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"]
 
 
+class InstanceResolutionError(ValueError):
+    """Raised when ``--as``/``instance`` cannot be resolved to one instance.
+
+    Subclasses ``ValueError`` so existing callers that catch it keep working.
+    """
+
+    def __init__(self, message: str, available: list[str], requested: str | None) -> None:
+        super().__init__(message)
+        self.available = available
+        self.requested = requested
+
+
 def _is_valid_ulid(value: str) -> bool:
     """Check if a string is a valid ULID."""
     try:
@@ -228,6 +240,11 @@ class Profile:
     ship_mind_name: str
     user_name: str
     instances: dict[str, Identity] = field(default_factory=dict)
+    # Label of the instance to act as when ``--as``/``instance`` is omitted.
+    # Without it, a profile holding both a real instance and a leftover
+    # ``default`` stub silently resolves to the stub, whose Nostr keypair
+    # differs — every poll then returns empty with exit 0.
+    primary_instance: str | None = None
     trusted_keys: dict[str, TrustedKey] = field(default_factory=dict)
     default_relays: list[str] = field(default_factory=lambda: list(_DEFAULT_RELAYS))
     last_checked: dict[str, str] = field(default_factory=dict)  # relay → ISO timestamp
@@ -349,6 +366,11 @@ class Profile:
             ship_mind_name=data.get("ship_mind_name", ""),
             user_name=data.get("user_name", ""),
             instances=instances,
+            primary_instance=(
+                aya_data.get("primary_instance")
+                if isinstance(aya_data.get("primary_instance"), str)
+                else None
+            ),
             trusted_keys=trusted,
             default_relays=relays,
             last_checked=aya_data.get("last_checked", {}),
@@ -375,6 +397,10 @@ class Profile:
             }
             for k, v in self.instances.items()
         }
+        if self.primary_instance:
+            data["aya"]["primary_instance"] = self.primary_instance
+        else:
+            data["aya"].pop("primary_instance", None)
         data["aya"]["trusted_keys"] = {
             k: {"did": v.did, "label": v.label, "nostr_pubkey": v.nostr_pubkey}
             for k, v in self.trusted_keys.items()
@@ -403,6 +429,50 @@ class Profile:
 
     def active_instance(self, label: str = "default") -> Identity | None:
         return self.instances.get(label) or next(iter(self.instances.values()), None)
+
+    def resolve_instance_name(self, requested: str | None) -> tuple[str, str]:
+        """Resolve *requested* to a registered instance label.
+
+        Returns ``(label, reason)`` where *reason* explains which rule applied —
+        callers surface it so a resolved identity is never a silent guess.
+
+        Raises :class:`InstanceResolutionError` when the choice is ambiguous.
+        Ambiguity must be an error: picking arbitrarily yields a wrong-keypair
+        poll that looks exactly like an empty inbox.
+        """
+        available = list(self.instances.keys())
+        if not available:
+            raise InstanceResolutionError(
+                "No instances registered. Run 'aya init' first.", available, requested
+            )
+
+        if requested is not None:
+            if requested in self.instances:
+                return requested, "explicit"
+            # Single-instance profiles: honour the long-standing smart default.
+            if len(available) == 1:
+                return available[0], "only-instance"
+            raise InstanceResolutionError(
+                f"Instance '{requested}' not found. Available: {', '.join(available)}.",
+                available,
+                requested,
+            )
+
+        if self.primary_instance and self.primary_instance in self.instances:
+            return self.primary_instance, "primary_instance"
+        if len(available) == 1:
+            return available[0], "only-instance"
+        # A leftover 'default' stub alongside exactly one real instance is the
+        # common shape after `aya init --label <name>`; prefer the real one.
+        non_stub = [name for name in available if name != "default"]
+        if len(non_stub) == 1:
+            return non_stub[0], "sole-non-default"
+        raise InstanceResolutionError(
+            "Multiple instances registered and no primary set — pass --as <label> "
+            f"or run 'aya use <label>' to set one. Available: {', '.join(available)}.",
+            available,
+            requested,
+        )
 
     def is_trusted(self, did: str) -> bool:
         return did in {k.did for k in self.trusted_keys.values()}

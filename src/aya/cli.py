@@ -27,7 +27,13 @@ from rich.text import Text
 from aya import __version__
 from aya.config import get_notebook_path, load_config, set_config_value
 from aya.context import build_context_block
-from aya.identity import Identity, Profile, TrustedKey, _assert_valid_ulid
+from aya.identity import (
+    Identity,
+    InstanceResolutionError,
+    Profile,
+    TrustedKey,
+    _assert_valid_ulid,
+)
 from aya.ingest import ingest as _ingest
 from aya.install import install_scheduler, uninstall_scheduler
 from aya.packet import ConflictStrategy, ContentType, Packet, human_age
@@ -335,44 +341,30 @@ def _load_profile(profile_path: Path) -> Profile:
     return Profile.load(profile_path)
 
 
-def _resolve_instance(p: Profile, instance: str, *, quiet: bool = False) -> Identity:
-    """Return the local Identity for *instance*, with a smart single-instance fallback.
+def _resolve_instance_labelled(
+    p: Profile, instance: str | None, *, quiet: bool = False
+) -> tuple[Identity, str]:
+    """Resolve *instance* to ``(Identity, label)``.
 
-    Resolution order:
-    1. Exact match on *instance* name — returned immediately.
-    2. If exactly one instance is registered, that instance is used automatically
-       regardless of the requested name (smart default for fresh ``aya init`` users).
-    3. Otherwise a descriptive error is printed (unless *quiet* is True) and
-       ``typer.Exit(1)`` is raised.
-
-    The *quiet* flag suppresses error output; it is intended for background hooks
-    (e.g. ``aya receive --quiet``) where silent failure is preferable to log noise.
+    Delegates the rules to :meth:`Profile.resolve_instance_name` and turns an
+    unresolvable request into a typed CLI error instead of a silent fallback.
     """
-    local = p.instances.get(instance)
-    if local is not None:
-        return local
-
-    available = list(p.instances.keys())
-
-    # Smart default: exactly one instance — use it without fuss.
-    if len(available) == 1:
-        return next(iter(p.instances.values()))
-
-    if not quiet:
-        if available:
-            names = ", ".join(available)
+    try:
+        label, _reason = p.resolve_instance_name(instance)
+    except InstanceResolutionError as exc:
+        if not quiet:
             _emit_error(
                 ErrorCode.INSTANCE_NOT_FOUND,
-                f"Instance '{instance}' not found. Available: {names}.",
-                {"instance": instance, "available": available},
+                str(exc),
+                {"instance": instance, "available": exc.available},
             )
-        else:
-            _emit_error(
-                ErrorCode.INSTANCE_NOT_FOUND,
-                f"Instance '{instance}' not found. Run 'aya init' first.",
-                {"instance": instance},
-            )
-    raise typer.Exit(1)
+        raise typer.Exit(1) from None
+    return p.instances[label], label
+
+
+def _resolve_instance(p: Profile, instance: str | None, *, quiet: bool = False) -> Identity:
+    """Return the local Identity for *instance*. See :func:`_resolve_instance_labelled`."""
+    return _resolve_instance_labelled(p, instance, quiet=quiet)[0]
 
 
 # ── version ──────────────────────────────────────────────────────────────────
@@ -390,6 +382,89 @@ def version(
         _output_json({"version": __version__})
     else:
         console.print(f"aya {__version__}")
+
+
+@app.command()
+def whoami(
+    profile: Path = typer.Option(DEFAULT_PROFILE),
+    format_: OutputFormat = typer.Option(
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
+    ),
+) -> None:
+    """Show which local identity commands act as, and every registered peer."""
+    format_ = resolve_format(format_)
+    p = _load_profile(profile)
+
+    try:
+        active, reason = p.resolve_instance_name(None)
+    except InstanceResolutionError as exc:
+        active, reason = None, f"ambiguous — {exc}"
+
+    instances = [
+        {
+            "label": label,
+            "did": ident.did,
+            "nostr_pubkey": ident.nostr_public_hex,
+            "active": label == active,
+        }
+        for label, ident in p.instances.items()
+    ]
+    peers = [
+        {"label": label, "did": tk.did, "paired": bool(tk.nostr_pubkey)}
+        for label, tk in p.trusted_keys.items()
+    ]
+
+    if format_ == OutputFormat.JSON:
+        _output_json(
+            {
+                "active_instance": active,
+                "resolved_by": reason,
+                "primary_instance": p.primary_instance,
+                "instances": instances,
+                "peers": peers,
+                "relays": list(p.default_relays),
+            }
+        )
+        return
+
+    console.print(f"Active identity: {active or '(ambiguous)'}  [dim]({reason})[/dim]")
+    console.print("\nInstances:")
+    for inst in instances:
+        marker = "*" if inst["active"] else " "
+        console.print(f"  {marker} {inst['label']}  [dim]{str(inst['did'])[:32]}…[/dim]")
+    console.print("\nPeers you can --to:")
+    if peers:
+        for peer in peers:
+            state = "paired" if peer["paired"] else "[yellow]not paired[/yellow]"
+            console.print(f"    {peer['label']}  [dim]{str(peer['did'])[:32]}…[/dim]  {state}")
+    else:
+        console.print("    [dim](none — run 'aya pair')[/dim]")
+    console.print("\nRelays: " + (", ".join(p.default_relays) or "(none)"))
+
+
+@app.command()
+def use(
+    label: str = typer.Argument(..., help="Instance label to act as by default"),
+    profile: Path = typer.Option(DEFAULT_PROFILE),
+    format_: OutputFormat = typer.Option(
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
+    ),
+) -> None:
+    """Set the local identity that commands use when ``--as`` is omitted."""
+    format_ = resolve_format(format_)
+    p = _load_profile(profile)
+    if label not in p.instances:
+        _emit_error(
+            ErrorCode.INSTANCE_NOT_FOUND,
+            f"Instance '{label}' not found. Available: {', '.join(p.instances)}.",
+            {"instance": label, "available": list(p.instances)},
+        )
+    p.primary_instance = label
+    p.save(profile)
+    if format_ == OutputFormat.JSON:
+        _output_json({"primary_instance": label})
+    else:
+        console.print(f"[green]✓[/green] Now acting as [cyan]{label}[/cyan] by default.")
 
 
 @app.command("mcp-server")
@@ -500,7 +575,11 @@ def trust(
 def send_raw(
     packet_file: Path = typer.Argument(help="Packet JSON file to send"),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
-    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help="Local identity to act as (default: primary instance)",
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show packet without publishing"),
     idempotency_key: str = typer.Option(
         None,
@@ -605,11 +684,21 @@ def send_raw(
 def send_cmd(
     to: str = typer.Option(..., help="Recipient label (home) or DID"),
     intent: str = typer.Option(..., help="What is this packet and why"),
+    message: str = typer.Option(
+        None,
+        "--message",
+        "-m",
+        help="Markdown body of the packet (otherwise read from stdin)",
+    ),
     files: list[Path] = typer.Option([], help="Files to include"),
     context: str = typer.Option(None, help="Annotation for the receiving assistant"),
     seed: bool = typer.Option(False, help="Create a conversation seed instead of content"),
     opener: str = typer.Option(None, help="[seed] Opening question for the receiving assistant"),
-    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help="Local identity to act as (default: primary instance)",
+    ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
@@ -634,6 +723,14 @@ def send_cmd(
 
     Builds the packet, signs it, and publishes to the relay. This is the
     command most users want. For a pre-built packet file, see send-raw.
+
+    The packet body comes from exactly one of:
+
+    \b
+      --seed --opener "..."   a short conversation starter (no body)
+      --message/-m "..."      markdown body given inline
+      --files path.md         markdown body read from files
+      (stdin)                 markdown body piped in, e.g. `... <<'EOF'`
     """
     logger.debug("send: to=%s, intent=%s, as=%s", to, intent, as_)
     format_ = resolve_format(format_)
@@ -663,7 +760,29 @@ def send_cmd(
                 context=context,
             )
         else:
-            content = sys.stdin.read()
+            if message is not None:
+                content = message
+            elif sys.stdin.isatty():
+                # No body source and no pipe: reading stdin here would just hang
+                # on an interactive terminal, and silently ship an empty packet
+                # in a script. Name the four ways to supply a body instead.
+                _emit_error(
+                    ErrorCode.INVALID_ARGUMENT,
+                    "No packet body. Pass --message/-m, --files, or --seed --opener, "
+                    "or pipe markdown on stdin.",
+                    exit_code=2,
+                )
+                return
+            else:
+                content = sys.stdin.read()
+            if not content.strip():
+                _emit_error(
+                    ErrorCode.INVALID_ARGUMENT,
+                    "Packet body is empty. Pass --message/-m, --files, or --seed --opener, "
+                    "or pipe non-empty markdown on stdin.",
+                    exit_code=2,
+                )
+                return
             packet = Packet(
                 **{"from": local.did, "to": to_did},
                 intent=intent,
@@ -769,7 +888,11 @@ def ack(
     dismiss: bool = typer.Option(
         False, "--dismiss", help="No-action acknowledgment; message defaults to 'acknowledged'"
     ),
-    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help="Local identity to act as (default: primary instance)",
+    ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show ACK packet without publishing"
@@ -950,7 +1073,11 @@ def ack(
 @app.command()
 def receive(
     relay: str = typer.Option(None),
-    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help="Local identity to act as (default: primary instance)",
+    ),
     auto_ingest: bool = typer.Option(False, help="Ingest all trusted packets without prompting"),
     skip_untrusted: bool = typer.Option(
         False,
@@ -986,10 +1113,27 @@ def receive(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = _resolve_instance(p, as_, quiet=quiet)
+        local, instance_label = _resolve_instance_labelled(p, as_, quiet=quiet)
 
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
+
+        def _envelope(packets: list[dict[str, object]], reachable: bool) -> dict[str, object]:
+            """Wrap results with the identity and relays actually queried.
+
+            An empty list alone cannot distinguish "nothing waiting" from
+            "polled the wrong keypair or the wrong relay" — the caller needs
+            to see what was asked before trusting the answer.
+            """
+            return {
+                "packets": packets,
+                "instance": instance_label,
+                "relays": list(relay_urls),
+                "relay_reachable": reachable,
+            }
+
+        def _context_suffix() -> str:
+            return f" (as={instance_label}, relays={', '.join(relay_urls)})"
 
         # Fetch pending packets for this instance; ingested_ids is the authoritative
         # dedup mechanism and filters already-seen packets below.  No `since` filter
@@ -1002,10 +1146,16 @@ def receive(
                 packets.append(packet)
         except Exception:
             logger.exception("Relay fetch failed during receive")
-            if not quiet:
-                err.print("[yellow]Could not reach relay — skipping relay fetch.[/yellow]")
             if format_ == OutputFormat.JSON:
-                _output_json({"packets": []})
+                # relay_reachable carries this; prose on stderr would corrupt
+                # the payload for anyone parsing combined output.
+                _output_json(_envelope([], reachable=False))
+                return
+            if not quiet:
+                err.print(
+                    "[yellow]Could not reach relay — skipping relay fetch."
+                    f"{_context_suffix()}[/yellow]"
+                )
             return
 
         # Record last poll time per relay for status display.
@@ -1015,9 +1165,9 @@ def receive(
 
         if not packets:
             if format_ == OutputFormat.JSON:
-                _output_json({"packets": []})
+                _output_json(_envelope([], reachable=True))
             elif not quiet:
-                console.print("[dim]No pending packets.[/dim]")
+                console.print(f"[dim]No pending packets.{_context_suffix()}[/dim]")
             p.save(profile)
             return
 
@@ -1038,9 +1188,9 @@ def receive(
 
         if not verified:
             if format_ == OutputFormat.JSON:
-                _output_json({"packets": []})
+                _output_json(_envelope([], reachable=True))
             elif not quiet:
-                console.print("[dim]No valid packets.[/dim]")
+                console.print(f"[dim]No valid packets.{_context_suffix()}[/dim]")
             p.save(profile)
             return
 
@@ -1092,6 +1242,18 @@ def receive(
                     err.print(f"[dim]Skipped untrusted: {packet.id[:8]} ({packet.intent})[/dim]")
                 continue
 
+            # typer.confirm() has no non-interactive fallback — without a TTY it
+            # raises Abort mid-poll, which reads as a crash rather than a missing
+            # flag. Packets are waiting and reachable, so say exactly that.
+            if not yes and not sys.stdin.isatty():
+                p.save(profile)
+                _emit_error(
+                    ErrorCode.INVALID_ARGUMENT,
+                    f"{len(verified)} packet(s) need confirmation but there is no terminal. "
+                    "Re-run with --auto-ingest (trusted senders only) or --yes (all senders).",
+                    {"pending": [pkt.id for pkt in verified], "instance": instance_label},
+                    exit_code=2,
+                )
             ingest = yes or typer.confirm(
                 f"\nIngest '{packet.intent}' ({trust_label})?",
                 default=trusted,
@@ -1128,7 +1290,7 @@ def receive(
                 )
 
         if format_ == OutputFormat.JSON:
-            _output_json({"packets": received_summaries})
+            _output_json(_envelope(received_summaries, reachable=True))
 
         if format_ != OutputFormat.JSON and not quiet and auto_ingest:
             ingested_count = sum(1 for s in received_summaries if s.get("ingested"))
@@ -1155,7 +1317,11 @@ def receive(
 @app.command()
 def inbox(
     relay: str = typer.Option(None),
-    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help="Local identity to act as (default: primary instance)",
+    ),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
@@ -1169,12 +1335,23 @@ def inbox(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = _resolve_instance(p, as_)
+        local, instance_label = _resolve_instance_labelled(p, as_)
 
         relay_urls = [relay] if relay else p.default_relays
         client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
+        context_suffix = f" (as={instance_label}, relays={', '.join(relay_urls)})"
 
-        all_packets = [pkt async for pkt in client.fetch_pending()]
+        # A relay that cannot be reached must not read as an empty inbox.
+        reachable = True
+        try:
+            all_packets = [pkt async for pkt in client.fetch_pending()]
+        except Exception:
+            logger.exception("Relay fetch failed during inbox")
+            reachable = False
+            all_packets = []
+            if format_ != OutputFormat.JSON:
+                err.print(f"[yellow]Could not reach relay.{context_suffix}[/yellow]")
+
         ingested_set = {entry["id"] for entry in p.ingested_ids}
         dropped_set = set(p.dropped_ids)
 
@@ -1189,9 +1366,16 @@ def inbox(
         if format_ == OutputFormat.JSON:
             ingested_for_json = ingested_set if show_all else None
             packet_dicts = [_packet_to_dict(pkt, p, ingested_for_json) for pkt in display_packets]
-            _output_json({"packets": packet_dicts})
+            _output_json(
+                {
+                    "packets": packet_dicts,
+                    "instance": instance_label,
+                    "relays": list(relay_urls),
+                    "relay_reachable": reachable,
+                }
+            )
         elif not display_packets:
-            console.print("[dim]Inbox empty.[/dim]")
+            console.print(f"[dim]Inbox empty.{context_suffix}[/dim]")
         else:
             _show_inbox(display_packets, p, ingested_set if show_all else None)
             if show_all and len(all_packets) != len(new_packets):
@@ -1209,7 +1393,11 @@ def inbox(
 def pair(
     code: str = typer.Option(None, help="Pairing code from the other instance (joiner mode)"),
     peer: str = typer.Option(..., "--peer", help="Name for the remote peer"),
-    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help="Local identity to act as (default: primary instance)",
+    ),
     relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show pairing intent without publishing"
@@ -2836,7 +3024,11 @@ def read(
 @app.command()
 def drop(
     packet_id: str = typer.Argument(help="Packet ID or prefix (min 8 chars) to drop from inbox"),
-    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help="Local identity to act as (default: primary instance)",
+    ),
     relay: str | None = typer.Option(None, help="Relay URL (overrides profile default)"),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(OutputFormat.AUTO, "--format", "-f", help="Output format"),
@@ -3221,7 +3413,11 @@ def relay_remove(
 
 @relay_app.command("status")
 def relay_status(
-    as_: str = typer.Option("default", "--as", help="Local identity to act as"),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help="Local identity to act as (default: primary instance)",
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE, help="Path to profile.json"),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
@@ -3232,9 +3428,7 @@ def relay_status(
     p = _load_profile_for_relay(profile)
 
     # Resolve and validate the requested instance
-    _resolve_instance(p, as_)
-    # Derive display label: use as_ if explicit, otherwise the single registered instance
-    instance_label = as_ if as_ != "default" else next(iter(p.instances.keys()), "default")
+    _local, instance_label = _resolve_instance_labelled(p, as_)
 
     # Trusted peers
     trusted_peers = [v.label for v in p.trusted_keys.values() if v.label]

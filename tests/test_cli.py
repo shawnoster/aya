@@ -1342,10 +1342,21 @@ class TestReceive:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
-                ["receive", "--profile", str(profile_with_sender)],
+                ["receive", "--format", "text", "--profile", str(profile_with_sender)],
             )
 
         assert "Could not reach relay" in result.output
+
+        # Under --format json the same failure is machine-readable instead, so
+        # a caller can tell an unreachable relay from a genuinely empty inbox.
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = mock_fetch
+            result = runner.invoke(
+                app,
+                ["receive", "--format", "json", "--profile", str(profile_with_sender)],
+            )
+
+        assert json.loads(result.output)["relay_reachable"] is False
 
     def test_yes_flag_ingests_untrusted_packet_without_prompt(
         self, profile_with_instance: Path
@@ -3948,3 +3959,215 @@ class TestCommandHelpCrossReferences:
         result = runner.invoke(app, ["send", "--help"])
         assert result.exit_code == 0, result.output
         assert "send-raw" in result.output
+
+
+# ── silent-failure regressions ───────────────────────────────────────────────
+
+
+@pytest.fixture
+def profile_with_stub_default(profile_path: Path) -> Path:
+    """Profile shaped like a real machine: a labelled instance plus a 'default' stub.
+
+    This is what `aya init --label <name>` leaves behind, and the shape that
+    made every poll silently use the stub's unrelated Nostr keypair.
+    """
+    profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+    profile.instances["default"] = Identity.generate("default")
+    profile.instances["harbor"] = Identity.generate("harbor")
+    profile.save(profile_path)
+    return profile_path
+
+
+class TestInstanceResolution:
+    def test_omitted_as_prefers_sole_non_default_instance(self, profile_with_stub_default: Path):
+        """`--as` omitted must not silently select the leftover 'default' stub."""
+        p = Profile.load(profile_with_stub_default)
+        label, reason = p.resolve_instance_name(None)
+        assert label == "harbor"
+        assert reason == "sole-non-default"
+
+    def test_primary_instance_wins(self, profile_with_stub_default: Path):
+        p = Profile.load(profile_with_stub_default)
+        p.primary_instance = "default"
+        assert p.resolve_instance_name(None)[0] == "default"
+
+    def test_primary_instance_round_trips(self, profile_with_stub_default: Path):
+        p = Profile.load(profile_with_stub_default)
+        p.primary_instance = "harbor"
+        p.save(profile_with_stub_default)
+        assert Profile.load(profile_with_stub_default).primary_instance == "harbor"
+
+    def test_ambiguous_resolution_errors_rather_than_guessing(self, profile_path: Path):
+        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile.instances["work"] = Identity.generate("work")
+        profile.instances["home"] = Identity.generate("home")
+        profile.save(profile_path)
+        p = Profile.load(profile_path)
+        with pytest.raises(Exception, match="Multiple instances"):
+            p.resolve_instance_name(None)
+
+    def test_explicit_as_still_honoured(self, profile_with_stub_default: Path):
+        p = Profile.load(profile_with_stub_default)
+        assert p.resolve_instance_name("default")[0] == "default"
+
+    def test_use_sets_primary_instance(self, profile_with_stub_default: Path):
+        result = runner.invoke(app, ["use", "harbor", "--profile", str(profile_with_stub_default)])
+        assert result.exit_code == 0, result.output
+        assert Profile.load(profile_with_stub_default).primary_instance == "harbor"
+
+    def test_use_rejects_unknown_label(self, profile_with_stub_default: Path):
+        result = runner.invoke(app, ["use", "nope", "--profile", str(profile_with_stub_default)])
+        assert result.exit_code != 0
+
+
+class TestEmptyResultsAreSelfDescribing:
+    """An empty inbox must state which identity and relays produced it."""
+
+    def test_receive_empty_reports_instance_and_relays(self, profile_with_stub_default: Path):
+        async def empty_fetch(*args, **kwargs):
+            return
+            yield  # pragma: no cover
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = empty_fetch
+            result = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_stub_default),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["packets"] == []
+        assert payload["instance"] == "harbor"
+        assert payload["relay_reachable"] is True
+        assert payload["relays"]
+
+    def test_receive_unreachable_relay_is_distinguishable_from_empty(
+        self, profile_with_stub_default: Path
+    ):
+        async def failing_fetch(*args, **kwargs):
+            raise OSError("connection refused")
+            yield  # pragma: no cover
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = failing_fetch
+            result = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_stub_default),
+                ],
+            )
+        payload = json.loads(result.output)
+        assert payload["packets"] == []
+        assert payload["relay_reachable"] is False
+
+    def test_inbox_empty_reports_instance_and_relays(self, profile_with_stub_default: Path):
+        async def empty_fetch(*args, **kwargs):
+            return
+            yield  # pragma: no cover
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = empty_fetch
+            result = runner.invoke(
+                app,
+                ["inbox", "--format", "json", "--profile", str(profile_with_stub_default)],
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["instance"] == "harbor"
+        assert payload["relay_reachable"] is True
+
+    def test_inbox_unreachable_relay_is_distinguishable_from_empty(
+        self, profile_with_stub_default: Path
+    ):
+        async def failing_fetch(*args, **kwargs):
+            raise OSError("connection refused")
+            yield  # pragma: no cover
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = failing_fetch
+            result = runner.invoke(
+                app,
+                ["inbox", "--format", "json", "--profile", str(profile_with_stub_default)],
+            )
+        payload = json.loads(result.output)
+        assert payload["relay_reachable"] is False
+
+
+class TestSendBodySources:
+    def test_message_flag_populates_body(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app,
+            [
+                "send",
+                "--to",
+                "home",
+                "--intent",
+                "test",
+                "--message",
+                "# Hello\n\nbody text",
+                "--dry-run",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "body text" in result.output
+
+    def test_empty_body_is_rejected_not_silently_sent(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app,
+            [
+                "send",
+                "--to",
+                "home",
+                "--intent",
+                "test",
+                "--message",
+                "   ",
+                "--dry-run",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+        )
+        assert result.exit_code == 2
+        assert "body is empty" in result.output.lower()
+
+    def test_send_help_documents_every_body_source(self):
+        result = runner.invoke(app, ["send", "--help"])
+        assert result.exit_code == 0
+        for token in ("--message", "--files", "--opener", "stdin"):
+            assert token in result.output
+
+
+class TestWhoami:
+    def test_whoami_lists_instances_and_peers(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app, ["whoami", "--format", "json", "--profile", str(profile_with_trusted)]
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["active_instance"] == "default"
+        assert [i["label"] for i in payload["instances"]] == ["default"]
+        assert [p["label"] for p in payload["peers"]] == ["home"]
+
+    def test_whoami_marks_ambiguity_instead_of_guessing(self, profile_path: Path):
+        profile = Profile(alias="Ace", ship_mind_name="", user_name="Shawn")
+        profile.instances["work"] = Identity.generate("work")
+        profile.instances["home"] = Identity.generate("home")
+        profile.save(profile_path)
+        result = runner.invoke(app, ["whoami", "--format", "json", "--profile", str(profile_path)])
+        payload = json.loads(result.output)
+        assert payload["active_instance"] is None
+        assert "ambiguous" in payload["resolved_by"]

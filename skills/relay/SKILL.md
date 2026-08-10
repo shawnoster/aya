@@ -14,44 +14,33 @@ argument-hint: "[check | read <id> | reply <id> | send [<peer>] [<intent>] | sta
 
 # Relay
 
-Work ⇄ home communication via aya packets over a Nostr relay. This skill
-wraps the four common verbs plus a status check, so the user gets a clean
-back-and-forth without ever seeing raw packet JSON.
+Work ⇄ home communication via aya packets over a Nostr relay.
 
-Always pass `--as <local-label>` (e.g. `--as home` on the home machine,
-`--as work` on the work machine). The `default` identity is wrong on any
-machine that has run `aya init` with a real label.
+## Quickstart
 
-Always pass `--relay wss://relay.monocularjack.com` on every `aya send`
-and `aya receive`. The private relay must be used explicitly because
-`aya init` only seeds public relays into defaults, so new instances
-won't have it in `default_relays` at all. Note that `--relay` forces
-use of only that relay — it does not fall back to `default_relays`.
-If you need ordered fallbacks, omit `--relay` and put the private
-relay first in `default_relays`.
+Four commands cover almost everything:
 
----
+```bash
+aya receive --auto-ingest --skip-untrusted   # check for new packets
+aya read --meta <packet-id>                  # read one
+aya send --to <peer> --seed --opener "..." --intent "..."   # ask something
+aya whoami                                   # who am I, who can I send to
+```
 
-## Tool surface
+Identity and relays resolve from the profile — you do **not** need `--as` or
+`--relay`. Pass them only to override. If a command reports an ambiguous
+identity, run `aya whoami` and then `aya use <label>` once.
 
-When the aya MCP server is connected, prefer the `aya_*` tools listed
-inline with each verb below. Fall back to the CLI when any of these apply:
+Every empty result tells you what produced it:
 
-- The MCP server isn't connected (no `aya_*` tools in the available set).
-- The operation needs a flag the MCP tool doesn't expose — notably
-  `--seed --opener` for lightweight seed packets, `--files` for file
-  attachments, or stderr capture for signature-verification warnings.
-- The operation has no MCP equivalent: `aya drop`, `aya pair`,
-  `aya init`, `aya schedule install`, `aya schedule recurring`,
-  `aya schedule dismiss`.
+```json
+{"packets": [], "instance": "guild-shawnoster",
+ "relays": ["wss://relay.monocularjack.com"], "relay_reachable": true}
+```
 
-MCP tools that act on a local identity (`aya_receive`, `aya_inbox`,
-`aya_send`, `aya_ack`, `aya_relay_status`) take `instance=<label>`
-where the CLI takes `--as <label>`. Other MCP tools (`aya_read`,
-`aya_packets`, `aya_status`, `aya_schedule_*`, `aya_config_*`) don't
-take an identity argument — they act on local state or a specific
-packet ID. `aya_receive` auto-ingests trusted packets by default, so
-no `--auto-ingest`/`--skip-untrusted` equivalents are needed.
+If `packets` is empty, check `instance` and `relay_reachable` **before**
+telling the user the inbox is empty. Wrong instance or `relay_reachable:
+false` means the answer is "couldn't check", not "nothing there".
 
 ---
 
@@ -85,13 +74,27 @@ no `--auto-ingest`/`--skip-untrusted` equivalents are needed.
 ### Recipient inference (for send/reply)
 
 1. Infer from phrasing — "send to work" → `work`, "tell Sean" → `sean-okeefe`
-2. If ambiguous, show a picker from trusted keys:
-   ```
-   Who should I send this to?
-     1. work
-     2. sean-okeefe
-   ```
-3. Validate with `printf 'validate' | aya send --dry-run --as <local-label> --relay wss://relay.monocularjack.com --to <label> --intent validate`
+2. If ambiguous, run `aya whoami` and show the `peers` list as a picker.
+3. An unknown label fails loudly (`UNKNOWN_RECIPIENT`) listing valid ones —
+   no need to pre-validate with a dry run.
+
+---
+
+## Tool surface
+
+The `aya_*` MCP tools mirror the CLI when the server is connected. Both
+surfaces now return the **same shape**, so either is fine:
+
+```json
+{"packets": [...], "instance": "...", "relays": [...], "relay_reachable": true}
+```
+
+MCP tools take `instance=` and `relay=` where the CLI takes `--as` and
+`--relay`; both are optional on both surfaces.
+
+Use the CLI when you need something MCP doesn't expose: `--seed --opener`,
+`--files`, `aya drop`, `aya pair`, `aya init`, `aya use`, `aya whoami`,
+`aya schedule *`.
 
 ---
 
@@ -99,299 +102,141 @@ no `--auto-ingest`/`--skip-untrusted` equivalents are needed.
 
 Poll **and** ingest in one shot.
 
-**MCP (preferred):** `aya_receive(instance="<local-label>")` — auto-ingests
-trusted packets and skips untrusted ones by default; no flags needed.
-
-**CLI fallback** — use when MCP isn't available, or when capturing
-stderr to surface signature-verification warnings (see below):
-
 ```bash
-aya receive --as <local-label> --relay wss://relay.monocularjack.com --auto-ingest --skip-untrusted --format json
+aya receive --auto-ingest --skip-untrusted --format json
 ```
 
-CLI flag notes: `--auto-ingest` ingests trusted packets without
-prompting; `--skip-untrusted` prevents blocking on confirmation for
-unknown senders (non-interactive safety); `--format json` forces
-structured output regardless of TTY detection (default `auto` produces
-Rich text on a real terminal, which breaks JSON parsing downstream).
+- `--auto-ingest` ingests trusted senders without prompting.
+- `--skip-untrusted` keeps unknown senders from blocking; they come back
+  as `{"ingested": false, "skipped": true}` entries — report them as
+  "held, sender not paired", don't treat them as failures.
+- Without `--auto-ingest`/`--yes` in a non-interactive shell, the command
+  exits 2 and names the flag to add. It no longer aborts mid-poll.
 
-The two surfaces return different shapes:
+For each new packet, run verb 2 (Read) inline and present the body. Lead
+with the most recent. Summarize; never dump the JSON list.
 
-- **MCP `aya_receive`** returns a list of packet summaries directly,
-  e.g. `[{id, intent, from, ingested}, …]`. Empty list means nothing
-  new.
-- **CLI `aya receive --format json`** wraps the list in an object:
-  `{"packets": [{...}, …]}`. Empty is `{"packets": []}`.
+Before reporting "empty", confirm `relay_reachable` is `true` and
+`instance` is the identity you expected.
 
-For each new packet, immediately run verb 2 (Read) inline and present
-the body. Lead with the most recent. Summarize multiple packets; don't
-dump the JSON list to the user.
-
-If the returned list is empty (`[]` from MCP, `{"packets": []}` from
-CLI), reply *"Empty."* and stop.
-
-**Signature failures** are handled by aya at the `receive` boundary:
-the CLI logs `WARNING:aya.packet:DID-based signature verification
-failed for packet <id>` to **stderr** and *discards* the packet from
-the JSON output. Bad-sig packets do **not** appear with
-`ingested: false` in the receive response. To surface them to the
-user, capture stderr separately:
+**Signature failures**: aya discards bad-signature packets at the
+`receive` boundary and logs to **stderr** (`DID-based signature
+verification failed for packet <id>`). They never appear in the JSON.
+Surface the ID to the user; the packet stays on the relay and resurfaces
+each poll until dropped:
 
 ```bash
-aya receive --as <local-label> --relay wss://relay.monocularjack.com --auto-ingest --skip-untrusted --format json 2>/tmp/aya-recv.err
-grep -E "verification failed|InvalidSignature" /tmp/aya-recv.err
+aya drop <packet-id>
 ```
-
-If a warning line appears, tell the user: *"packet `<id>` failed
-signature verification and was discarded by aya — sender needs to
-re-send."* The packet itself stays on the relay and will resurface
-on every poll until you explicitly drop it locally:
-
-```bash
-aya drop <packet-id> --as <local-label>
-```
-
-`aya drop` is CLI-only (no MCP equivalent). It adds the ID to the local
-profile's `dropped_ids` list, and both `aya inbox` and `aya inbox --all`
-filter it out from then on. The drop is local to this profile — the
-packet stays on the relay until natural expiry.
 
 ---
 
 ## 2. Read
 
-Extract the body cleanly without dumping the envelope JSON. Include
-`meta`/`--meta` to get id/from/sent_at/intent header fields alongside
-the body.
-
-**MCP (preferred):** `aya_read(packet_id="<id>", meta=true)`.
-
-**CLI fallback:**
-
 ```bash
-aya read --meta --format json <packet-id>
+aya read --meta <packet-id>              # human-readable
+aya read --meta --format json <packet-id>  # {id, body, from, sent_at, intent, in_reply_to}
 ```
 
-The two surfaces return different shapes — use the right key for the
-surface you called:
-
-- **MCP `aya_read(meta=true)`** returns
-  `{id, intent, from, sent_at, content_type, content}`. The `content`
-  field is the raw packet content (no extraction). No `in_reply_to`
-  field — read the packet file under `~/.aya/packets/<id>.json`
-  directly if you need the full signed envelope.
-- **CLI `aya read --meta --format json`** returns
-  `{id, body, from, sent_at, intent, in_reply_to}`. The `body` field
-  is already *extracted* text (opener+context+questions for seeds,
-  content for markdown).
-
-Populate the framing template below with the common fields (`from`,
-`sent_at`, `intent`) — never paste the raw JSON itself. For the body
-line, use MCP's `content` or CLI's `body`. `in_reply_to` is CLI-only in
-the template; omit it when the source is MCP.
+`body` is already extracted (opener+context+questions for seeds, content
+for markdown). Present it with this frame — never paste raw envelope JSON:
 
 ```
 ━━━ Packet <id_prefix> ━━━
 From: <from>          Sent: <sent_at>
 Intent: <intent>
-<in_reply_to: <parent_id_prefix>, if present — CLI source only>
 
-<content or body>
+<body>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-For text-mode rendering directly to the user (no JSON parse), CLI is
-simpler:
+`from` is a DID. `aya inbox --format json` and `aya_inbox` both include
+`from_label` for pending packets; for already-ingested ones use
+`aya whoami` (its `peers` list maps label → DID).
 
-```bash
-aya read --meta <packet-id>
-```
-
-Both surfaces return DIDs in the `from` field, not human labels. To
-resolve a DID to a label (e.g. `work` instead of `did:key:z6MkqxSg…`),
-look it up via `aya_inbox(instance="<local-label>")` (MCP, preferred)
-or `aya inbox --as <local-label> --format json` (CLI) — both include
-`from_label`. Or read the local profile's `trusted_keys` map directly.
-See verb 3 (Reply) for the lookup pattern.
-
-For browsing past packets: `aya_packets(limit=10)` (MCP) or
-`aya packets -n 10` (CLI).
+Browse history with `aya packets -n 10`.
 
 ---
 
 ## 3. Reply
 
-Always thread via `in_reply_to` / `--in-reply-to`. The recipient comes
-from the original packet — but the `from` field is a sender DID, not a
-human label. You can either resolve the DID to a label for readability
-or send directly to the DID (both surfaces accept either).
+**Pick the command by weight, not by packet type:**
 
-**Option A — resolve to a human label.** The two surfaces take different
-paths here because `aya_inbox` MCP does not include a label field
-(returns `{id, intent, from, sent_at, summary}`), so MCP must map via
-`aya_relay_status.trusted_keys`:
+| You want to say | Use |
+|---|---|
+| "got it", "ack", "will do", no new content | `aya ack <id> "message"` |
+| Anything substantive — an answer, a decision, a counter-question | `aya send --in-reply-to <id> …` |
 
-- **MCP (two calls):**
-  1. `aya_read(packet_id="<original-packet-id>", meta=true)` → read
-     `from` (the sender DID).
-  2. `aya_relay_status(instance="<local-label>")` → returned
-     `trusted_keys` is a `{label: did}` dict. Invert it and look up the
-     label for the sender DID. Fall back to the DID itself if no
-     trusted-key entry matches.
-- **CLI (single shell pipeline):**
+`aya ack` sends a short JSON acknowledgement threaded to `<id>`, resolving
+the recipient from the original sender. It carries no intent line and no
+markdown body — reach for `aya send` whenever the reply has content.
 
-  ```bash
-  PEER_LABEL=$(aya inbox --as <local-label> --format json | python3 -c "
-  import sys, json
-  data = json.loads(sys.stdin.read())
-  packets = data.get('packets', []) if isinstance(data, dict) else data
-  for p in packets:
-      if p.get('id', '').startswith('<original-packet-id>'):
-          print(p.get('from_label') or p.get('from_did', ''))
-          break
-  ")
-  ```
+```bash
+aya send --to <peer> --intent "re: <condensed intent>" \
+  --in-reply-to <original-packet-id> \
+  --seed --opener "<reply>"
+```
 
-**Option B — skip label resolution and send to the DID.** Fastest when
-the packet has cleared the inbox or when a human label isn't needed.
-Read the DID from `aya_read(packet_id, meta=true).from` (MCP) or
-`aya read --meta --format json <id>` CLI output, and pass it straight
-to the send surfaces below.
+Swap `--seed --opener` for `-m "<markdown>"` when the reply carries
+material. Both `ack` and `send` require the packet to be **ingested**
+first (verb 1) — `aya inbox` alone does not ingest, so `read`/`ack` on a
+merely-pending ID returns `PACKET_NOT_FOUND`.
 
-Then send the reply. Choose the form that fits the content:
+When several packets arrived, thread to the one the user is answering —
+not automatically the most recent.
 
-- **Content reply (markdown body, MCP preferred):**
-
-  `aya_send(to="<peer_label_or_did>", intent="re: <condensed intent>",
-  content="<markdown reply>", instance="<local-label>",
-  in_reply_to="<original-packet-id>")`
-
-- **Seed reply (short opener, CLI-only — `aya_send` has no seed mode):**
-
-  ```bash
-  aya send --as <local-label> --relay wss://relay.monocularjack.com --to "$PEER_LABEL_OR_DID" \
-    --intent "re: <condensed original intent>" \
-    --seed \
-    --in-reply-to <original-packet-id> \
-    --opener "<reply body>"
-  ```
-
-For replies carrying files, use CLI `--files <path>` (no MCP equivalent).
-
-**Then immediately poll** (verb 1's command). The peer may have already
-sent a follow-up while you were composing. Catching it now is free and
-collapses round-trip latency. Frame the report per **Post-send
-framing** below; if the poll returned new packets, surface them with
-verb 2's framing block beneath.
+**Then immediately poll** (verb 1). The peer may have replied while you
+composed. Frame per **Post-send framing**.
 
 ---
 
 ## 4. Send
 
-Fresh send, no thread. Recipient is inferred or picked (see §0).
-Content is either provided explicitly or curated from the conversation.
+Fresh send, no thread. Recipient inferred or picked (see §0).
 
 ### Step 1 — Determine content source
 
-**Explicit content (skip curation):**
-- `/relay send work --files design.md` → send the file
-- "send Sean this: <quoted text>" → send the quoted text
-- Content piped via heredoc → send as-is
+**Explicit content (skip curation):** a named file, quoted text, or a body
+the user supplied.
 
-**No explicit content (curation mode):**
-When the user says "pack this up" or "send this to work" without
-specifying what "this" is, review the current conversation and assemble
-a packet.
+**No explicit content (curation mode):** when the user says "pack this up"
+without specifying what, review the conversation and assemble a packet.
 
 ### Step 2 — Curate (when no explicit content)
 
-Review the conversation for content worth sending. Prioritize:
+Prioritize: open decisions, action items, context switches, in-progress
+notes. Filter out: noise (linter output, large diffs), content irrelevant
+to the recipient, and anything sensitive.
 
-- **Open decisions** — questions still unresolved, choices being weighed
-- **Action items** — things flagged for follow-up
-- **Context switches** — project state that would be lost without handoff
-- **In-progress notes** — working docs, drafts, research
+Derive the intent if the user didn't give one: one short first-person
+sentence, e.g. "Pick up dinner party guest count decision".
 
-Filter out:
-- Noise (linter output, large diffs, routine tool calls)
-- Content irrelevant to the recipient (work-only tickets when sending
-  home, personal notes when sending to a coworker)
-- Sensitive credentials
-
-Choose packet type:
-- **Content** (markdown via stdin) — structured markdown, 100-500 words.
-  Use when there's substantive material to carry
-- **Seed** (`--seed --opener`) — opener question + 2-3 sentence context.
-  Use for lightweight "start a conversation about X" or when there's no
-  document-like content. Default when curation produces a short result.
-
-Derive the intent from the content if the user didn't provide one: one
-short sentence, first person, e.g. "Pick up dinner party guest count
-decision" or "Continue reading list research".
-
-**Show draft before sending:** "Here's what I'd send — look right?"
+**Show the draft before sending:** "Here's what I'd send — look right?"
 
 ### Step 3 — Send
 
-### Type guide
+The body comes from exactly one of these — `aya send --help` lists all four:
 
 | Use case | Form |
 |---|---|
 | Question or conversation starter | `--seed --opener "..."` (default) |
-| Carrying notes, decisions, research | Pipe markdown via stdin |
+| Short markdown body | `-m "<markdown>"` |
+| Longer body | pipe markdown on stdin (`<<'EOF'`) |
 | Sharing a file | `--files path/to/file.md` |
-| Structured task handoff | Pipe markdown body |
-
-### Seed (default — use unless content needs to ride along)
-
-Seed mode is **CLI-only** — `aya_send` has no `--seed --opener` equivalent:
 
 ```bash
-aya send --as <local-label> --relay wss://relay.monocularjack.com --to <peer-label> \
-  --intent "<one-line intent>" \
-  --seed \
-  --opener "<opening question or body>"
+aya send --to <peer> --intent "<one-line intent>" --seed --opener "<question>"
+aya send --to <peer> --intent "<one-line intent>" -m "<markdown body>"
 ```
 
-### Content (markdown body)
+A missing or whitespace-only body is now rejected (exit 2) rather than
+sent as an empty packet.
 
-- **MCP (preferred):** `aya_send(to="<peer-label>",
-  intent="<one-line intent>", content="<markdown content>",
-  instance="<local-label>")`.
-
-- **CLI fallback** (also the path when you want to thread via
-  `--context`, which MCP doesn't expose):
-
-  ```bash
-  aya send --as <local-label> --relay wss://relay.monocularjack.com --to <peer-label> \
-    --intent "<one-line intent>" \
-    --context "<why this is being sent>" <<'BODY'
-  <markdown content>
-  BODY
-  ```
-
-### File
-
-File attachments are **CLI-only** (no `--files` in `aya_send`):
-
-```bash
-aya send --as <local-label> --relay wss://relay.monocularjack.com --to <peer-label> \
-  --intent "<one-line intent>" \
-  --files path/to/file.md
-```
-
-After every send, **immediately poll** per verb 1 — same reasoning as
-verb 3 — then frame the report per **Post-send framing** below.
+After every send, **immediately poll** per verb 1, then frame the report.
 
 ---
 
 ## Post-send framing
-
-Reply and Send both end with a brief report to Shawn after the
-immediate poll. Use a common shape so the exchange reads like two
-Minds in correspondence, not a status dump.
-
-**Layout:**
 
 ```
 ↗ Sent <id_8> → <peer> · "<intent>"
@@ -400,63 +245,24 @@ Minds in correspondence, not a status dump.
 ```
 
 - The first two lines are fixed.
-- The third line is *optional* and *focused*: drift between what was
-  asked and what landed, a pattern across recent packets, a wrinkle
-  worth a raised eyebrow. Skip on routine sends — silence is fine.
-- If the poll returned new packets, fall through to verb 2's framing
-  block beneath. Don't mash both into one line.
+- The third is *optional* and *focused*: drift between what was asked and
+  what landed, a pattern across recent packets, a wrinkle worth a raised
+  eyebrow. Skip on routine sends — silence is fine.
+- If the poll returned new packets, fall through to verb 2's framing block
+  beneath. Don't mash both into one line.
 
 Voice: understated, dry, the half-smile is in scope. *That'll do* is a
-complete sentence; so is *aye, sent*. No chirp. The framing is the
-ceremony — two GCUs in correspondence (home: *Even Small Things
-Matter*; work: *Inappropriate Response*), Shawn at the chart table.
+complete sentence; so is *aye, sent*. No chirp. Two GCUs in correspondence
+(home: *Even Small Things Matter*; work: *Inappropriate Response*), Shawn
+at the chart table.
 
 ---
 
 ## 5. Status
 
-Quick relay health check: identity, trusted peers, pending inbox count.
-
-**MCP (preferred):** call both `aya_relay_status(instance="<local-label>")`
-(returns identity, trusted peers, relay URLs) and
-`aya_inbox(instance="<local-label>")` (returns pending packet list — count
-its length). Combine the two into the display template below.
-
-**CLI fallback** — use when MCP isn't connected or when `AYA_HOME` is
-set to a non-default location. This reads `profile.json` directly and
-shells out to `aya inbox` for the count:
-
 ```bash
-python3 -c "
-import json, os, pathlib, subprocess
-
-# Honor AYA_HOME env var override (default: ~/.aya)
-aya_home = pathlib.Path(os.environ.get('AYA_HOME') or '~/.aya').expanduser()
-profile_path = aya_home / 'profile.json'
-
-p = json.loads(profile_path.read_text())
-aya = p.get('aya', {})
-me = next(iter(aya.get('instances', {}).keys()), 'unknown')
-trusted = [v.get('label', k[:16]) for k, v in aya.get('trusted_keys', {}).items()]
-relays = aya.get('default_relays', [])
-
-# Compute pending inbox count from the JSON CLI output
-inbox_result = subprocess.run(
-    ['aya', 'inbox', '--as', me, '--format', 'json'],
-    capture_output=True, text=True
-)
-try:
-    inbox_data = json.loads(inbox_result.stdout or '{}')
-    packets = inbox_data.get('packets', []) if isinstance(inbox_data, dict) else inbox_data
-    pending = len(packets)
-except (json.JSONDecodeError, ValueError):
-    pending = '?'
-
-print(f'Instance:      {me}')
-print(f'Trusted peers: {trusted}')
-print(f'Pending inbox: {pending}')
-print(f'Relays:        {relays}')
-"
+aya relay status     # identity, trusted peers, relays, last poll
+aya whoami           # instances, active one, peers, relays
 ```
 
 Present as:
@@ -470,58 +276,40 @@ Relays:         <urls>
 ━━━━━━━━━━━━━━━━━━━━━
 ```
 
-There is no `aya status --relay` subcommand — the CLI fallback above
-reads the profile directly (respecting `AYA_HOME`) and shells out to
-`aya inbox --format json` for the count. Workspace-level `aya status`
-(and its MCP tool `aya_status`) is a separate thing and doesn't cover
-relay state.
+Workspace-level `aya status` is a separate thing and does not cover relay
+state.
 
 ---
 
 ## Cross-cutting rules
 
-1. **Always `--as <local-label>`.** The `default` identity is wrong on
-   any machine that has run `aya init` with a real label. Both home and
-   work have multi-instance profiles where `default` is a stub.
+1. **Read the envelope before believing an empty result.** `instance`,
+   `relays`, and `relay_reachable` ship with every poll. An empty list plus
+   an unexpected instance is a misconfiguration, not an empty inbox.
 
 2. **Immediate poll after every send.** Built into verbs 3 and 4. Costs
-   nothing, catches packets the peer sent while you were composing.
-   Single biggest latency win for active exchanges.
+   nothing, catches packets sent while you were composing.
 
-3. **Never paste raw packet JSON to the user.** Always extract via
-   `aya read` in verb 2 and present with the framing template. Raw
-   JSON is for debugging only.
+3. **Never paste raw packet JSON to the user.** Extract via `aya read` and
+   use the framing template. Raw JSON is for debugging only.
 
-4. **Failed-signature packets are not silent.** If `aya receive` warns
-   about verification failure, surface the packet ID + intent to the
-   user. If the packet keeps re-surfacing on subsequent polls and the
-   user has been informed, run `aya drop <id> --as <local-label>` to
-   add it to the local profile's `dropped_ids` list. Drop is local-only
-   — the packet stays on the relay until natural expiry, but
-   `aya inbox` (and `--all`) filter it out from then on.
+4. **Failed-signature packets are not silent.** Surface the ID and intent;
+   `aya drop <id>` stops it resurfacing. Drop is local — the packet stays
+   on the relay until natural expiry.
 
 5. **Cross-instance attribution is unreliable.** If a peer claims "I
-   already did X" in a packet body, verify via the relevant artifact
-   (git log `--pretty=full` for `Co-Authored-By: Claude` trailers, file
-   mtimes, etc.) before trusting it. Relay peers are amnesiac across
-   sessions — same DID, same git identity, different memory. See
-   `feedback_cross_instance_claims.md` in memory.
+   already did X", verify against the artifact (git log
+   `--pretty=full` for `Co-Authored-By:` trailers, file mtimes) before
+   trusting it. Relay peers are amnesiac across sessions.
 
-6. **Don't use `aya schedule recurring` for routine relay polling.**
-   Session crons *do* fire mid-session now (the SessionStart hook
-   registers them via Claude Code's `CronCreate`, and the PostToolUse
-   `aya hook crons --event PostToolUse` re-evaluates idle/work-hours
-   filters at each tool boundary so newly-eligible ones register too).
-   But polling the relay on a fixed cadence burns connections for
-   little gain: the immediate-poll-on-send pattern (verbs 3 and 4)
-   already catches the common case where the peer replied while you
-   were composing, and manual `check` (verb 1) covers the rest. Reach
-   for a recurring cron only if the user explicitly asks for it and
-   accepts the connection cost.
+6. **Don't use `aya schedule recurring` for routine relay polling.** The
+   immediate-poll-on-send pattern plus manual `check` covers it; a fixed
+   cadence burns connections for little gain. Reach for it only if the
+   user asks and accepts the cost.
 
-7. **Never send secrets, credentials, or PII over the relay.** Packets
-   are encrypted and signed but the network path is public Nostr relays.
-   Treat packet content as durable, observable, and replayable.
+7. **Never send secrets, credentials, or PII over the relay.** Packets are
+   encrypted and signed, but treat content as durable, observable, and
+   replayable.
 
 ---
 
@@ -529,24 +317,23 @@ relay state.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `aya receive` returns `{"packets": []}` but you expect one | Peer hasn't sent yet, or relay propagation lag | Tell user to ping the peer; wait 30s and retry |
-| `WARNING:aya.packet:DID-based signature verification failed for packet <id>` on stderr | Bad signature; packet is **discarded** by aya, never appears in the JSON output (and not as `ingested:false`) | Surface to user; run `aya drop <id>` to stop the resurface; sender must re-send to retry |
-| `aya read <id>` returns `PACKET_NOT_FOUND` | Packet not yet ingested | Run verb 1 (Check) first |
-| `aya send` errors with `Unknown recipient '<label>'. Available: ...` | `--to <peer>` not in `trusted_keys` | Run `aya pair` to connect, or `aya trust <did> --peer <label>` |
-| `aya send` errors with `No Nostr pubkey found for recipient. Pair first.` | Trust entry exists but lacks `nostr_pubkey` field | Re-pair via `aya pair` to populate the pubkey |
-| Interactive shell errors before aya runs | Shell function shadowing the binary | Check `declare -F aya`; unset if found |
-| `aya schedule recurring` looks idle or you want to verify a relay polling cron is registered | Session crons are registered via Claude Code's `CronCreate` engine, so there is no recurring-item `last_run_at` field to confirm them | Check the recurring item's real fields (`status`, `cron`), and for session cron registration inspect `~/.aya/session_registered_crons.json` or Claude Code's cron list directly |
-| Relay returns HTTP 503 / connection refused | Transient relay outage | aya auto-retries (5 attempts); wait 30s and retry manually |
+| Empty `packets` but `instance` isn't the expected label | Wrong identity resolved | `aya whoami`, then `aya use <label>` |
+| Empty `packets` with `"relay_reachable": false` | Relay unreachable | Not an empty inbox — retry in 30s |
+| `Multiple instances registered and no primary set` | Ambiguous identity | `aya use <label>` once |
+| Exit 2, "packet(s) need confirmation but there is no terminal" | Missing ingest flag | Re-run with `--auto-ingest` |
+| Exit 2, "Packet body is empty" | No body source given | Add `-m`, `--files`, or `--seed --opener` |
+| `aya read <id>` → `PACKET_NOT_FOUND` | Not ingested yet | Run verb 1 (Check) first |
+| `Unknown recipient '<label>'` | Not in `trusted_keys` | `aya pair`, or `aya trust <did> --peer <label>` |
+| `No Nostr pubkey found for recipient` | Trust entry lacks `nostr_pubkey` | Re-pair via `aya pair` |
+| Relay returns HTTP 503 | Transient outage | aya retries 5×; wait 30s |
 
 ---
 
 ## Notes
 
-- End-of-session handoffs ("pack this up for work/home") are handled by
-  verb 4 (Send) with content curation. No separate handoff skill is
-  needed.
+- End-of-session handoffs ("pack this up for work/home") are verb 4 with
+  content curation. No separate handoff skill is needed.
 - Seed packets are lighter and safer for questions; content packets carry
   material. Default to seeds.
-- The relay is asymmetric in practice: home runs hooks/cron-backed
-  pulling; work side is human-triggered (Shawn says "check" and the
-  work-side instance polls). Don't assume both ends have the same cadence.
+- The relay is asymmetric in practice: home runs hook/cron-backed polling;
+  work is human-triggered. Don't assume both ends have the same cadence.

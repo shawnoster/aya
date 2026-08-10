@@ -47,9 +47,14 @@ aya pair --code WORD-WORD-0000 --peer alice   # on Bob's machine
 
 # Send a packet
 aya send --to bob --intent "build notes" --files notes.md
+aya send --to bob --intent "quick question" --seed --opener "Which side is canonical?"
+aya send --to bob --intent "build notes" -m "## Notes\n\nAll green."
 
-# Check inbox
-aya inbox
+# Check inbox (and ingest trusted senders)
+aya receive --auto-ingest --skip-untrusted
+
+# Who am I, and who can I send to?
+aya whoami
 ```
 
 Labels can be anything — `home`/`work`, names, machine hostnames. They're local aliases for the keypair on each side.
@@ -59,7 +64,7 @@ Labels can be anything — `home`/`work`, names, machine hostnames. They're loca
 Three flags name *who* you're talking about, and they're easy to confuse:
 
 - **`--label <name>`** — used **only** with `aya init`, names *this* machine's local identity (e.g. `aya init --label alice` registers an instance called `alice` in the local profile).
-- **`--as <name>`** — picks *which local identity* to act as for a command. Defaults to `default`; with multiple instances on a machine, pass `--as alice` to disambiguate.
+- **`--as <name>`** — picks *which local identity* to act as for a command. Omit it and aya resolves the primary instance: an explicit one set via `aya use`, otherwise the only instance, otherwise the only non-`default` instance. If the choice is genuinely ambiguous the command fails and lists the candidates rather than guessing — a wrong identity polls an unrelated keypair and looks exactly like an empty inbox. Run `aya whoami` to see which one is active.
 - **`--peer <name>`** — names a *remote* identity (the one you've paired with). Used with `aya pair`, `aya trust`, etc.
 
 Quick mnemonic: `--label` *creates* a local name, `--as` *selects* one, `--peer` *targets* a remote one.
@@ -260,16 +265,18 @@ session to pick up changes — no reinstall needed.
 | Command | What it does |
 | ---- | ---- |
 | `aya version` | Show the installed aya version |
+| `aya whoami` | Show the active local identity, all instances, and trusted peers |
+| `aya use` | Set which instance commands act as when `--as` is omitted |
 | `aya init` | Generate identity keypair for this instance |
 | `aya pair` | Pair two instances via short-lived relay code |
 | `aya trust` | Manually trust a DID |
-| `aya send` | Build, sign, and publish a knowledge packet to a Nostr relay |
+| `aya send` | Build, sign, and publish a knowledge packet (body from `-m`, `--files`, `--seed --opener`, or stdin) |
 | `aya send-raw` | Publish a pre-built packet file to a Nostr relay |
 | `aya inbox` | List pending (un-ingested) packets |
 | `aya receive` | Review and ingest packets from the relay |
 | `aya read` | Read the body of a stored packet (`--meta` for headers, `--panel` for boxed display) |
 | `aya ack` | Acknowledge a received packet (sends a reply back) |
-| `aya drop` | Delete an ingested packet from local storage |
+| `aya drop` | Drop a packet from inbox view so it stops resurfacing |
 | `aya packets` | List stored packets, most recent first |
 | `aya context` | Build a context block from workspace state |
 | `aya status` | Workspace readiness check — systems, schedule, focus |

@@ -237,7 +237,9 @@ async def test_inbox_tool(tmp_path):
         result = await call_tool("aya_inbox", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    assert isinstance(payload, list)
+    assert isinstance(payload["packets"], list)
+    assert payload["instance"] == "default"
+    assert payload["relay_reachable"] is True
 
 
 async def test_inbox_filters_dropped_packets(tmp_path):
@@ -279,8 +281,8 @@ async def test_inbox_filters_dropped_packets(tmp_path):
         result = await call_tool("aya_inbox", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    assert isinstance(payload, list)
-    returned_ids = [p["id"] for p in payload]
+    assert isinstance(payload["packets"], list)
+    returned_ids = [p["id"] for p in payload["packets"]]
     assert kept.id in returned_ids, "non-dropped packet must appear in inbox"
     assert dropped.id not in returned_ids, "dropped packet must be filtered from inbox"
 
@@ -325,7 +327,7 @@ async def test_inbox_includes_trusted_flag(tmp_path):
         result = await call_tool("aya_inbox", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    by_id = {p["id"]: p for p in payload}
+    by_id = {p["id"]: p for p in payload["packets"]}
 
     assert by_id[trusted_pkt.id]["trusted"] is True
     assert by_id[untrusted_pkt.id]["trusted"] is False
@@ -374,9 +376,9 @@ async def test_receive_writes_packet_body_to_disk(tmp_path):
         result = await call_tool("aya_receive", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    assert len(payload) == 1
-    assert payload[0]["id"] == signed.id
-    assert payload[0]["ingested"] is True
+    assert len(payload["packets"]) == 1
+    assert payload["packets"][0]["id"] == signed.id
+    assert payload["packets"][0]["ingested"] is True
 
     written = packets_dir / f"{signed.id}.json"
     assert written.exists(), "packet body must be persisted to PACKETS_DIR"
@@ -426,9 +428,9 @@ async def test_receive_skips_cursor_when_persist_fails(tmp_path):
         result = await call_tool("aya_receive", {"instance": "default"})
 
     payload = json.loads(result[0].text)
-    assert len(payload) == 1
-    assert payload[0]["ingested"] is False
-    assert payload[0]["error"] == "persist_failed"
+    assert len(payload["packets"]) == 1
+    assert payload["packets"][0]["ingested"] is False
+    assert payload["packets"][0]["error"] == "persist_failed"
     assert all(entry["id"] != signed.id for entry in profile.ingested_ids)
 
 

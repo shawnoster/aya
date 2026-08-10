@@ -36,8 +36,11 @@ _TOOLS: list[types.Tool] = [
             "properties": {
                 "instance": {
                     "type": "string",
-                    "description": "Local identity to act as (default: 'default').",
-                    "default": "default",
+                    "description": ("Local identity to act as. Omit to use the primary instance."),
+                },
+                "relay": {
+                    "type": "string",
+                    "description": "Relay URL override (default: profile default_relays).",
                 },
             },
             "additionalProperties": False,
@@ -63,8 +66,11 @@ _TOOLS: list[types.Tool] = [
                 },
                 "instance": {
                     "type": "string",
-                    "description": "Local identity to act as (default: 'default').",
-                    "default": "default",
+                    "description": ("Local identity to act as. Omit to use the primary instance."),
+                },
+                "relay": {
+                    "type": "string",
+                    "description": "Relay URL override (default: profile default_relays).",
                 },
                 "idempotency_key": {
                     "type": "string",
@@ -87,8 +93,11 @@ _TOOLS: list[types.Tool] = [
             "properties": {
                 "instance": {
                     "type": "string",
-                    "description": "Local identity to act as (default: 'default').",
-                    "default": "default",
+                    "description": ("Local identity to act as. Omit to use the primary instance."),
+                },
+                "relay": {
+                    "type": "string",
+                    "description": "Relay URL override (default: profile default_relays).",
                 },
             },
             "additionalProperties": False,
@@ -164,8 +173,11 @@ _TOOLS: list[types.Tool] = [
                 },
                 "instance": {
                     "type": "string",
-                    "description": "Local identity to act as (default: 'default').",
-                    "default": "default",
+                    "description": ("Local identity to act as. Omit to use the primary instance."),
+                },
+                "relay": {
+                    "type": "string",
+                    "description": "Relay URL override (default: profile default_relays).",
                 },
                 "idempotency_key": {
                     "type": "string",
@@ -284,15 +296,19 @@ def _load_profile() -> Any:
     return Profile.load(PROFILE_PATH)
 
 
-def _resolve_instance(profile: Any, instance: str) -> Any:
-    local = profile.instances.get(instance)
-    if local is not None:
-        return local
-    available = list(profile.instances.keys())
-    if len(available) == 1:
-        return next(iter(profile.instances.values()))
-    msg = f"Instance '{instance}' not found. Available: {', '.join(available)}."
-    raise ValueError(msg)
+def _resolve_instance_labelled(profile: Any, instance: str | None) -> tuple[Any, str]:
+    """Resolve *instance* to ``(Identity, label)`` using the shared profile rules.
+
+    ``instance`` is optional: omitting it selects the primary instance rather
+    than the literal label ``"default"``, which on multi-instance profiles is
+    usually a leftover stub with a different Nostr keypair.
+    """
+    label, _reason = profile.resolve_instance_name(instance)
+    return profile.instances[label], label
+
+
+def _resolve_instance(profile: Any, instance: str | None) -> Any:
+    return _resolve_instance_labelled(profile, instance)[0]
 
 
 def _resolve_did(to: str, profile: Any) -> tuple[str, str]:
@@ -318,6 +334,14 @@ def _resolve_nostr_pubkey(did: str, profile: Any) -> str | None:
     return None
 
 
+def _label_for_did(profile: Any, did: str) -> str | None:
+    """Human label for a sender DID, so callers need no second lookup."""
+    for label, key in profile.trusted_keys.items():
+        if key.did == did:
+            return str(key.label or label)
+    return None
+
+
 # ── individual handlers ──────────────────────────────────────────────────────
 
 
@@ -329,16 +353,23 @@ async def _handle_status() -> list[types.TextContent]:
 
 
 async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
-    instance = arguments.get("instance", "default")
+    instance = arguments.get("instance")
     profile = _load_profile()
-    local = _resolve_instance(profile, instance)
+    local, instance_label = _resolve_instance_labelled(profile, instance)
 
     from aya.relay import RelayClient
 
-    relay_urls = profile.default_relays
+    relay_urls = [arguments["relay"]] if arguments.get("relay") else profile.default_relays
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
-    all_packets = [pkt async for pkt in client.fetch_pending()]
+    # An unreachable relay must not be reported as an empty inbox.
+    reachable = True
+    try:
+        all_packets = [pkt async for pkt in client.fetch_pending()]
+    except Exception:
+        logger.exception("Relay fetch failed during inbox")
+        reachable = False
+        all_packets = []
     ingested_set = {entry["id"] for entry in profile.ingested_ids}
     # Filter dropped packets — same logic as CLI `inbox` so both surfaces agree.
     # Dropped IDs are user-marked-ignore and must never resurface on any surface.
@@ -354,11 +385,19 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
             "from": pkt.from_did,
             "sent_at": pkt.sent_at,
             "trusted": profile.is_trusted(pkt.from_did),
+            "from_label": _label_for_did(profile, pkt.from_did),
             "summary": pkt.summary(),
         }
         for pkt in new_packets
     ]
-    return _text(summaries)
+    return _text(
+        {
+            "packets": summaries,
+            "instance": instance_label,
+            "relays": list(relay_urls),
+            "relay_reachable": reachable,
+        }
+    )
 
 
 async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -376,7 +415,7 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
                 }
             )
 
-    instance = arguments.get("instance", "default")
+    instance = arguments.get("instance")
     to = arguments["to"]
     intent = arguments["intent"]
     content = arguments["content"]
@@ -404,7 +443,7 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
     if recipient_nostr_pub is None:
         return _error("No Nostr pubkey found for recipient. Pair first.")
 
-    relay_urls = profile.default_relays
+    relay_urls = [arguments["relay"]] if arguments.get("relay") else profile.default_relays
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
     event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
 
@@ -415,7 +454,7 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
-    instance = arguments.get("instance", "default")
+    instance = arguments.get("instance")
 
     from datetime import UTC, datetime
 
@@ -426,9 +465,9 @@ async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
     from aya.relay import RelayClient
 
     profile = _load_profile()
-    local = _resolve_instance(profile, instance)
+    local, instance_label = _resolve_instance_labelled(profile, instance)
 
-    relay_urls = profile.default_relays
+    relay_urls = [arguments["relay"]] if arguments.get("relay") else profile.default_relays
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
     # No `since` filter — ingested_ids is the authoritative dedup mechanism and
@@ -436,8 +475,13 @@ async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
     # derived cursor permanently excludes packets that arrived before the cursor
     # but were never ingested (see issue #246).
     packets: list[Packet] = []
-    async for packet in client.fetch_pending():
-        packets.append(packet)
+    reachable = True
+    try:
+        async for packet in client.fetch_pending():
+            packets.append(packet)
+    except Exception:
+        logger.exception("Relay fetch failed during receive")
+        reachable = False
 
     now_check_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     for url in relay_urls:
@@ -488,7 +532,14 @@ async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
             )
 
     profile.save(PROFILE_PATH)
-    return _text(received)
+    return _text(
+        {
+            "packets": received,
+            "instance": instance_label,
+            "relays": list(relay_urls),
+            "relay_reachable": reachable,
+        }
+    )
 
 
 async def _handle_schedule_remind(arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -572,7 +623,7 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
         to_did = tk.did
         recipient_nostr_pub = tk.nostr_pubkey
 
-    local = _resolve_instance(profile, arguments.get("instance", "default"))
+    local = _resolve_instance(profile, arguments.get("instance"))
 
     ack_packet = Packet(
         **{"from": local.did, "to": to_did},
@@ -587,7 +638,7 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
     if recipient_nostr_pub is None:
         return _error("No Nostr pubkey found for ACK recipient.")
 
-    relay_urls = profile.default_relays
+    relay_urls = [arguments["relay"]] if arguments.get("relay") else profile.default_relays
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
     event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
 
@@ -688,9 +739,9 @@ async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextContent]:
-    instance = arguments.get("instance", "default")
+    instance = arguments.get("instance")
     profile = _load_profile()
-    local = _resolve_instance(profile, instance)
+    local, instance_label = _resolve_instance_labelled(profile, instance)
 
     trusted = {label: tk.did for label, tk in profile.trusted_keys.items()}
 
@@ -698,7 +749,11 @@ async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextCont
     last_checked = {url: ts for url, ts in profile.last_checked.items() if url in relays}
 
     result: dict[str, Any] = {
-        "instance": instance,
+        # Resolved label, never the caller's (possibly omitted) argument — the
+        # answer must say which identity actually polled.
+        "instance": instance_label,
+        "instances": list(profile.instances.keys()),
+        "primary_instance": profile.primary_instance,
         "did": local.did,
         "relays": relays,
         "trusted_keys": trusted,

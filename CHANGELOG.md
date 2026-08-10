@@ -2,6 +2,52 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Polling no longer fails silently.** `receive` and `inbox` (CLI and MCP)
+  now return `instance`, `relays`, and `relay_reachable` alongside `packets`.
+  An empty result used to be indistinguishable from polling the wrong
+  identity or an unreachable relay — all three returned `{"packets": []}`
+  with exit 0. `inbox` also gained the relay error handling `receive`
+  already had, instead of letting the exception escape.
+- **`--as` no longer defaults to the literal `default` instance.** On a
+  profile holding both a real instance and a leftover `default` stub from
+  `aya init`, every command silently acted as the stub — a different Nostr
+  keypair, so every poll came back empty. Omitting `--as` now resolves the
+  primary instance (`aya use`, else the sole instance, else the sole
+  non-`default` one) and *errors* when the choice is ambiguous rather than
+  guessing. The MCP tools no longer default `instance` to `"default"`.
+- **`aya send` no longer ships an empty packet.** The body came from
+  `sys.stdin.read()` with no guard and no mention in `--help`; with no pipe
+  it hung on a terminal or sent an empty body in a script. Missing or
+  whitespace-only bodies now exit 2 and name every way to supply one.
+- **`aya receive` no longer aborts mid-poll without a terminal.** The
+  per-packet confirm had no non-interactive fallback. It now exits 2 naming
+  `--auto-ingest`/`--yes`, and only when packets actually need confirming.
+
+### Added
+
+- `aya whoami` — active local identity, how it was resolved, every
+  registered instance, every trusted peer, and the relay list. Previously
+  the only way to enumerate instances was to pass a bad `--as` and read the
+  error.
+- `aya use <label>` — set the instance commands act as when `--as` is omitted.
+- `aya send --message/-m` — supply a markdown body inline. `--help` now
+  documents all four body sources (`--seed --opener`, `-m`, `--files`, stdin).
+- `relay` parameter on `aya_send`, `aya_receive`, `aya_inbox`, and `aya_ack`,
+  matching the CLI's `--relay`. There was previously no way to override the
+  relay over MCP at all.
+- `from_label` on `aya_inbox` results, removing the `aya_relay_status`
+  round-trip previously needed to map a sender DID to a human label.
+
+### Changed
+
+- `aya_inbox` and `aya_receive` return `{"packets": [...], ...}` instead of a
+  bare list, matching the CLI. **Breaking** for callers that indexed the
+  result directly.
+- `aya relay status` reports the resolved instance label rather than echoing
+  the caller's argument.
+
 ### Removed
 
 - `aya pack` — `aya send` is the canonical pack-and-publish flow. The pack

@@ -160,7 +160,8 @@ def _emit_error(
         payload: dict[str, object] = {"error": {"code": code, "message": message}}
         if context:
             payload["error"]["context"] = context  # type: ignore[index]
-        err.out(json.dumps(payload, default=str))
+        # Same reason as _output_json: this is parsed, not read.
+        sys.stderr.write(json.dumps(payload, default=str) + "\n")
     else:
         err.print(f"[red]{message}[/red]")
     raise typer.Exit(exit_code)
@@ -279,8 +280,14 @@ def _resolve_instance(p: Profile, instance: str | None, *, quiet: bool = False) 
 
 
 def _output_json(data: object) -> None:
-    """Output data as formatted JSON to console."""
-    console.out(json.dumps(data, indent=2, default=str))
+    """Write JSON to stdout, unrendered.
+
+    Deliberately not via the Rich console: ``console.out`` highlights
+    JSON-looking text, so in any environment that forces colour (``FORCE_COLOR``,
+    much of CI) ``--format json`` emitted ANSI escapes and no parser could read
+    it. Machine output must not pass through a renderer.
+    """
+    sys.stdout.write(json.dumps(data, indent=2, default=str) + "\n")
 
 
 def _load_profile_for_relay(profile_path: Path) -> Profile:

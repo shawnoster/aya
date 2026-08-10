@@ -12,7 +12,17 @@ took an eight-entry alias table, because modules that did
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# Rich decides on colour when its Console is built, which happens at import
+# time — so this has to be set before any aya module loads, not in a fixture.
+# CI often forces colour, and Rich styles the two dashes of a long option
+# separately, so `--message` stops being a literal substring and assertions on
+# rendered text pass locally while failing in CI.
+os.environ["NO_COLOR"] = "1"
+os.environ.pop("FORCE_COLOR", None)
 
 
 @pytest.fixture(autouse=True)

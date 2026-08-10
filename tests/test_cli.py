@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -19,6 +20,19 @@ from aya.entities.packet import Packet
 from aya.scheduler import add_reminder
 
 runner = CliRunner()
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def plain(output: str) -> str:
+    """Help text with styling removed.
+
+    Rich styles the two dashes of a long option separately, so ``--message``
+    is not a literal substring of coloured output. CI forces colour; local
+    runs usually do not, which is exactly the kind of difference that passes
+    here and fails there.
+    """
+    return _ANSI.sub("", output)
 
 
 # ── TestVersion ───────────────────────────────────────────────────────────────
@@ -4177,7 +4191,7 @@ class TestSendBodySources:
         result = runner.invoke(app, ["send", "--help"])
         assert result.exit_code == 0
         for token in ("--message", "--files", "--opener", "stdin"):
-            assert token in result.output
+            assert token in plain(result.output)
 
 
 class TestWhoami:
@@ -4459,7 +4473,7 @@ class TestNotIngestedErrorIsActionable:
     def test_identity_less_commands_say_why(self):
         for cmd in ("read", "packets"):
             result = runner.invoke(app, [cmd, "--help"])
-            assert "no --as" in result.output, cmd
+            assert "no --as" in plain(result.output), cmd
 
 
 class TestRelayPromotion:

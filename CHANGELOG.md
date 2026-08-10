@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **`--format json` is no longer coloured.** `_output_json` and `_emit_error`
+  wrote through the Rich console, which highlights JSON-looking text — so in
+  any environment that forces colour (much of CI) both stdout and stderr
+  carried ANSI escapes and no parser could read them. Machine output now
+  bypasses the renderer entirely.
 - **`aya drop` now survives a poll.** The drop filter was applied in the two
   `inbox` paths and neither `receive` path, so a dropped packet vanished from
   the listing and was silently re-ingested by the very next poll. All four

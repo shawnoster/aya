@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import random
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 import websockets
@@ -92,6 +92,7 @@ class RelayClient:
         relay_urls: str | list[str],
         nostr_private_hex: str,
         nostr_public_hex: str,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         if isinstance(relay_urls, str):
             self._relay_urls: list[str] = [relay_urls]
@@ -105,6 +106,10 @@ class RelayClient:
         self.public_key_hex = nostr_public_hex
         # Populated by publish(); one entry per relay, in polling order.
         self.last_publish_report: list[dict[str, str | bool | None]] = []
+        # Injectable so retry/backoff behaviour can be exercised without
+        # spending the real delay — the retry matrix is otherwise too slow
+        # to cover (one end-to-end rejection test cost 30s of wall clock).
+        self._sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
 
     @property
     def relay_url(self) -> str:
@@ -196,6 +201,11 @@ class RelayClient:
                         )
                         return event["id"], None
                     if _is_rate_limited(response):
+                        # No sleep after the final attempt — there is no retry
+                        # left to wait for, and the cap makes that a ~60s delay
+                        # on top of an already-failed publish.
+                        if attempt == _MAX_RETRIES_PUBLISH - 1:
+                            break
                         delay = _backoff_delay(attempt)
                         logger.warning(
                             "Rate-limited by %s (attempt %d/%d), retrying in %.1fs",
@@ -204,7 +214,7 @@ class RelayClient:
                             _MAX_RETRIES_PUBLISH,
                             delay,
                         )
-                        await asyncio.sleep(delay)
+                        await self._sleep(delay)
                         continue
                     logger.warning("Relay %s rejected event: %s", relay_url, response)
                     reason = str(response[3]) if len(response) > 3 and response[3] else "rejected"
@@ -220,7 +230,7 @@ class RelayClient:
                         exc,
                         delay,
                     )
-                    await asyncio.sleep(delay)
+                    await self._sleep(delay)
                 else:
                     logger.warning("Failed to publish to %s: %s", relay_url, exc)
                     return None, f"{type(exc).__name__}: {exc}"
@@ -343,7 +353,7 @@ class RelayClient:
                             exc,
                             delay,
                         )
-                        await asyncio.sleep(delay)
+                        await self._sleep(delay)
                     else:
                         logger.warning("Failed to fetch from %s: %s", relay_url, exc)
 

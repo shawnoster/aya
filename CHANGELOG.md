@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **`publish` no longer sleeps after its final retry.** A fully rate-limited
+  relay waited out one last backoff (up to the 60s cap) with no attempt left
+  to make, delaying an already-failed publish. Found once the retry loop
+  became testable.
 - **`aya relay add --first` now reorders a relay that is already present.** It
   returned "already in default_relays — no change", so "make this primary" was
   a silent no-op whenever the relay existed further down the list.

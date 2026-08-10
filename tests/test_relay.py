@@ -14,6 +14,7 @@ from aya.identity import Identity
 from aya.packet import Packet
 from aya.relay import (
     _FETCH_PAGE_SIZE,
+    _MAX_RETRIES_PUBLISH,
     AYA_KIND,
     AYA_RESULT_KIND,
     RelayClient,
@@ -763,11 +764,24 @@ class TestPublish:
 
         mock_ws.recv = AsyncMock(return_value=json.dumps(["OK", "x" * 64, False, "rate-limited"]))
 
+        # Inject a no-op sleep: this exercises the full 5-attempt backoff loop
+        # without spending the real ~30s of exponential delay.
+        slept: list[float] = []
+
+        async def _no_sleep(delay: float) -> None:
+            slept.append(delay)
+
+        client._sleep = _no_sleep
+
         with (
             patch("aya.relay.websockets.connect", return_value=mock_ws),
             pytest.raises(RelayError),
         ):
             await client.publish(packet, recipient.nostr_public_hex)
+
+        # Retries are exhausted, not abandoned early.
+        assert len(slept) == _MAX_RETRIES_PUBLISH - 1
+        assert slept == sorted(slept), "backoff must be non-decreasing"
 
 
 # ── Backoff helpers ───────────────────────────────────────────────────────────

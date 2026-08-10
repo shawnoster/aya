@@ -14,6 +14,22 @@ from aya.mcp_server import _TOOLS, call_tool
 # ---------------------------------------------------------------------------
 
 
+def test_every_advertised_tool_has_a_handler():
+    """A tool in _TOOLS with no _HANDLERS entry fails at runtime, not in CI.
+
+    call_tool returns {"error": "Unknown tool"} as a *successful* TextContent,
+    so the caller sees a normal result and the suite stays green.
+    """
+    from aya.mcp_server import _HANDLERS
+
+    advertised = {t.name for t in _TOOLS}
+    handled = set(_HANDLERS)
+    assert advertised == handled, (
+        f"advertised but unhandled: {sorted(advertised - handled)}; "
+        f"handled but unadvertised: {sorted(handled - advertised)}"
+    )
+
+
 def test_list_tools_names():
     """All expected tools are declared."""
     names = {t.name for t in _TOOLS}

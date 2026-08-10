@@ -10,7 +10,6 @@ from aya.adapters.cli._kernel import (
     ErrorCode,
     OutputFormat,
     StatusFormat,
-    _copy_to_clipboard,
     _emit_error,
     _output_json,
     app,
@@ -19,6 +18,9 @@ from aya.adapters.cli._kernel import (
     log_app,
     resolve_format,
     resolve_status_format,
+)
+from aya.adapters.cli._render import (
+    _copy_to_clipboard,
 )
 from aya.adapters.config import get_notebook_path
 

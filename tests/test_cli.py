@@ -255,10 +255,10 @@ class TestPair:
         )
 
         with (
-            patch("aya.adapters.cli.relay_cmds.generate_code", return_value="TEST-CODE-0001"),
-            patch("aya.adapters.cli.relay_cmds.hash_code", return_value="deadbeef"),
-            patch("aya.adapters.cli.relay_cmds.publish_pair_request", return_value="req_event_id"),
-            patch("aya.adapters.cli.relay_cmds.poll_for_pair_response", return_value=buggy_trusted),
+            patch("aya.adapters.cli.pair_cmds.generate_code", return_value="TEST-CODE-0001"),
+            patch("aya.adapters.cli.pair_cmds.hash_code", return_value="deadbeef"),
+            patch("aya.adapters.cli.pair_cmds.publish_pair_request", return_value="req_event_id"),
+            patch("aya.adapters.cli.pair_cmds.poll_for_pair_response", return_value=buggy_trusted),
         ):
             result = runner.invoke(
                 app,
@@ -305,7 +305,7 @@ class TestPair:
             nostr_pubkey=initiator_identity.nostr_public_hex,
         )
 
-        with patch("aya.adapters.cli.relay_cmds.join_pairing", return_value=initiator_trusted):
+        with patch("aya.adapters.cli.pair_cmds.join_pairing", return_value=initiator_trusted):
             result = runner.invoke(
                 app,
                 [
@@ -3224,7 +3224,7 @@ class TestDrop:
         """
         import asyncio as _asyncio
 
-        monkeypatch.setattr("aya.adapters.cli.relay_cmds._RELAY_FETCH_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr("aya.adapters.cli.packet_cmds._RELAY_FETCH_TIMEOUT_SECONDS", 0.1)
 
         async def slow_fetch(*args, **kwargs):
             # Simulate a relay that keeps sending packets but each one

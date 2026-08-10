@@ -11,8 +11,11 @@ from aya.adapters.cli import (  # noqa: F401  — imported to register commands
     config_cmds,
     hook_cmds,
     identity_cmds,
-    relay_cmds,
+    packet_cmds,
+    pair_cmds,
+    poll_cmds,
     schedule_cmds,
+    send_cmds,
     workspace_cmds,
 )
 from aya.adapters.cli._kernel import app

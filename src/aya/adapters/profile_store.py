@@ -89,8 +89,7 @@ def _normalize_dropped_ids(raw: object) -> list[str]:
 
 
 def load_profile(path: Path) -> Profile:
-    """Load from assistant_profile.json.
-
+    """Load the profile from ``path`` (``AYA_HOME/profile.json`` in production).
 
     Validates profile structure and logs warnings for deprecated keys or malformed data.
     """

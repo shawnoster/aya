@@ -53,7 +53,7 @@ class TestVersion:
 
 @pytest.fixture
 def profile_path(tmp_path: Path) -> Path:
-    return tmp_path / "assistant_profile.json"
+    return tmp_path / "profile.json"
 
 
 @pytest.fixture

@@ -169,7 +169,7 @@ app.add_typer(config_app, name="config")
 
 relay_app = typer.Typer(
     name="relay",
-    help="Manage default Nostr relays used by send/send-raw/receive.",
+    help="Relay health and defaults: status, list, add, remove.",
     no_args_is_help=True,
 )
 app.add_typer(relay_app, name="relay")
@@ -731,6 +731,9 @@ def send_cmd(
       --message/-m "..."      markdown body given inline
       --files path.md         markdown body read from files
       (stdin)                 markdown body piped in, e.g. `... <<'EOF'`
+
+    Pass --in-reply-to <id> to thread a reply. For a bare acknowledgement with
+    no new content, `aya ack <id> "message"` is shorter.
     """
     logger.debug("send: to=%s, intent=%s, as=%s", to, intent, as_)
     format_ = resolve_format(format_)
@@ -908,7 +911,17 @@ def ack(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
-    """Acknowledge a received seed packet — sends a reply back to the sender."""
+    """Acknowledge a received packet — sends a short reply back to the sender.
+
+    MESSAGE is delivered to the sender as the reply body, so an ack is a real
+    (if minimal) response, not a read receipt. It carries no intent line and no
+    markdown, and the recipient is inferred from the original packet.
+
+    Use this for "got it" / "will do" / no new content. For anything
+    substantive — an answer, a decision, a counter-question — use
+    ``aya send --in-reply-to <id>`` instead, which carries an intent and a full
+    body. The packet must already be ingested (see ``aya receive``).
+    """
     format_ = resolve_format(format_)
 
     async def _run() -> None:
@@ -2940,6 +2953,11 @@ def read(
     format_: OutputFormat = typer.Option(OutputFormat.AUTO, "--format", "-f", help="Output format"),
 ) -> None:
     """Read a previously ingested packet — extracts body without dumping the envelope JSON.
+
+    The packet must already be **ingested**. IDs listed by ``aya inbox`` are
+    still pending and are not readable until ``aya receive`` ingests them —
+    reading one returns PACKET_NOT_FOUND. The usual order is
+    ``aya receive --auto-ingest`` then ``aya read <id>``.
 
     For seed packets, prints the opener (and context_summary, open_questions
     if present). For content packets, prints the content directly. Use

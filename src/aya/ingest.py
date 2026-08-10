@@ -1,8 +1,21 @@
-"""Shared packet-ingest logic used by both the CLI and the MCP server."""
+"""Packet ingestion, shared by the CLI and the MCP server.
+
+Split three ways so each part is separately testable and reusable:
+
+* :func:`persist_packet` — writes the body and prunes; returns whether it
+  landed, instead of swallowing the outcome.
+* :func:`record_seed_alert` — the scheduler side effect.
+* :func:`ingest` — orchestration, with rendering supplied by the caller.
+
+Rendering is injected rather than performed here: this module used to build
+its own ``Console``, which made the output impossible to capture in a test and
+pulled a presentation dependency into a data path.
+"""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -11,72 +24,33 @@ from aya.packet import Packet
 
 logger = logging.getLogger(__name__)
 
+SEED_CONTENT_TYPE = "application/aya-seed"
+_PACKET_TTL_SECONDS = 7 * 86400
 
-def ingest(packet: Packet, *, quiet: bool = False) -> None:
+
+def is_seed(packet: Packet) -> bool:
+    return bool(packet.content_type == SEED_CONTENT_TYPE)
+
+
+def seed_fields(packet: Packet) -> dict[str, Any]:
+    """Seed payload as a dict, or empty for non-seed packets."""
+    if not is_seed(packet):
+        return {}
+    return packet.content if isinstance(packet.content, dict) else {}
+
+
+def persist_packet(packet: Packet, *, now: datetime | None = None) -> bool:
+    """Write *packet* to PACKETS_DIR and prune expired bodies.
+
+    Returns True when the body is on disk. Callers use this to decide whether
+    to advance their ingest cursor — marking a packet ingested whose body
+    failed to write makes it unreadable and invisible to the inbox.
     """
-    Ingest a packet: surface it (console/alert) and persist the body to PACKETS_DIR.
-
-    Called by both the CLI receive flow and the MCP ``aya_receive`` handler. Pass
-    ``quiet=True`` to suppress all console output — required when invoked from
-    the MCP stdio path, where stray stdout writes would corrupt JSON-RPC.
-    """
-    is_seed = packet.content_type == "application/aya-seed"
-    seed: dict[str, Any] = (
-        (packet.content if isinstance(packet.content, dict) else {}) if is_seed else {}
-    )
-
-    if not quiet:
-        from rich.console import Console
-        from rich.panel import Panel
-
-        console = Console()
-        console.print(f"\n[bold]Ingesting:[/bold] {packet.intent}")
-        if is_seed:
-            console.print(
-                Panel(
-                    f"[bold]Opening question:[/bold]\n{seed.get('opener', '')}\n\n"
-                    f"[bold]Context:[/bold]\n{seed.get('context_summary', '')}\n\n"
-                    + (
-                        "[bold]Open questions:[/bold]\n"
-                        + "\n".join(f"  • {q}" for q in seed.get("open_questions", []))
-                        if seed.get("open_questions")
-                        else ""
-                    ),
-                    title="Conversation Seed",
-                    border_style="cyan",
-                )
-            )
-        else:
-            console.print(
-                Panel(
-                    str(packet.content),
-                    title=packet.intent,
-                    subtitle=f"[dim]{packet.id[:8]} · {packet.sent_at[:10]}[/dim]",
-                )
-            )
-
-    if is_seed:
-        # Persist seed as an unseen alert so it surfaces via `aya schedule pending`
-        # on the next session start, even if ingested via the async SessionStart hook
-        # (where stdout is not captured by Claude).
-        from aya.scheduler import add_seed_alert
-
-        from_label = packet.from_did[:16]
-        add_seed_alert(
-            intent=packet.intent,
-            opener=seed.get("opener", ""),
-            context_summary=seed.get("context_summary", ""),
-            open_questions=seed.get("open_questions", []),
-            from_label=from_label,
-            packet_id=packet.id,
-        )
-
-    # Persist packet content for later retrieval (best-effort — never break ingest)
     try:
         from aya.identity import _assert_valid_ulid
         from aya.paths import PACKETS_DIR
 
-        # Defense-in-depth: packets come from the network. Reject anything that
+        # Defence in depth: packets come from the network. Reject anything that
         # could escape PACKETS_DIR via path separators before building the path.
         _assert_valid_ulid(packet.id)
 
@@ -88,13 +62,54 @@ def ingest(packet: Packet, *, quiet: bool = False) -> None:
         with suppress(OSError):
             packet_file.chmod(0o600)
 
-        # Prune old packets (>7 days based on file mtime)
-        cutoff = datetime.now(UTC).timestamp() - 7 * 86400
+        cutoff = (now or datetime.now(UTC)).timestamp() - _PACKET_TTL_SECONDS
         for old in PACKETS_DIR.glob("*.json"):
             try:
                 if old.stat().st_mtime < cutoff:
                     old.unlink(missing_ok=True)
             except OSError:
                 continue
+        return packet_file.exists()
     except Exception:
         logger.debug("Failed to persist packet %s", packet.id, exc_info=True)
+        return False
+
+
+def record_seed_alert(packet: Packet) -> None:
+    """Queue a seed packet as an unseen alert for the next session start.
+
+    Needed because the SessionStart hook ingests asynchronously, where stdout
+    is not captured — without this the seed would never surface.
+    """
+    from aya.scheduler import add_seed_alert
+
+    seed = seed_fields(packet)
+    add_seed_alert(
+        intent=packet.intent,
+        opener=seed.get("opener", ""),
+        context_summary=seed.get("context_summary", ""),
+        open_questions=seed.get("open_questions", []),
+        from_label=packet.from_did[:16],
+        packet_id=packet.id,
+    )
+
+
+def ingest(
+    packet: Packet,
+    *,
+    quiet: bool = False,
+    render: Callable[[Packet], None] | None = None,
+) -> bool:
+    """Ingest a packet: surface it, alert on seeds, persist the body.
+
+    Pass ``quiet=True`` to suppress rendering entirely — required on the MCP
+    stdio path, where stray stdout corrupts JSON-RPC. *render* supplies the
+    presentation; without one, nothing is drawn.
+
+    Returns whether the body was persisted.
+    """
+    if not quiet and render is not None:
+        render(packet)
+    if is_seed(packet):
+        record_seed_alert(packet)
+    return persist_packet(packet)

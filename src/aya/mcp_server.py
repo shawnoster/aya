@@ -10,6 +10,21 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from aya.outbox import (
+    NOT_INGESTED_HINT,
+    check_idempotency,
+    delivery_from_report,
+    record_idempotency,
+    record_sent,
+)
+from aya.resolve import (
+    NoNostrPubkeyError,
+    label_for_did,
+    nostr_pubkey_for,
+    resolve_instance,
+    resolve_recipient,
+)
+
 logger = logging.getLogger(__name__)
 
 server = Server("aya")
@@ -318,41 +333,25 @@ def _load_profile() -> Any:
 
 
 def _resolve_instance_labelled(profile: Any, instance: str | None) -> tuple[Any, str]:
-    """Resolve *instance* to ``(Identity, label)`` using the shared profile rules.
-
-    ``instance`` is optional: omitting it selects the primary instance rather
-    than the literal label ``"default"``, which on multi-instance profiles is
-    usually a leftover stub with a different Nostr keypair.
-    """
-    label, _reason = profile.resolve_instance_name(instance)
-    return profile.instances[label], label
+    """Resolve *instance* to ``(Identity, label)``. See ``aya.resolve``."""
+    return resolve_instance(profile, instance)
 
 
 def _resolve_instance(profile: Any, instance: str | None) -> Any:
-    return _resolve_instance_labelled(profile, instance)[0]
+    return resolve_instance(profile, instance)[0]
 
 
 def _resolve_did(to: str, profile: Any) -> tuple[str, str]:
-    if to.startswith("did:"):
-        return to, to
-    key = profile.trusted_keys.get(to)
-    if key:
-        return key.did, to
-    available = list(profile.trusted_keys.keys())
-    if len(available) == 1:
-        label = available[0]
-        return next(iter(profile.trusted_keys.values())).did, label
-    raise ValueError(f"Unknown recipient '{to}'. Available: {', '.join(available)}.")
+    """Resolve a label or DID. Raises UnknownRecipientError (a ValueError)."""
+    return resolve_recipient(profile, to)
 
 
 def _resolve_nostr_pubkey(did: str, profile: Any) -> str | None:
-    for key in profile.trusted_keys.values():
-        if key.did == did and key.nostr_pubkey:
-            return str(key.nostr_pubkey)
-    for inst in profile.instances.values():
-        if inst.did == did:
-            return str(inst.nostr_public_hex)
-    return None
+    """Look up the Nostr pubkey for a DID, or None."""
+    try:
+        return nostr_pubkey_for(profile, did)
+    except NoNostrPubkeyError:
+        return None
 
 
 def _record_send(
@@ -365,13 +364,12 @@ def _record_send(
     relay_urls: list[str],
 ) -> tuple[list[str], list[dict[str, Any]]]:
     """Log an outbound packet and return its per-relay delivery outcome."""
-    from aya.cli import _delivery_from_report, _record_sent
     from aya.paths import PROFILE_PATH
 
-    relays_ok, relays_failed = _delivery_from_report(
+    relays_ok, relays_failed = delivery_from_report(
         getattr(client, "last_publish_report", []), relay_urls
     )
-    _record_sent(
+    record_sent(
         profile,
         PROFILE_PATH,
         packet,
@@ -396,11 +394,8 @@ async def _handle_sent(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 def _label_for_did(profile: Any, did: str) -> str | None:
-    """Human label for a sender DID, so callers need no second lookup."""
-    for label, key in profile.trusted_keys.items():
-        if key.did == did:
-            return str(key.label or label)
-    return None
+    """Human label for a sender DID. See ``aya.resolve.label_for_did``."""
+    return label_for_did(profile, did)
 
 
 # ── individual handlers ──────────────────────────────────────────────────────
@@ -462,11 +457,10 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.cli import _check_idempotency, _record_idempotency
 
     idempotency_key = arguments.get("idempotency_key")
     if idempotency_key:
-        cached = _check_idempotency(idempotency_key)
+        cached = check_idempotency(idempotency_key)
         if cached:
             return _text(
                 {
@@ -483,7 +477,7 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
 
     profile = _load_profile()
     local = _resolve_instance(profile, instance)
-    to_did, _to_label = _resolve_did(to, profile)
+    to_did, to_label = _resolve_did(to, profile)
 
     from aya.packet import ContentType, Packet
     from aya.relay import RelayClient
@@ -509,12 +503,12 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
     event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
 
     if idempotency_key:
-        _record_idempotency(idempotency_key, signed.id, event_id)
+        record_idempotency(idempotency_key, signed.id, event_id)
 
     relays_ok, relays_failed = _record_send(
         profile,
         signed,
-        to_label=signed.to_did,
+        to_label=to_label,
         event_id=event_id,
         client=client,
         relay_urls=relay_urls,
@@ -638,11 +632,10 @@ async def _handle_schedule_watch(arguments: dict[str, Any]) -> list[types.TextCo
 
 
 async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.cli import _check_idempotency, _record_idempotency
 
     idempotency_key = arguments.get("idempotency_key")
     if idempotency_key:
-        cached = _check_idempotency(idempotency_key)
+        cached = check_idempotency(idempotency_key)
         if cached:
             return _text(
                 {
@@ -667,9 +660,7 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
     matched = [pid for pid in ingested_ids if pid.startswith(packet_id)]
 
     if not matched:
-        from aya.cli import _NOT_INGESTED_HINT
-
-        return _error(_NOT_INGESTED_HINT.format(packet_id=packet_id))
+        return _error(NOT_INGESTED_HINT.format(packet_id=packet_id))
     if len(matched) > 1:
         return _error(f"Ambiguous prefix '{packet_id}' -- matches {len(matched)} packets.")
 
@@ -721,7 +712,7 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
     event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
 
     if idempotency_key:
-        _record_idempotency(idempotency_key, signed.id, event_id)
+        record_idempotency(idempotency_key, signed.id, event_id)
 
     relays_ok, relays_failed = _record_send(
         profile,
@@ -753,11 +744,11 @@ async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
         return _error("Packet ID prefix must be at least 8 characters.")
 
     if not PACKETS_DIR.exists():
-        return _error("No stored packets found.")
+        return _error(NOT_INGESTED_HINT.format(packet_id=packet_id))
 
     matches = [f for f in PACKETS_DIR.glob("*.json") if f.stem.startswith(packet_id)]
     if not matches:
-        return _error(f"Packet '{packet_id}' not found.")
+        return _error(NOT_INGESTED_HINT.format(packet_id=packet_id))
     if len(matches) > 1:
         return _error(f"Ambiguous prefix '{packet_id}' -- matches {len(matches)} packets.")
 

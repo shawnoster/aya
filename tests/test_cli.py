@@ -4508,3 +4508,46 @@ class TestRelayPromotion:
             _record_pairing(p, profile_with_instance, "bob", trusted, ["wss://a.example.com"])
             is None
         )
+
+
+class TestReceivePersistGuard:
+    """A failed body write must not advance the ingest cursor."""
+
+    def test_cursor_not_advanced_when_persist_fails(self, profile_with_trusted: Path):
+        p = Profile.load(profile_with_trusted)
+        sender = Identity.generate("home")
+        p.trusted_keys["home"] = TrustedKey(
+            did=sender.did, label="home", nostr_pubkey=sender.nostr_public_hex
+        )
+        p.save(profile_with_trusted)
+
+        packet = Packet(
+            **{"from": sender.did, "to": p.instances["default"].did},
+            intent="persist-fail",
+            content="body",
+        ).sign(sender)
+
+        async def fetch(*a, **kw):
+            yield packet
+
+        with (
+            patch("aya.cli.RelayClient") as mock_cls,
+            patch("aya.cli._ingest", return_value=False),
+        ):
+            mock_cls.return_value.fetch_pending = fetch
+            result = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output)["packets"][0]
+        assert summary["ingested"] is False
+        assert summary["error"] == "persist_failed"
+        assert Profile.load(profile_with_trusted).ingested_ids == []

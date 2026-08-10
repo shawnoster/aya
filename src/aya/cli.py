@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import json
 import logging
 import os
@@ -12,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import urllib.parse
-from contextlib import nullcontext, suppress
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -36,6 +35,24 @@ from aya.identity import (
 )
 from aya.ingest import ingest as _ingest
 from aya.install import install_scheduler, uninstall_scheduler
+from aya.outbox import (
+    NOT_INGESTED_HINT as _NOT_INGESTED_HINT,
+)
+from aya.outbox import (
+    check_idempotency as _check_idempotency,
+)
+from aya.outbox import (
+    delivery_from_report as _delivery_from_report,
+)
+from aya.outbox import (
+    delivery_summary as _delivery_summary,
+)
+from aya.outbox import (
+    record_idempotency as _record_idempotency,
+)
+from aya.outbox import (
+    record_sent as _record_sent,
+)
 from aya.packet import ConflictStrategy, ContentType, Packet, human_age
 from aya.pair import (
     PairingError,
@@ -47,6 +64,12 @@ from aya.pair import (
 )
 from aya.paths import CONFIG_PATH, PROFILE_PATH
 from aya.relay import RelayClient, RelayUnreachableError
+from aya.resolve import (
+    NoNostrPubkeyError,
+    UnknownRecipientError,
+    nostr_pubkey_for,
+    resolve_instance,
+)
 
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
@@ -194,6 +217,7 @@ class ErrorCode:
     AMBIGUOUS_PREFIX = "AMBIGUOUS_PREFIX"
     SEND_FAILED = "SEND_FAILED"
     PAIR_TIMEOUT = "PAIR_TIMEOUT"
+    UNKNOWN_RECIPIENT = "UNKNOWN_RECIPIENT"
 
 
 # Relay fetch timeout in seconds — applies to commands that stream
@@ -235,99 +259,6 @@ def _emit_error(
 # ── Idempotency helpers ────────────────────────────────────────────────────
 
 
-def _idempotency_key_hash(key: str) -> str:
-    """Hash the idempotency key so raw secrets aren't stored on disk."""
-    import hashlib
-
-    return hashlib.sha256(key.encode()).hexdigest()
-
-
-def _check_idempotency(key: str) -> dict | None:
-    """Check if an idempotency key was already used. Returns cached result or None."""
-    from aya.paths import SENT_CACHE
-
-    if not SENT_CACHE.exists():
-        return None
-    hashed = _idempotency_key_hash(key)
-    try:
-        with SENT_CACHE.open() as f:
-            fcntl.flock(f, fcntl.LOCK_SH)
-            raw = json.loads(f.read())
-    except (json.JSONDecodeError, OSError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    entry = raw.get(hashed)
-    if not isinstance(entry, dict):
-        return None
-    try:
-        if datetime.fromisoformat(entry["sent_at"]) > datetime.now(UTC) - timedelta(hours=24):
-            return entry
-    except (KeyError, ValueError, TypeError):
-        return None
-    return None
-
-
-def _record_idempotency(key: str, packet_id: str, event_id: str) -> None:
-    """Record a sent packet for idempotency dedup. Atomic write with file lock."""
-    import tempfile
-
-    from aya.paths import SENT_CACHE
-
-    hashed = _idempotency_key_hash(key)
-    SENT_CACHE.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        with SENT_CACHE.open("a+") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            f.seek(0)
-            try:
-                raw = json.loads(f.read() or "{}")
-                cache = raw if isinstance(raw, dict) else {}
-            except json.JSONDecodeError:
-                cache = {}
-
-            cache[hashed] = {
-                "packet_id": packet_id,
-                "event_id": event_id,
-                "sent_at": datetime.now(UTC).isoformat(),
-            }
-            # Prune entries older than 24 hours
-            cutoff = datetime.now(UTC) - timedelta(hours=24)
-            pruned: dict[str, object] = {}
-            for k, v in cache.items():
-                if not isinstance(v, dict):
-                    continue
-                try:
-                    if datetime.fromisoformat(str(v.get("sent_at", ""))) > cutoff:
-                        pruned[k] = v
-                except (ValueError, TypeError):
-                    continue
-            cache = pruned
-
-            # Atomic write: temp file → Path.replace
-            fd, tmp = tempfile.mkstemp(dir=str(SENT_CACHE.parent), suffix=".tmp")
-            try:
-                encoded = json.dumps(cache, indent=2).encode()
-                total = 0
-                while total < len(encoded):
-                    written = os.write(fd, encoded[total:])
-                    total += written
-                os.fsync(fd)
-                os.close(fd)
-                Path(tmp).replace(SENT_CACHE)
-                with suppress(OSError):
-                    SENT_CACHE.chmod(0o600)
-            except Exception:
-                with suppress(OSError):
-                    os.close(fd)
-                with suppress(OSError):
-                    Path(tmp).unlink()
-                raise
-    except OSError:
-        logger.debug("Failed to record idempotency key %s", key, exc_info=True)
-
-
 DEFAULT_PROFILE = PROFILE_PATH
 
 
@@ -341,66 +272,35 @@ def _load_profile(profile_path: Path) -> Profile:
     return Profile.load(profile_path)
 
 
-def _delivery_from_report(
-    report: list[dict[str, object]], relay_urls: list[str]
-) -> tuple[list[str], list[dict[str, object]]]:
-    """Split a RelayClient publish report into (accepted URLs, failures).
+def _render_ingested(packet: Packet) -> None:
+    """Draw an ingested packet. Lives in the surface layer; aya.ingest injects it."""
+    from aya.ingest import is_seed, seed_fields
 
-    Falls back to "all accepted" for clients that predate the report attribute.
-    """
-    if not report:
-        return list(relay_urls), []
-    ok = [str(r["url"]) for r in report if r.get("ok")]
-    failed = [{"url": r["url"], "error": r.get("error")} for r in report if not r.get("ok")]
-    return ok, failed
-
-
-def _record_sent(
-    p: Profile,
-    profile_path: Path,
-    packet: Packet,
-    *,
-    to_did: str,
-    to_label: str,
-    event_id: str,
-    relays_ok: list[str],
-    relays_failed: list[dict[str, object]],
-) -> None:
-    """Append to the outbound log and persist the body for later `aya read`."""
-    p.sent_ids.append(
-        {
-            "id": packet.id,
-            "sent_at": packet.sent_at,
-            "to_did": to_did,
-            "to_label": to_label,
-            "intent": packet.intent,
-            "event_id": event_id,
-            "relays_ok": relays_ok,
-            "relays_failed": relays_failed,
-        }
-    )
-    p.save(profile_path)
-    # Best-effort body persistence so `aya read <id>` works on sent packets too.
-    try:
-        from aya.paths import PACKETS_DIR
-
-        _assert_valid_ulid(packet.id)
-        PACKETS_DIR.mkdir(parents=True, exist_ok=True)
-        packet_file = PACKETS_DIR / f"{packet.id}.json"
-        packet_file.write_text(packet.to_json())
-        with suppress(OSError):
-            packet_file.chmod(0o600)
-    except Exception:
-        logger.debug("Could not persist sent packet body for %s", packet.id, exc_info=True)
-
-
-# A packet listed by `aya inbox` is not yet readable, and a bare "not found"
-# reads like a wrong ID or a bug when the packet is plainly visible in the
-# inbox. Always name the remedy.
-_NOT_INGESTED_HINT = (
-    "Packet '{packet_id}' is not ingested. If `aya inbox` lists it, it is still "
-    "pending — run `aya receive --auto-ingest` to ingest it first, then retry."
-)
+    console.print(f"\n[bold]Ingesting:[/bold] {packet.intent}")
+    if is_seed(packet):
+        seed = seed_fields(packet)
+        questions = seed.get("open_questions") or []
+        tail = (
+            "[bold]Open questions:[/bold]\n" + "\n".join(f"  • {q}" for q in questions)
+            if questions
+            else ""
+        )
+        console.print(
+            Panel(
+                f"[bold]Opening question:[/bold]\n{seed.get('opener', '')}\n\n"
+                f"[bold]Context:[/bold]\n{seed.get('context_summary', '')}\n\n" + tail,
+                title="Conversation Seed",
+                border_style="cyan",
+            )
+        )
+    else:
+        console.print(
+            Panel(
+                str(packet.content),
+                title=packet.intent,
+                subtitle=f"[dim]{packet.id[:8]} · {packet.sent_at[:10]}[/dim]",
+            )
+        )
 
 
 def _record_pairing(
@@ -425,19 +325,6 @@ def _record_pairing(
     return relay_urls[0] if promoted else None
 
 
-def _delivery_summary(relays_ok: list[str], attempted: int) -> str:
-    """One-line delivery summary that never overstates reach.
-
-    Reads as "<first accepting relay> (N of M relays)" so a partial failure is
-    visible in the summary itself, not only in ``relays_failed``.
-    """
-    if not relays_ok:
-        return f"none (0 of {attempted} relays)"
-    if len(relays_ok) == attempted == 1:
-        return relays_ok[0]
-    return f"{relays_ok[0]} ({len(relays_ok)} of {attempted} relays)"
-
-
 def _render_delivery(relays_ok: list[str], relays_failed: list[dict[str, object]]) -> str:
     """One line per relay, so a partial delivery is visible rather than implied."""
     lines = [f"  [green]✓[/green] {url}" for url in relays_ok]
@@ -457,7 +344,7 @@ def _resolve_instance_labelled(
     unresolvable request into a typed CLI error instead of a silent fallback.
     """
     try:
-        label, _reason = p.resolve_instance_name(instance)
+        return resolve_instance(p, instance)
     except InstanceResolutionError as exc:
         if not quiet:
             _emit_error(
@@ -466,7 +353,6 @@ def _resolve_instance_labelled(
                 {"instance": instance, "available": exc.available},
             )
         raise typer.Exit(1) from None
-    return p.instances[label], label
 
 
 def _resolve_instance(p: Profile, instance: str | None, *, quiet: bool = False) -> Identity:
@@ -1367,7 +1253,26 @@ def receive(
             now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
             if auto_ingest and trusted:
                 _assert_valid_ulid(packet.id)
-                _ingest(packet, quiet=format_ == OutputFormat.JSON)
+                persisted = _ingest(
+                    packet, quiet=format_ == OutputFormat.JSON, render=_render_ingested
+                )
+                if not persisted:
+                    # Don't advance the cursor on a failed body write: the packet
+                    # would be marked ingested, unreadable by `read`, and filtered
+                    # out of `inbox` — lost with no diagnostic. Retry next poll.
+                    logger.warning(
+                        "Persistence failed for packet %s; not advancing cursor", packet.id
+                    )
+                    received_summaries.append(
+                        {
+                            "id": packet.id,
+                            "intent": packet.intent,
+                            "from": packet.from_did,
+                            "ingested": False,
+                            "error": "persist_failed",
+                        }
+                    )
+                    continue
                 p.ingested_ids.append(
                     {
                         "id": packet.id,
@@ -1422,7 +1327,7 @@ def receive(
             )
             if ingest:
                 _assert_valid_ulid(packet.id)
-                _ingest(packet, quiet=format_ == OutputFormat.JSON)
+                _ingest(packet, quiet=format_ == OutputFormat.JSON, render=_render_ingested)
                 p.ingested_ids.append(
                     {
                         "id": packet.id,
@@ -2980,18 +2885,11 @@ def _resolve_did(to: str, profile: Profile) -> tuple[str, str]:
         label = available[0]
         return next(iter(profile.trusted_keys.values())).did, label
 
-    if available:
-        names = ", ".join(available)
-        err.print(
-            f"[red]Unknown recipient '{to}'.[/red] "
-            f"Available recipients: [cyan]{names}[/cyan].\n"
-            "Use a full DID or one of the labels above."
-        )
-    else:
-        err.print(
-            f"[red]Unknown recipient '{to}'.[/red]\n"
-            "Use a full DID or add with [bold]aya trust[/bold]."
-        )
+    _emit_error(
+        ErrorCode.UNKNOWN_RECIPIENT,
+        UnknownRecipientError(to, available).args[0],
+        {"to": to, "available": available},
+    )
     raise typer.Exit(1)
 
 
@@ -3062,14 +2960,11 @@ def _label_for_did(did: str, profile: Profile) -> str:
 
 
 def _resolve_nostr_pubkey(did: str, profile: Profile) -> str | None:
-    """Look up the Nostr pubkey for a DID from trusted keys or local instances."""
-    for key in profile.trusted_keys.values():
-        if key.did == did and key.nostr_pubkey:
-            return key.nostr_pubkey
-    for inst in profile.instances.values():
-        if inst.did == did:
-            return inst.nostr_public_hex
-    return None
+    """Look up the Nostr pubkey for a DID, or None. See ``resolve.nostr_pubkey_for``."""
+    try:
+        return nostr_pubkey_for(profile, did)
+    except NoNostrPubkeyError:
+        return None
 
 
 # ── read ──────────────────────────────────────────────────────────────────────

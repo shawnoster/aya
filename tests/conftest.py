@@ -4,10 +4,10 @@ Without this, the suite writes into the developer's real ``~/.aya`` — and
 ``aya.ingest`` unlinks anything in ``PACKETS_DIR`` older than 7 days, so
 running the tests destroyed real packets.
 
-One env var is enough now that ``aya.paths`` resolves on access. It previously
+One env var is enough now that ``aya.adapters.paths`` resolves on access. It previously
 took an eight-entry alias table, because modules that did
-``from aya.paths import X`` at import time held a snapshot that patching
-``aya.paths`` could not reach.
+``from aya.adapters.paths import X`` at import time held a snapshot that patching
+``aya.adapters.paths`` could not reach.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def isolate_aya_home(tmp_path, monkeypatch):
     Autouse on purpose: opt-in isolation is what let the leak persist for so
     long. Tests needing a specific path still override it themselves.
     """
-    import aya.paths as paths
+    import aya.adapters.paths as paths
     import aya.scheduler as scheduler
 
     home = tmp_path / "aya_home"

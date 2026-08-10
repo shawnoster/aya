@@ -22,19 +22,19 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from aya import relay as _relay
-from aya.identity import Profile, _assert_valid_ulid
-from aya.ingest import ingest as ingest_packet
-from aya.outbox import (
+from aya.adapters import relay as _relay
+from aya.adapters.outbox import (
     NOT_INGESTED_HINT,
     check_idempotency,
     delivery_from_report,
     record_idempotency,
     record_sent,
 )
-from aya.packet import ConflictStrategy, ContentType, Packet, human_age
-from aya.relay import RelayClient
-from aya.resolve import (
+from aya.adapters.relay import RelayClient
+from aya.entities.identity import Profile, _assert_valid_ulid
+from aya.entities.packet import ConflictStrategy, ContentType, Packet, human_age
+from aya.usecases.ingest import ingest as ingest_packet
+from aya.usecases.resolve import (
     NoNostrPubkeyError,
     label_for_did,
     nostr_pubkey_for,
@@ -42,7 +42,7 @@ from aya.resolve import (
     resolve_recipient,
     resolve_relays,
 )
-from aya.triage import triage
+from aya.usecases.triage import triage
 
 logger = logging.getLogger(__name__)
 

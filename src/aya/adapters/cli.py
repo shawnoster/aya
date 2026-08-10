@@ -23,43 +23,29 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from aya import __version__, relay_ops
-from aya import paths as _paths
-from aya.config import get_notebook_path, load_config, set_config_value
-from aya.context import build_context_block
-from aya.identity import (
-    Identity,
-    InstanceResolutionError,
-    Profile,
-    TrustedKey,
-)
-from aya.install import install_scheduler, uninstall_scheduler
-from aya.outbox import (
+from aya import __version__
+from aya.adapters import paths as _paths
+from aya.adapters.config import get_notebook_path, load_config, set_config_value
+from aya.adapters.install import install_scheduler, uninstall_scheduler
+from aya.adapters.outbox import (
     NOT_INGESTED_HINT,
     check_idempotency,
     delivery_summary,
     record_idempotency,
 )
-from aya.packet import ConflictStrategy, ContentType, Packet, human_age
-from aya.pair import (
-    PairingError,
-    generate_code,
-    hash_code,
-    join_pairing,
-    poll_for_pair_response,
-    publish_pair_request,
-)
-from aya.relay import RelayClient, RelayUnreachableError
-from aya.resolve import (
-    NoNostrPubkeyError,
-    UnknownRecipientError,
-    nostr_pubkey_for,
-    resolve_instance,
-)
+from aya.adapters.relay import RelayClient, RelayUnreachableError
 
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
-from aya.rewake import emit as rewake_emit
+from aya.adapters.rewake import emit as rewake_emit
+from aya.adapters.status_view import run_status
+from aya.entities.identity import (
+    Identity,
+    InstanceResolutionError,
+    Profile,
+    TrustedKey,
+)
+from aya.entities.packet import ConflictStrategy, ContentType, Packet, human_age
 from aya.scheduler import (
     SEVERITY_ACTIONABLE,
     SEVERITY_HEARTBEAT,
@@ -91,7 +77,22 @@ from aya.scheduler import (
     snooze_item,
     validate_watch,
 )
-from aya.status import run_status
+from aya.usecases import relay_ops
+from aya.usecases.context import build_context_block
+from aya.usecases.pair import (
+    PairingError,
+    generate_code,
+    hash_code,
+    join_pairing,
+    poll_for_pair_response,
+    publish_pair_request,
+)
+from aya.usecases.resolve import (
+    NoNostrPubkeyError,
+    UnknownRecipientError,
+    nostr_pubkey_for,
+    resolve_instance,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES = 120
@@ -434,7 +435,7 @@ def _render_receive(
 
 def _render_ingested(packet: Packet) -> None:
     """Draw an ingested packet. Lives in the surface layer; aya.ingest injects it."""
-    from aya.ingest import is_seed, seed_fields
+    from aya.usecases.ingest import is_seed, seed_fields
 
     console.print(f"\n[bold]Ingesting:[/bold] {packet.intent}")
     if is_seed(packet):
@@ -623,7 +624,7 @@ def use(
 @app.command("mcp-server")
 def mcp_server_cmd() -> None:
     """Start the MCP server (stdio transport) for AI tool integration."""
-    from aya.mcp_server import main as mcp_main
+    from aya.adapters.mcp_server import main as mcp_main
 
     asyncio.run(mcp_main())
 
@@ -1751,8 +1752,8 @@ def schedule_install(
     ),
 ) -> None:
     """Install scheduler integrations — system crontab + Claude Code hooks."""
-    from aya.config import load_config, set_config_value
-    from aya.install import DEFAULT_TICK_INTERVAL
+    from aya.adapters.config import load_config, set_config_value
+    from aya.adapters.install import DEFAULT_TICK_INTERVAL
 
     # Resolve the effective tick interval: explicit flag > persisted config > default.
     if tick_interval is None:
@@ -2743,7 +2744,7 @@ def read(
     render the body in a boxed display. ``--panel`` is ignored under
     ``--format json``.
     """
-    from aya.paths import PACKETS_DIR
+    from aya.adapters.paths import PACKETS_DIR
 
     format_ = resolve_format(format_)
 
@@ -2767,7 +2768,7 @@ def read(
             {"packet_id": packet_id, "matches": len(matches)},
         )
 
-    from aya.packet import Packet
+    from aya.entities.packet import Packet
 
     packet = Packet.from_json(matches[0].read_text())
 
@@ -3030,7 +3031,7 @@ def packets(
 
     Takes no --as: the packet store is per-machine, not per-identity.
     """
-    from aya.paths import PACKETS_DIR
+    from aya.adapters.paths import PACKETS_DIR
 
     format_ = resolve_format(format_)
     if limit < 1:
@@ -3043,7 +3044,7 @@ def packets(
         console.print("[dim]No ingested packets found.[/dim]")
         return
 
-    from aya.packet import Packet
+    from aya.entities.packet import Packet
 
     def _safe_mtime(f: Path) -> float:
         try:
@@ -3423,7 +3424,7 @@ def log_append(
     ),
 ) -> None:
     """Append a timestamped entry to today's daily note."""
-    from aya.log import append_entry
+    from aya.usecases.log import append_entry
 
     fmt = resolve_format(format_)
     try:
@@ -3451,7 +3452,7 @@ def log_auto(
     Exits silently if nothing noteworthy is detected or if the last entry
     was written less than 5 minutes ago.
     """
-    from aya.log import auto_log
+    from aya.usecases.log import auto_log
 
     fmt = resolve_format(format_)
     try:
@@ -3485,8 +3486,8 @@ def log_show(
     ),
 ) -> None:
     """Display progress entries for today (or a given date)."""
-    from aya.log import show_entries
     from aya.scheduler.time_utils import _get_local_tz
+    from aya.usecases.log import show_entries
 
     fmt = resolve_format(format_)
     dt = None

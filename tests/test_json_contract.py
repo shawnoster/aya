@@ -17,7 +17,7 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from aya.cli import app
+from aya.adapters.cli import app
 
 runner = CliRunner()
 
@@ -34,21 +34,21 @@ def _isolate(tmp_path, monkeypatch):
     scheduler_file.write_text(json.dumps({"items": []}))
     alerts_file.write_text(json.dumps({"alerts": []}))
 
-    monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
-    monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
+    monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+    monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
 
     # Status module reads its own PROFILE and checks _paths.SCHEDULER_FILE —
     # patch both so contract tests never touch real ~/.aya files.
     fake_profile = tmp_path / "profile.json"
     fake_profile.write_text(json.dumps({"aya": {"instances": {}, "trusted_keys": {}}}))
-    monkeypatch.setattr("aya.paths.PROFILE_PATH", fake_profile)
-    monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
+    monkeypatch.setattr("aya.adapters.paths.PROFILE_PATH", fake_profile)
+    monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
 
     # Stub scheduler helpers so _gather_status doesn't touch real disk.
-    monkeypatch.setattr("aya.status.get_unseen_alerts", list)
-    monkeypatch.setattr("aya.status.get_due_reminders", lambda *a, **kw: [])
-    monkeypatch.setattr("aya.status.get_upcoming_reminders", lambda *a, **kw: [])
-    monkeypatch.setattr("aya.status.get_active_watches", list)
+    monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+    monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+    monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+    monkeypatch.setattr("aya.usecases.status.get_active_watches", list)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ class TestInboxContract:
 
     def test_empty_inbox_is_wrapped_object(self, tmp_path, monkeypatch):
         """An inbox with no packets returns {"packets": []}."""
-        from aya.identity import Identity, Profile
+        from aya.entities.identity import Identity, Profile
 
         profile_path = tmp_path / "profile.json"
         identity = Identity.generate("default")
@@ -141,7 +141,7 @@ class TestInboxContract:
             return
             yield  # pragma: no cover — makes this an async generator
 
-        monkeypatch.setattr("aya.relay.RelayClient.fetch_pending", _empty_fetch)
+        monkeypatch.setattr("aya.adapters.relay.RelayClient.fetch_pending", _empty_fetch)
 
         result = runner.invoke(
             app,
@@ -156,8 +156,8 @@ class TestInboxContract:
 
     def test_packet_shape(self, tmp_path, monkeypatch):
         """Each packet dict must have id, intent, from_did, trusted."""
-        from aya.identity import Identity, Profile
-        from aya.packet import Packet
+        from aya.entities.identity import Identity, Profile
+        from aya.entities.packet import Packet
 
         profile_path = tmp_path / "profile.json"
         identity = Identity.generate("default")
@@ -174,7 +174,7 @@ class TestInboxContract:
         async def _one_packet(self):
             yield fake_packet
 
-        monkeypatch.setattr("aya.relay.RelayClient.fetch_pending", _one_packet)
+        monkeypatch.setattr("aya.adapters.relay.RelayClient.fetch_pending", _one_packet)
 
         result = runner.invoke(
             app,
@@ -200,7 +200,7 @@ class TestReceiveContract:
         """receive --format json returns {"packets": []} when relay yields nothing."""
         from unittest.mock import patch
 
-        from aya.identity import Identity, Profile
+        from aya.entities.identity import Identity, Profile
 
         local = Identity.generate("default")
         profile = Profile()
@@ -212,7 +212,7 @@ class TestReceiveContract:
             if False:  # pragma: no cover
                 yield
 
-        with patch("aya.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.cli.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,

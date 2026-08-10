@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from aya.atomic import atomic_write_json, file_lock, locked_read_json
-from aya.identity import Identity, Profile
-from aya.ledger import Ledger
+from aya.adapters.atomic import atomic_write_json, file_lock, locked_read_json
+from aya.adapters.ledger import Ledger
+from aya.entities.identity import Identity, Profile
 
 
 def _iso(dt: datetime) -> str:
@@ -45,7 +45,7 @@ class TestAtomicWrite:
         def boom(_fd):
             raise OSError("disk full")
 
-        monkeypatch.setattr("aya.atomic.os.fsync", boom)
+        monkeypatch.setattr("aya.adapters.atomic.os.fsync", boom)
         with pytest.raises(OSError, match="disk full"):
             atomic_write_json(target, {"replacement": True})
 

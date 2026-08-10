@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from aya.rewake import emit
+from aya.adapters.rewake import emit
 
 
 class TestEmit:

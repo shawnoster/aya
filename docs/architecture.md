@@ -200,47 +200,51 @@ Workspace structure (CLAUDE.md, AGENTS.md, skills, hooks) is defined in your wor
 
 ## Component Map
 
+Layered inward-to-outward. Source dependencies point inward only; the
+boundaries are enforced by `tests/test_architecture.py`.
+
 ```
-aya (CLI + Plugin + MCP server)
-├── Identity
-│   ├── identity.py      — did:key gen, ed25519 + secp256k1 keypairs
-│   ├── profile.py       — Profile class: instances, trusted_keys, default_relays
-│   ├── credentials.py   — keypair persistence
-│   └── paths.py         — data directory paths (~/.aya/...)
+src/aya/
+├── entities/          — rules that hold without this application; no I/O
+│   ├── packet.py      — Packet, ContentType, ConflictStrategy, signing
+│   ├── identity.py    — Identity, TrustedKey, Profile
+│   └── encryption.py  — NIP-44 v2
 │
-├── Sync
-│   ├── packet.py        — JSON envelope, signing, verification
-│   ├── relay.py         — Nostr WebSocket client (kind 5999)
-│   ├── encryption.py    — NIP-44 v2 E2E encryption (ECDH + ChaCha20)
-│   ├── pair.py          — short-code pairing via relay
-│   └── ingest.py        — packet ingestion path shared by CLI + MCP
+├── usecases/          — what aya does; no printing, no exit codes
+│   ├── relay_ops.py   — send / ack / receive / inbox, once for both surfaces
+│   ├── ingest.py      — persist a packet, alert on seeds
+│   ├── pair.py        — pairing exchange
+│   ├── resolve.py     — instance, recipient, relay and label resolution
+│   ├── triage.py      — which fetched packets to act on
+│   ├── status.py      — gather workspace readiness (facts only)
+│   ├── context.py     — context-block builder
+│   └── log.py         — daily-notes logger
 │
-├── Schedule
-│   └── scheduler/
-│       ├── core.py      — reminders, watches, recurring jobs, polling
-│       ├── storage.py   — scheduler.json + alerts.json + activity.json
-│       ├── providers.py — github-pr / ci-checks / jira-ticket / jira-query pollers
-│       ├── time_utils.py — idle detection, work-hours parsing
-│       ├── display.py   — Rich-formatted scheduler views
-│       └── types.py     — SchedulerItem, AlertItem, SuppressedCron
+├── adapters/          — everything touching the outside world
+│   ├── cli.py         — driving: typer app, input parsing, renderers
+│   ├── mcp_server.py  — driving: MCP tools over stdio
+│   ├── status_view.py — presenters for `aya status` (json/plain/rich)
+│   ├── relay.py       — driven: Nostr transport
+│   ├── paths.py       — driven: AYA_HOME resolution
+│   ├── atomic.py      — driven: file lock + atomic replace
+│   ├── ledger.py      — driven: ingested / sent / dropped logs
+│   ├── outbox.py      — driven: idempotency, delivery, sent log
+│   ├── config.py      — driven: workspace config
+│   ├── credentials.py — driven: credential checks
+│   ├── install.py     — driven: crontab + Claude Code hooks
+│   └── rewake.py      — driven: asyncRewake for PostToolUse watch hits
 │
-├── Status
-│   ├── status.py        — workspace readiness check, daily notes parsing
-│   └── context.py       — context-block builder for new sessions
-│
-├── Install
-│   ├── install.py       — system crontab + Claude Code hooks setup
-│   └── log.py           — daily-notes logger (`aya log` subcommands)
-│
-├── MCP
-│   └── mcp_server.py    — MCP server (stdio); aya_send / aya_receive / aya_inbox / etc.
-│
-├── Rewake
-│   └── rewake.py        — asyncRewake plumbing for PostToolUse watch hits
-│
-└── CLI
-    └── cli.py           — typer app wiring all subcommands
+└── scheduler/         — bounded subsystem, layered internally
+    ├── core.py        — CRUD, poll, tick, pending
+    ├── storage.py     — persistence, locking, atomic writes
+    ├── providers.py   — github-pr, jira, ci-checks pollers
+    ├── display.py     — alert rendering
+    ├── time_utils.py  — due-date parsing, timezones
+    └── types.py       — SchedulerItem, AlertItem, SuppressedCron
 ```
+
+The two driving adapters are peers: each parses its own input, calls a use
+case, and renders the result. Neither imports the other.
 
 ## Security Model
 

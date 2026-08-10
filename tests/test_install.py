@@ -10,8 +10,8 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from aya.cli import app
-from aya.install import (
+from aya.adapters.cli import app
+from aya.adapters.install import (
     CANONICAL_HOOKS,
     CRON_COMMENT,
     _build_cron_lines,
@@ -249,7 +249,7 @@ class TestInstallHooks:
 
     def test_fresh_install_writes_file(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             install_scheduler(settings_path=settings)
         assert settings.exists()
         data = json.loads(settings.read_text())
@@ -260,7 +260,7 @@ class TestInstallHooks:
     def test_preserves_permissions(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
         settings.write_text(json.dumps({"permissions": {"allow": ["Bash(git:*)"]}}) + "\n")
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             install_scheduler(settings_path=settings)
         data = json.loads(settings.read_text())
         assert data["permissions"]["allow"] == ["Bash(git:*)"]
@@ -268,7 +268,7 @@ class TestInstallHooks:
 
     def test_idempotent(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             install_scheduler(settings_path=settings)
             result = install_scheduler(settings_path=settings)
         assert set(result.hooks_already_present) == {"SessionStart", "PreToolUse", "PostToolUse"}
@@ -283,7 +283,7 @@ class TestInstallHooks:
             }
         }
         settings.write_text(json.dumps(stale) + "\n")
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             result = install_scheduler(settings_path=settings)
         assert "SessionStart" in result.hooks_updated
 
@@ -292,7 +292,7 @@ class TestInstallHooks:
         custom_hook = {"hooks": [{"type": "command", "command": "echo custom"}]}
         existing = {"hooks": {"SessionStart": [custom_hook]}}
         settings.write_text(json.dumps(existing) + "\n")
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             install_scheduler(settings_path=settings)
         data = json.loads(settings.read_text())
         commands = [
@@ -303,7 +303,7 @@ class TestInstallHooks:
     def test_corrupt_json_surfaces_error(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
         settings.write_text("{not valid json")
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             result = install_scheduler(settings_path=settings)
         assert any("settings.json" in e for e in result.errors)
         # File should NOT be overwritten
@@ -312,7 +312,7 @@ class TestInstallHooks:
     def test_malformed_hooks_key_surfaces_error(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
         settings.write_text(json.dumps({"hooks": "not-a-dict"}) + "\n")
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             result = install_scheduler(settings_path=settings)
         assert any("settings.json" in e for e in result.errors)
 
@@ -348,7 +348,7 @@ class TestRoundtrip:
         settings = tmp_path / "settings.json"
         original = {"permissions": {"allow": ["Bash(git:*)"]}}
         settings.write_text(json.dumps(original, indent=2) + "\n")
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             install_scheduler(settings_path=settings)
         assert "hooks" in json.loads(settings.read_text())
         uninstall_scheduler(settings_path=settings)
@@ -373,8 +373,8 @@ class TestInstallCron:
             return subprocess.CompletedProcess(cmd, 0)
 
         with (
-            patch("aya.install.subprocess.run", side_effect=mock_run),
-            patch("aya.install._resolve_aya_path", return_value="/usr/local/bin/aya"),
+            patch("aya.adapters.install.subprocess.run", side_effect=mock_run),
+            patch("aya.adapters.install._resolve_aya_path", return_value="/usr/local/bin/aya"),
         ):
             result = install_scheduler(settings_path=tmp_path / "s.json")
 
@@ -392,8 +392,8 @@ class TestInstallCron:
             return subprocess.CompletedProcess(cmd, 0)
 
         with (
-            patch("aya.install.subprocess.run", side_effect=mock_run),
-            patch("aya.install._resolve_aya_path", return_value="/usr/local/bin/aya"),
+            patch("aya.adapters.install.subprocess.run", side_effect=mock_run),
+            patch("aya.adapters.install._resolve_aya_path", return_value="/usr/local/bin/aya"),
         ):
             result = install_scheduler(settings_path=tmp_path / "s.json")
 
@@ -401,7 +401,7 @@ class TestInstallCron:
         assert result.cron_already_present is True
 
     def test_no_aya_binary(self, tmp_path: Path) -> None:
-        with patch("aya.install._resolve_aya_path", return_value=None):
+        with patch("aya.adapters.install._resolve_aya_path", return_value=None):
             result = install_scheduler(settings_path=tmp_path / "s.json")
         assert any("PATH" in e for e in result.errors)
         assert result.cron_installed is False
@@ -423,7 +423,7 @@ class TestUninstallCron:
                 return subprocess.CompletedProcess(cmd, 0)
             return subprocess.CompletedProcess(cmd, 0)
 
-        with patch("aya.install.subprocess.run", side_effect=mock_run):
+        with patch("aya.adapters.install.subprocess.run", side_effect=mock_run):
             result = uninstall_scheduler(settings_path=Path("/nonexistent"))
 
         assert result.cron_removed is True
@@ -437,7 +437,7 @@ class TestUninstallCron:
                 return subprocess.CompletedProcess(cmd, 0, stdout="0 * * * * echo hi\n")
             return subprocess.CompletedProcess(cmd, 0)
 
-        with patch("aya.install.subprocess.run", side_effect=mock_run):
+        with patch("aya.adapters.install.subprocess.run", side_effect=mock_run):
             result = uninstall_scheduler(settings_path=Path("/nonexistent"))
 
         assert result.cron_removed is False
@@ -450,9 +450,9 @@ class TestCLI:
     def test_install_dry_run(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
         with (
-            patch("aya.install._resolve_aya_path", return_value="/usr/local/bin/aya"),
-            patch("aya.install._get_current_crontab", return_value=""),
-            patch("aya.install.subprocess.run"),
+            patch("aya.adapters.install._resolve_aya_path", return_value="/usr/local/bin/aya"),
+            patch("aya.adapters.install._get_current_crontab", return_value=""),
+            patch("aya.adapters.install.subprocess.run"),
         ):
             result = runner.invoke(
                 app,
@@ -463,7 +463,7 @@ class TestCLI:
 
     def test_uninstall_dry_run(self, tmp_path: Path) -> None:
         with (
-            patch("aya.install._get_current_crontab", return_value=""),
+            patch("aya.adapters.install._get_current_crontab", return_value=""),
         ):
             result = runner.invoke(
                 app,

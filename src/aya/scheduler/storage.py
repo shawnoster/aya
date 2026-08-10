@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast, overload
 
-from aya import paths as _paths
+from aya.adapters import paths as _paths
 
 from .time_utils import _get_local_tz
 from .types import (

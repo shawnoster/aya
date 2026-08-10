@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aya.config import get_notebook_path
+from aya.adapters.config import get_notebook_path
 
 
 class TestGetNotebookPath:

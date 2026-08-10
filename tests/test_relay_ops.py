@@ -7,10 +7,10 @@ from typing import ClassVar
 
 import pytest
 
-from aya.identity import Identity, Profile, TrustedKey
-from aya.ledger import Ledger
-from aya.packet import Packet
-from aya.relay_ops import (
+from aya.adapters.ledger import Ledger
+from aya.entities.identity import Identity, Profile, TrustedKey
+from aya.entities.packet import Packet
+from aya.usecases.relay_ops import (
     AmbiguousAckRecipientError,
     Decision,
     PacketBody,
@@ -20,7 +20,7 @@ from aya.relay_ops import (
     receive,
     send,
 )
-from aya.resolve import NoNostrPubkeyError
+from aya.usecases.resolve import NoNostrPubkeyError
 
 
 class FakeClient:

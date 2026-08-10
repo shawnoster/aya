@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from ulid import ULID
 
-from aya.identity import (
+from aya.entities.identity import (
     PROFILE_SCHEMA_VERSION,
     Identity,
     Profile,
@@ -189,7 +189,7 @@ class TestIngestedIdsTTL:
         p.ingested_ids.append({"id": valid_id, "ingested_at": recent_ts})
         p.save(profile_path)
 
-        from aya.ledger import Ledger
+        from aya.adapters.ledger import Ledger
 
         ids = Ledger.load().ingested
         assert len(ids) == 1
@@ -219,7 +219,7 @@ class TestTruncatedUlidMigration:
         p.ingested_ids.append({"id": full_id, "ingested_at": recent_ts})
         p.save(profile_path)
 
-        from aya.ledger import Ledger
+        from aya.adapters.ledger import Ledger
 
         ids = Ledger.load().ingested
         assert len(ids) == 1

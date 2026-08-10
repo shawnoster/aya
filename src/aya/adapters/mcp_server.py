@@ -10,13 +10,13 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from aya import relay_ops
-from aya.outbox import (
+from aya.adapters.outbox import (
     NOT_INGESTED_HINT,
     delivery_from_report,
     record_sent,
 )
-from aya.resolve import (
+from aya.usecases import relay_ops
+from aya.usecases.resolve import (
     NoNostrPubkeyError,
     label_for_did,
     nostr_pubkey_for,
@@ -325,8 +325,8 @@ def _error(message: str) -> list[types.TextContent]:
 
 
 def _load_profile() -> Any:
-    from aya.identity import Profile
-    from aya.paths import PROFILE_PATH
+    from aya.adapters.paths import PROFILE_PATH
+    from aya.entities.identity import Profile
 
     return Profile.load(PROFILE_PATH)
 
@@ -363,7 +363,7 @@ def _record_send(
     relay_urls: list[str],
 ) -> tuple[list[str], list[dict[str, Any]]]:
     """Log an outbound packet and return its per-relay delivery outcome."""
-    from aya.paths import PROFILE_PATH
+    from aya.adapters.paths import PROFILE_PATH
 
     relays_ok, relays_failed = delivery_from_report(
         getattr(client, "last_publish_report", []), relay_urls
@@ -401,7 +401,8 @@ def _label_for_did(profile: Any, did: str) -> str | None:
 
 
 async def _handle_status() -> list[types.TextContent]:
-    from aya.status import _gather_status, _render_json
+    from aya.adapters.status_view import _render_json
+    from aya.usecases.status import _gather_status
 
     data = _gather_status()
     return [types.TextContent(type="text", text=_render_json(data))]
@@ -418,7 +419,7 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.paths import PROFILE_PATH
+    from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
     result = await relay_ops.send(
@@ -446,7 +447,7 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.paths import PROFILE_PATH
+    from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
     # MCP is always non-interactive: take trusted senders, hold the rest.
@@ -479,7 +480,7 @@ async def _handle_schedule_watch(arguments: dict[str, Any]) -> list[types.TextCo
 
 
 async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.paths import PROFILE_PATH
+    from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
     result = await relay_ops.ack(
@@ -510,8 +511,8 @@ async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
     packet_id = arguments["packet_id"]
     meta = arguments.get("meta", False)
 
-    from aya.packet import Packet
-    from aya.paths import PACKETS_DIR
+    from aya.adapters.paths import PACKETS_DIR
+    from aya.entities.packet import Packet
 
     if len(packet_id) < 8:
         return _error("Packet ID prefix must be at least 8 characters.")
@@ -546,7 +547,7 @@ async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
 
 
 async def _handle_config_set(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.config import set_config_value
+    from aya.adapters.config import set_config_value
 
     key = arguments["key"]
     value = arguments["value"]
@@ -555,15 +556,15 @@ async def _handle_config_set(arguments: dict[str, Any]) -> list[types.TextConten
 
 
 async def _handle_config_show(_arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.config import load_config
+    from aya.adapters.config import load_config
 
     config = load_config()
     return _text(config)
 
 
 async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
-    from aya.packet import Packet
-    from aya.paths import PACKETS_DIR
+    from aya.adapters.paths import PACKETS_DIR
+    from aya.entities.packet import Packet
 
     limit = max(int(arguments.get("limit", 20)), 1)
 

@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from aya.cli import app
-from aya.context import (
+from aya.adapters.cli import app
+from aya.usecases.context import (
     InboxSummary,
     ProjectEntry,
     TodoSummary,
@@ -268,7 +268,7 @@ def test_render_brainstorming_names_only(tmp_path: Path) -> None:
 
 
 def test_context_cmd_no_notebook_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("aya.cli.get_notebook_path", lambda: None)
+    monkeypatch.setattr("aya.adapters.cli.get_notebook_path", lambda: None)
     result = runner.invoke(app, ["context"])
     assert result.exit_code == 1
     assert "notebook_path not set" in result.output
@@ -281,7 +281,7 @@ def test_context_cmd_renders_output(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     (nb / "inbox.md").write_text("")
     (nb / "daily" / "2026-03-31.md").write_text("")
 
-    monkeypatch.setattr("aya.cli.get_notebook_path", lambda: nb)
+    monkeypatch.setattr("aya.adapters.cli.get_notebook_path", lambda: nb)
 
     result = runner.invoke(app, ["context"])
     assert result.exit_code == 0

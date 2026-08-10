@@ -11,8 +11,7 @@ from datetime import UTC, datetime
 
 import websockets
 
-from aya.identity import Identity, TrustedKey
-from aya.relay import (
+from aya.adapters.relay import (
     _PAIR_TAG_REQ,
     _PAIR_TAG_RESP,
     AYA_KIND,
@@ -22,6 +21,7 @@ from aya.relay import (
     _read_until_eose,
     _sign_hex,
 )
+from aya.entities.identity import Identity, TrustedKey
 
 logger = logging.getLogger(__name__)
 

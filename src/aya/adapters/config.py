@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from aya import paths as _paths
+from aya.adapters import paths as _paths
 
 logger = logging.getLogger(__name__)
 

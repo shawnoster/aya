@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from aya.identity import Identity
-from aya.packet import Packet
-from aya.triage import triage
+from aya.entities.identity import Identity
+from aya.entities.packet import Packet
+from aya.usecases.triage import triage
 
 
 @pytest.fixture

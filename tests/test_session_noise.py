@@ -32,9 +32,9 @@ def _isolate_scheduler(tmp_path, monkeypatch):
     scheduler_file.write_text(json.dumps({"items": []}))
     alerts_file.write_text(json.dumps({"alerts": []}))
 
-    monkeypatch.setattr("aya.paths.SCHEDULER_FILE", scheduler_file)
-    monkeypatch.setattr("aya.paths.ALERTS_FILE", alerts_file)
-    monkeypatch.setattr("aya.paths.ACTIVITY_FILE", activity_file)
+    monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", scheduler_file)
+    monkeypatch.setattr("aya.adapters.paths.ALERTS_FILE", alerts_file)
+    monkeypatch.setattr("aya.adapters.paths.ACTIVITY_FILE", activity_file)
     monkeypatch.setattr("aya.scheduler.SESSION_LOCK_FILE", session_lock_file)
 
 

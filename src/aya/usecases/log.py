@@ -19,8 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from aya import paths as _paths
-from aya.config import get_notebook_path
+from aya.adapters import paths as _paths
+from aya.adapters.config import get_notebook_path
 from aya.scheduler.storage import _atomic_write
 from aya.scheduler.time_utils import _get_local_tz, get_last_activity
 

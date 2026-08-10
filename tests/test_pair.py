@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from aya.identity import Identity
-from aya.pair import (
+from aya.entities.identity import Identity
+from aya.usecases.pair import (
     _TAG_PAIR_REQ,
     _TAG_PAIR_RESP,
     PAIR_POLL_INTERVAL,
@@ -181,7 +181,7 @@ class TestPairingFlowMocked:
 
     async def test_publish_pair_request_returns_event_id(self, work):
         ws = _make_ws_mock([])
-        with patch("aya.pair.websockets.connect", return_value=ws):
+        with patch("aya.usecases.pair.websockets.connect", return_value=ws):
             event_id = await publish_pair_request(work, "work", "code_hash", "wss://relay.test")
             assert event_id
             assert len(event_id) == 64  # sha256 hex
@@ -196,11 +196,11 @@ class TestPairingFlowMocked:
         # publish goes through a simple mock ws
         with (
             patch(
-                "aya.pair._find_pair_request",
+                "aya.usecases.pair._find_pair_request",
                 return_value=request_event,
             ),
             patch(
-                "aya.pair.websockets.connect",
+                "aya.usecases.pair.websockets.connect",
                 return_value=_make_ws_mock([]),
             ),
         ):
@@ -245,8 +245,8 @@ class TestPairingFlowMocked:
                 pass
 
         with (
-            patch("aya.pair._find_pair_request", return_value=request_event),
-            patch("aya.pair.websockets.connect", return_value=CapturingWS()),
+            patch("aya.usecases.pair._find_pair_request", return_value=request_event),
+            patch("aya.usecases.pair.websockets.connect", return_value=CapturingWS()),
         ):
             await join_pairing(home, code, "wss://relay.test")
 
@@ -260,17 +260,17 @@ class TestPairingFlowMocked:
         # Relay returns EOSE immediately — no matching events
         ws = _make_ws_mock([json.dumps(["EOSE", "sub1"])])
 
-        with patch("aya.pair.websockets.connect", return_value=ws):
+        with patch("aya.usecases.pair.websockets.connect", return_value=ws):
             result = await _find_pair_request("wss://relay.test", "nonexistent_hash")
 
         assert result is None
 
     async def test_join_pairing_not_found_error_message(self, home):
         """PairingError raised when no request is found must list actionable causes."""
-        from aya.pair import PairingError
+        from aya.usecases.pair import PairingError
 
         with (
-            patch("aya.pair._find_pair_request_with_retry", return_value=None),
+            patch("aya.usecases.pair._find_pair_request_with_retry", return_value=None),
             pytest.raises(PairingError) as exc_info,
         ):
             await join_pairing(home, "WRONG-CODE-0000", "wss://relay.test")
@@ -292,7 +292,7 @@ class TestPairingFlowMocked:
             call_count += 1
             return fake_event
 
-        with patch("aya.pair._find_pair_request", side_effect=fake_find):
+        with patch("aya.usecases.pair._find_pair_request", side_effect=fake_find):
             result = await _find_pair_request_with_retry(["wss://relay.test"], "hash")
 
         assert result == fake_event
@@ -315,8 +315,8 @@ class TestPairingFlowMocked:
             sleep_calls.append(t)
 
         with (
-            patch("aya.pair._find_pair_request", side_effect=fake_find),
-            patch("aya.pair.asyncio.sleep", side_effect=fake_sleep),
+            patch("aya.usecases.pair._find_pair_request", side_effect=fake_find),
+            patch("aya.usecases.pair.asyncio.sleep", side_effect=fake_sleep),
         ):
             result = await _find_pair_request_with_retry(
                 ["wss://relay.test"], "hash", _delays=(1, 2, 4)
@@ -341,8 +341,8 @@ class TestPairingFlowMocked:
             sleep_calls.append(t)
 
         with (
-            patch("aya.pair._find_pair_request", side_effect=fake_find),
-            patch("aya.pair.asyncio.sleep", side_effect=fake_sleep),
+            patch("aya.usecases.pair._find_pair_request", side_effect=fake_find),
+            patch("aya.usecases.pair.asyncio.sleep", side_effect=fake_sleep),
         ):
             result = await _find_pair_request_with_retry(
                 ["wss://relay.test"], "hash", _delays=(1, 2, 4)
@@ -360,15 +360,15 @@ class TestPollForPairResponseErrors:
     async def test_returns_none_on_eose_timeout(self, work):
         """EOSE timeout is normal operation — returns None, no exception raised."""
         with (
-            patch("aya.pair._read_until_eose", side_effect=TimeoutError),
-            patch("aya.pair.asyncio.sleep"),
+            patch("aya.usecases.pair._read_until_eose", side_effect=TimeoutError),
+            patch("aya.usecases.pair.asyncio.sleep"),
         ):
             mock_ws = AsyncMock()
             mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws.__aexit__ = AsyncMock(return_value=False)
             mock_ws.send = AsyncMock()
 
-            with patch("aya.pair.websockets.connect", return_value=mock_ws):
+            with patch("aya.usecases.pair.websockets.connect", return_value=mock_ws):
                 result = await poll_for_pair_response(
                     "wss://relay.test", work.nostr_public_hex, "req_event_id", timeout_seconds=1
                 )
@@ -382,7 +382,7 @@ class TestPollForPairResponseErrors:
             pass
 
         with patch(
-            "aya.pair.websockets.connect",
+            "aya.usecases.pair.websockets.connect",
             side_effect=FakeConnectionError("connection refused"),
         ):
             result = await poll_for_pair_response(
@@ -417,8 +417,8 @@ class TestPollForPairResponseErrors:
                 pass
 
         with (
-            patch("aya.pair.websockets.connect", return_value=FilterCapturingWS()),
-            patch("aya.pair.asyncio.sleep"),
+            patch("aya.usecases.pair.websockets.connect", return_value=FilterCapturingWS()),
+            patch("aya.usecases.pair.asyncio.sleep"),
         ):
             await poll_for_pair_response(
                 "wss://relay.test", work.nostr_public_hex, "req_event_id_abc", timeout_seconds=1
@@ -440,15 +440,15 @@ class TestPollForPairResponseErrors:
             await original_sleep(0)  # don't actually wait
 
         with (
-            patch("aya.pair._read_until_eose", side_effect=TimeoutError),
-            patch("aya.pair.asyncio.sleep", side_effect=capturing_sleep),
+            patch("aya.usecases.pair._read_until_eose", side_effect=TimeoutError),
+            patch("aya.usecases.pair.asyncio.sleep", side_effect=capturing_sleep),
         ):
             mock_ws = AsyncMock()
             mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws.__aexit__ = AsyncMock(return_value=False)
             mock_ws.send = AsyncMock()
 
-            with patch("aya.pair.websockets.connect", return_value=mock_ws):
+            with patch("aya.usecases.pair.websockets.connect", return_value=mock_ws):
                 await poll_for_pair_response(
                     "wss://relay.test", work.nostr_public_hex, "req_event_id", timeout_seconds=1
                 )

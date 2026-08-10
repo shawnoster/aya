@@ -14,8 +14,8 @@ import websockets
 from coincurve import PrivateKey as Secp256k1PrivateKey
 from websockets.asyncio.client import ClientConnection
 
-from aya.encryption import nip44_decrypt, nip44_encrypt
-from aya.packet import Packet
+from aya.entities.encryption import nip44_decrypt, nip44_encrypt
+from aya.entities.packet import Packet
 
 logger = logging.getLogger(__name__)
 

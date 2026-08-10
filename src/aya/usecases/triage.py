@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from aya.packet import Packet
+from aya.entities.packet import Packet
 
 __all__ = ["Triage", "triage"]
 

@@ -19,8 +19,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aya import paths as _paths
-from aya.atomic import atomic_write_json, file_lock
+from aya.adapters import paths as _paths
+from aya.adapters.atomic import atomic_write_json, file_lock
 
 logger = logging.getLogger(__name__)
 

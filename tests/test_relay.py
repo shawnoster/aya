@@ -10,9 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from aya.identity import Identity
-from aya.packet import Packet
-from aya.relay import (
+from aya.adapters.relay import (
     _FETCH_PAGE_SIZE,
     _MAX_RETRIES_PUBLISH,
     AYA_KIND,
@@ -23,6 +21,8 @@ from aya.relay import (
     _read_until_eose,
     _sign_hex,
 )
+from aya.entities.identity import Identity
+from aya.entities.packet import Packet
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -152,7 +152,7 @@ class TestBuildEvent:
     def test_encrypted_content_decrypts_correctly(
         self, client: RelayClient, packet: Packet, sender: Identity, recipient: Identity
     ) -> None:
-        from aya.encryption import nip44_decrypt
+        from aya.entities.encryption import nip44_decrypt
 
         event = client._build_event(packet, recipient.nostr_public_hex)
         plaintext = nip44_decrypt(
@@ -369,12 +369,12 @@ class TestFetchPending:
         async def fake_read_until_eose(ws, sub_id):
             yield raw_event
 
-        with patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose):
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose):
             mock_ws = AsyncMock()
             mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-            with patch("aya.relay.websockets.connect", return_value=mock_ws):
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
                 packets = [pkt async for pkt in client.fetch_pending()]
 
         assert len(packets) == 1
@@ -396,12 +396,12 @@ class TestFetchPending:
         async def fake_read_until_eose(ws, sub_id):
             yield raw_event
 
-        with patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose):
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose):
             mock_ws = AsyncMock()
             mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-            with patch("aya.relay.websockets.connect", return_value=mock_ws):
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
                 packets = [pkt async for pkt in client.fetch_pending()]
 
         assert packets == []
@@ -412,12 +412,12 @@ class TestFetchPending:
         async def fake_read_until_eose(ws, sub_id):
             yield bad_event
 
-        with patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose):
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose):
             mock_ws = AsyncMock()
             mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-            with patch("aya.relay.websockets.connect", return_value=mock_ws):
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
                 packets = [pkt async for pkt in client.fetch_pending()]
 
         assert packets == []
@@ -434,12 +434,12 @@ class TestFetchPending:
         async def fake_read_until_eose(ws, sub_id):
             yield pairing_event
 
-        with patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose):
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose):
             mock_ws = AsyncMock()
             mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-            with patch("aya.relay.websockets.connect", return_value=mock_ws):
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
                 packets = [pkt async for pkt in client.fetch_pending()]
 
         assert packets == []
@@ -459,12 +459,12 @@ class TestFetchPending:
             yield raw_event
             raise TimeoutError
 
-        with patch("aya.relay._read_until_eose", side_effect=fake_read_timeout):
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_timeout):
             mock_ws = AsyncMock()
             mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-            with patch("aya.relay.websockets.connect", return_value=mock_ws):
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
                 packets = [pkt async for pkt in client.fetch_pending()]
 
         assert len(packets) == 1
@@ -474,7 +474,7 @@ class TestFetchPending:
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
         """fetch_pending must transparently decrypt NIP-44-encrypted Nostr events."""
-        from aya.encryption import nip44_encrypt
+        from aya.entities.encryption import nip44_encrypt
 
         p = Packet(
             **{"from": sender.did, "to": recipient.did},
@@ -504,12 +504,12 @@ class TestFetchPending:
             nostr_public_hex=recipient.nostr_public_hex,
         )
 
-        with patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose):
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose):
             mock_ws = AsyncMock()
             mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
             mock_ws.__aexit__ = AsyncMock(return_value=False)
 
-            with patch("aya.relay.websockets.connect", return_value=mock_ws):
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
                 packets = [pkt async for pkt in recipient_client.fetch_pending()]
 
         assert len(packets) == 1
@@ -563,8 +563,8 @@ class TestFetchPagination:
         mock_ws.send = AsyncMock(side_effect=fake_ws_send)
 
         with (
-            patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
         ):
             packets = [pkt async for pkt in client.fetch_pending()]
 
@@ -601,8 +601,8 @@ class TestFetchPagination:
         mock_ws.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
         ):
             packets = [pkt async for pkt in client.fetch_pending()]
 
@@ -637,8 +637,8 @@ class TestFetchPagination:
         mock_ws.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
         ):
             packets = [pkt async for pkt in client.fetch_pending()]
 
@@ -675,8 +675,8 @@ class TestFetchPagination:
         mock_ws.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
         ):
             packets = [pkt async for pkt in client.fetch_pending()]
 
@@ -723,8 +723,8 @@ class TestFetchPagination:
         mock_ws.send = AsyncMock()
 
         with (
-            patch("aya.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
         ):
             packets = [pkt async for pkt in client.fetch_pending()]
 
@@ -749,7 +749,7 @@ class TestPublish:
         fake_event_id = "a" * 64
         mock_ws.recv = AsyncMock(return_value=json.dumps(["OK", fake_event_id, True, ""]))
 
-        with patch("aya.relay.websockets.connect", return_value=mock_ws):
+        with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
             event_id = await client.publish(packet, recipient.nostr_public_hex)
 
         assert isinstance(event_id, str)
@@ -774,7 +774,7 @@ class TestPublish:
         client._sleep = _no_sleep
 
         with (
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
             pytest.raises(RelayError),
         ):
             await client.publish(packet, recipient.nostr_public_hex)
@@ -789,9 +789,9 @@ class TestPublish:
 
 class TestBackoffHelpers:
     def test_backoff_delay_increases_with_attempt(self) -> None:
-        from aya.relay import _backoff_delay
+        from aya.adapters.relay import _backoff_delay
 
-        with patch("aya.relay.random.random", return_value=0.5):  # no jitter
+        with patch("aya.adapters.relay.random.random", return_value=0.5):  # no jitter
             d0 = _backoff_delay(0)
             d1 = _backoff_delay(1)
             d2 = _backoff_delay(2)
@@ -799,29 +799,29 @@ class TestBackoffHelpers:
         assert d0 < d1 < d2
 
     def test_backoff_delay_caps_at_60s(self) -> None:
-        from aya.relay import _backoff_delay
+        from aya.adapters.relay import _backoff_delay
 
-        with patch("aya.relay.random.random", return_value=0.5):  # no jitter
+        with patch("aya.adapters.relay.random.random", return_value=0.5):  # no jitter
             assert _backoff_delay(20) <= 60.0
 
     def test_backoff_delay_nonnegative(self) -> None:
-        from aya.relay import _backoff_delay
+        from aya.adapters.relay import _backoff_delay
 
-        with patch("aya.relay.random.random", return_value=0.0):  # max negative jitter
+        with patch("aya.adapters.relay.random.random", return_value=0.0):  # max negative jitter
             assert _backoff_delay(0) >= 0.0
 
     def test_is_rate_limited_true(self) -> None:
-        from aya.relay import _is_rate_limited
+        from aya.adapters.relay import _is_rate_limited
 
         assert _is_rate_limited(["OK", "abc", False, "rate-limited: slow down"])
 
     def test_is_rate_limited_false_for_ok_accepted(self) -> None:
-        from aya.relay import _is_rate_limited
+        from aya.adapters.relay import _is_rate_limited
 
         assert not _is_rate_limited(["OK", "abc", True, ""])
 
     def test_is_rate_limited_false_for_other_rejection(self) -> None:
-        from aya.relay import _is_rate_limited
+        from aya.adapters.relay import _is_rate_limited
 
         assert not _is_rate_limited(["OK", "abc", False, "blocked: spam"])
 
@@ -850,7 +850,7 @@ class TestMultiRelayPublish:
             nostr_public_hex=sender.nostr_public_hex,
         )
 
-        with patch("aya.relay.websockets.connect", side_effect=fake_connect):
+        with patch("aya.adapters.relay.websockets.connect", side_effect=fake_connect):
             event_id = await multi_client.publish(packet, recipient.nostr_public_hex)
 
         assert set(connected_urls) == {"wss://relay1.example.com", "wss://relay2.example.com"}
@@ -883,7 +883,7 @@ class TestMultiRelayPublish:
             nostr_public_hex=sender.nostr_public_hex,
         )
 
-        with patch("aya.relay.websockets.connect", side_effect=fake_connect):
+        with patch("aya.adapters.relay.websockets.connect", side_effect=fake_connect):
             event_id = await multi_client.publish(packet, recipient.nostr_public_hex)
 
         assert len(event_id) == 64
@@ -916,7 +916,7 @@ class TestMultiRelayPublish:
         mock_ws.recv = AsyncMock(return_value=json.dumps(["OK", "a" * 64, False, "blocked"]))
 
         with (
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
             pytest.raises(RelayError),
         ):
             await multi_client.publish(packet, recipient.nostr_public_hex)
@@ -942,8 +942,8 @@ class TestMultiRelayPublish:
         mock_ws.recv = AsyncMock(side_effect=lambda: next(recv_iter))
 
         with (
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
-            patch("aya.relay.asyncio.sleep"),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay.asyncio.sleep"),
         ):
             event_id = await client_single.publish(packet, recipient.nostr_public_hex)
 
@@ -978,8 +978,8 @@ class TestMultiRelayFetch:
         mock_ws.__aexit__ = AsyncMock(return_value=False)
 
         with (
-            patch("aya.relay._read_until_eose", side_effect=fake_read_eose),
-            patch("aya.relay.websockets.connect", return_value=mock_ws),
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
         ):
             packets = [pkt async for pkt in multi_client.fetch_pending()]
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from aya.identity import Identity, InstanceResolutionError, Profile, TrustedKey
-from aya.resolve import (
+from aya.entities.identity import Identity, InstanceResolutionError, Profile, TrustedKey
+from aya.usecases.resolve import (
     NoNostrPubkeyError,
     UnknownRecipientError,
     label_for_did,

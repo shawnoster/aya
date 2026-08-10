@@ -12,7 +12,7 @@ decide how to show the failure.
 
 from __future__ import annotations
 
-from aya.identity import Identity, InstanceResolutionError, Profile
+from aya.entities.identity import Identity, InstanceResolutionError, Profile
 
 __all__ = [
     "InstanceResolutionError",

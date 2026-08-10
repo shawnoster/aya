@@ -21,9 +21,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aya import paths as _paths
-from aya.identity import Profile, _assert_valid_ulid
-from aya.packet import Packet
+from aya.adapters import paths as _paths
+from aya.entities.identity import Profile, _assert_valid_ulid
+from aya.entities.packet import Packet
 
 logger = logging.getLogger(__name__)
 

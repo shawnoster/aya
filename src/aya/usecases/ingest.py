@@ -20,8 +20,8 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
-from aya import paths as _paths
-from aya.packet import Packet
+from aya.adapters import paths as _paths
+from aya.entities.packet import Packet
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def persist_packet(packet: Packet, *, now: datetime | None = None) -> bool:
     failed to write makes it unreadable and invisible to the inbox.
     """
     try:
-        from aya.identity import _assert_valid_ulid
+        from aya.entities.identity import _assert_valid_ulid
 
         # Defence in depth: packets come from the network. Reject anything that
         # could escape PACKETS_DIR via path separators before building the path.

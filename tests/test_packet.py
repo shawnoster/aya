@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aya.identity import Identity
-from aya.packet import ConflictStrategy, ContentType, Packet
+from aya.entities.identity import Identity
+from aya.entities.packet import ConflictStrategy, ContentType, Packet
 
 
 @pytest.fixture

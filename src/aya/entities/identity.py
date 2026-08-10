@@ -17,8 +17,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from ulid import ULID
 
-from aya.atomic import atomic_write_json, file_lock
-from aya.ledger import Ledger
+from aya.adapters.atomic import atomic_write_json, file_lock
+from aya.adapters.ledger import Ledger
 
 logger = logging.getLogger(__name__)
 

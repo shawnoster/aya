@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from pydantic import BaseModel, Field, model_validator
 from ulid import ULID
 
-from aya.identity import Identity
+from aya.entities.identity import Identity
 
 logger = logging.getLogger(__name__)
 

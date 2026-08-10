@@ -7,10 +7,10 @@ Paths resolve **on access**, not at import: the names below are served by
 :func:`__getattr__`, so changing ``AYA_HOME`` takes effect immediately.
 Computing them once at import meant a caller had to ``importlib.reload`` this
 module, which left every module that had already done
-``from aya.paths import X`` pointing at the old value.
+``from aya.adapters.paths import X`` pointing at the old value.
 
-Prefer ``from aya import paths`` + ``paths.PROFILE_PATH`` over
-``from aya.paths import PROFILE_PATH``: the second form snapshots the value at
+Prefer ``from aya.adapters import paths`` + ``paths.PROFILE_PATH`` over
+``from aya.adapters.paths import PROFILE_PATH``: the second form snapshots the value at
 import and cannot be redirected afterwards.
 
 Workspace-relative paths (CLAUDE.md, AGENTS.md, daily notes) are NOT defined

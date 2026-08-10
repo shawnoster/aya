@@ -509,6 +509,7 @@ async def receive(
     instance: str | None = None,
     relay: str | None = None,
     decide: Callable[[Packet, bool], Decision] = ingest_if_trusted,
+    on_fresh: Callable[[list[Packet]], None] | None = None,
     send_receipts: bool = True,
     client_factory: ClientFactory | None = None,
 ) -> PollResult:
@@ -530,6 +531,9 @@ async def receive(
         ingested={e["id"] for e in profile.ingested_ids},
         dropped=set(profile.dropped_ids),
     )
+
+    if on_fresh is not None and sorted_packets.fresh:
+        on_fresh(sorted_packets.fresh)
 
     summaries: list[dict[str, Any]] = []
     client: RelayClient | None = None

@@ -2535,7 +2535,7 @@ class TestPacketPersistence:
             content="test content",
         )
 
-        from aya.cli import _ingest
+        from aya.ingest import ingest as _ingest
 
         _ingest(pkt, quiet=True)
 
@@ -4538,7 +4538,7 @@ class TestReceivePersistGuard:
 
         with (
             patch("aya.cli.RelayClient") as mock_cls,
-            patch("aya.cli._ingest", return_value=False),
+            patch("aya.relay_ops.ingest_packet", return_value=False),
         ):
             mock_cls.return_value.fetch_pending = fetch
             result = runner.invoke(
@@ -4606,3 +4606,32 @@ class TestDropSurvivesReceive:
         assert json.loads(received.output)["packets"] == []
         assert json.loads(listed.output)["packets"] == []
         assert Profile.load(profile_with_trusted).ingested_ids == []
+
+
+class TestSendRawRequiresPubkey:
+    """send-raw was the one publish path with no recipient-pubkey check."""
+
+    def test_unpaired_recipient_is_rejected(self, profile_with_instance: Path, tmp_path: Path):
+        p = Profile.load(profile_with_instance)
+        p.trusted_keys["bob"] = TrustedKey(did="did:key:zBOB", label="bob", nostr_pubkey=None)
+        p.save(profile_with_instance)
+
+        packet_file = tmp_path / "pkt.json"
+        packet = Packet(
+            **{"from": p.instances["default"].did, "to": "did:key:zBOB"},
+            intent="orphan",
+            content="body",
+        ).sign(p.instances["default"])
+        packet_file.write_text(packet.to_json())
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            result = runner.invoke(
+                app,
+                ["send-raw", str(packet_file), "--profile", str(profile_with_instance)],
+            )
+            # Never reaches the relay: an event addressed to nobody would be
+            # accepted by every relay and matched by none.
+            mock_cls.return_value.publish.assert_not_called()
+
+        assert result.exit_code != 0
+        assert "Nostr pubkey" in result.output

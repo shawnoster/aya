@@ -12,7 +12,7 @@ import subprocess
 import sys
 import urllib.parse
 from contextlib import nullcontext
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, NoReturn, cast
@@ -32,17 +32,13 @@ from aya.identity import (
     InstanceResolutionError,
     Profile,
     TrustedKey,
-    _assert_valid_ulid,
 )
-from aya.ingest import ingest as _ingest
 from aya.install import install_scheduler, uninstall_scheduler
 from aya.outbox import (
     NOT_INGESTED_HINT,
     check_idempotency,
-    delivery_from_report,
     delivery_summary,
     record_idempotency,
-    record_sent,
 )
 from aya.packet import ConflictStrategy, ContentType, Packet, human_age
 from aya.pair import (
@@ -96,7 +92,6 @@ from aya.scheduler import (
     validate_watch,
 )
 from aya.status import run_status
-from aya.triage import triage
 
 logger = logging.getLogger(__name__)
 DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES = 120
@@ -210,6 +205,7 @@ class ErrorCode:
     SEND_FAILED = "SEND_FAILED"
     PAIR_TIMEOUT = "PAIR_TIMEOUT"
     UNKNOWN_RECIPIENT = "UNKNOWN_RECIPIENT"
+    NO_NOSTR_PUBKEY = "NO_NOSTR_PUBKEY"
 
 
 # Relay fetch timeout in seconds — applies to commands that stream
@@ -269,6 +265,171 @@ def _load_profile(profile_path: Path) -> Profile:
             {"path": str(profile_path)},
         )
     return Profile.load(profile_path)
+
+
+def _collect_body(
+    *,
+    message: str | None,
+    files: list[Path],
+    seed: bool,
+    opener: str | None,
+    context: str | None,
+    conflict: ConflictStrategy = ConflictStrategy.LAST_WRITE_WINS,
+) -> relay_ops.PacketBody:
+    """Turn this command's body flags into one PacketBody.
+
+    Input adaptation, kept apart from the send itself so the four ways of
+    supplying a body — and the two ways of supplying none — are testable
+    without a relay.
+    """
+    if seed:
+        if not opener:
+            _emit_error(ErrorCode.INVALID_ARGUMENT, "--opener required for seed packets.")
+        return relay_ops.PacketBody.seed(opener or "", context_summary=context or "")
+    if files:
+        return relay_ops.PacketBody.from_files([str(f) for f in files], context=context)
+    if message is not None:
+        content = message
+    elif sys.stdin.isatty():
+        # No body source and no pipe: reading stdin would hang on a terminal
+        # and ship an empty packet in a script. Name every way to supply one.
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "No packet body. Pass --message/-m, --files, or --seed --opener, "
+            "or pipe markdown on stdin.",
+            exit_code=2,
+        )
+        content = ""
+    else:
+        content = sys.stdin.read()
+    if not content.strip():
+        _emit_error(
+            ErrorCode.INVALID_ARGUMENT,
+            "Packet body is empty. Pass --message/-m, --files, or --seed --opener, "
+            "or pipe non-empty markdown on stdin.",
+            exit_code=2,
+        )
+    return relay_ops.PacketBody.markdown(content, context=context, conflict=conflict)
+
+
+def _render_send(result: relay_ops.SendResult, *, as_json: bool) -> None:
+    """Present a completed send. Pure presentation."""
+    if result.cached:
+        if as_json:
+            _output_json({"event_id": result.event_id, "cached": True})
+        else:
+            console.print(f"[dim]Already sent (cached) — event {result.event_id[:8]}[/dim]")
+        return
+
+    packet_id = result.packet.id if result.packet else ""
+    if as_json:
+        _output_json(
+            {
+                "packet_id": packet_id,
+                "event_id": result.event_id,
+                "relay": delivery_summary(result.relays_ok, result.attempted),
+                "relays_ok": result.relays_ok,
+                "relays_failed": result.relays_failed,
+                "intent": result.packet.intent if result.packet else "",
+            }
+        )
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold green]✓ Sent[/bold green]\n\n"
+            f"Intent:  [cyan]{result.packet.intent if result.packet else ''}[/cyan]\n"
+            f"Packet:  [dim]{packet_id[:8]}[/dim]\n"
+            f"Event:   [dim]{result.event_id[:8]}[/dim]\n"
+            f"To:      [dim]{result.to_label}[/dim]\n\n"
+            f"Delivery:\n{_render_delivery(result.relays_ok, result.relays_failed)}",
+            title="aya — send",
+        )
+    )
+    if result.partial:
+        err.print(
+            f"[yellow]Delivered to {len(result.relays_ok)} of {result.attempted} relay(s). "
+            "If the peer polls only a failed relay, it will not see this packet.[/yellow]"
+        )
+
+
+def _render_ack(result: relay_ops.AckResult, message: str, *, as_json: bool) -> None:
+    """Present a completed ack. Pure presentation."""
+    if result.cached:
+        if as_json:
+            _output_json({"event_id": result.event_id, "cached": True})
+        else:
+            console.print(f"[dim]Already sent (cached) — ack {result.event_id[:8]}[/dim]")
+        return
+
+    if as_json:
+        _output_json(
+            {
+                "packet_id": result.packet.id if result.packet else "",
+                "event_id": result.event_id,
+                "in_reply_to": result.in_reply_to,
+                "to": result.to_label,
+                "relays_ok": result.relays_ok,
+                "relays_failed": result.relays_failed,
+            }
+        )
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold green]✓ ACK sent[/bold green]\n\n"
+            f"In reply to: [dim]{result.in_reply_to[:8]}[/dim]\n"
+            f"To:          [dim]{result.to_label}[/dim]\n"
+            f"Message:     [cyan]{message}[/cyan]\n"
+            f"Event:       [dim]{result.event_id[:8]}[/dim]\n\n"
+            f"Delivery:\n{_render_delivery(result.relays_ok, result.relays_failed)}",
+            title="aya — ack",
+        )
+    )
+    if result.partial:
+        err.print(
+            f"[yellow]Delivered to {len(result.relays_ok)} of {result.attempted} relay(s).[/yellow]"
+        )
+
+
+def _render_receive(
+    result: relay_ops.PollResult, *, as_json: bool, quiet: bool, auto_ingest: bool
+) -> None:
+    """Present a poll. Pure presentation — no relay or profile access."""
+    if as_json:
+        _output_json(result.envelope())
+        return
+    if quiet:
+        return
+
+    context = f" (as={result.instance}, relays={', '.join(result.relays)})"
+    for packet in result.bad_signature:
+        err.print(
+            f"[red]⚠ Packet {packet.id[:8]} failed signature verification "
+            f"(from {packet.from_did[:30]}…) — discarded[/red]"
+        )
+    if not result.relay_reachable:
+        err.print(f"[yellow]Could not reach relay — skipping relay fetch.{context}[/yellow]")
+        return
+    if not result.packets:
+        console.print(f"[dim]No pending packets.{context}[/dim]")
+        return
+
+    for summary in result.packets:
+        if summary.get("skipped"):
+            err.print(f"[dim]Skipped untrusted: {summary['id'][:8]} ({summary['intent']})[/dim]")
+
+    if auto_ingest:
+        ingested = sum(1 for s in result.packets if s.get("ingested"))
+        skipped = sum(1 for s in result.packets if s.get("skipped"))
+        total = len(result.packets)
+        parts = [f"[green]✓[/green] Ingested {ingested} of {total} packet(s)"]
+        if skipped:
+            parts.append(f"({skipped} untrusted, skipped)")
+        declined = total - ingested - skipped
+        if declined:
+            parts.append(f"({declined} declined)")
+        console.print("  ".join(parts))
 
 
 def _render_ingested(packet: Packet) -> None:
@@ -647,8 +808,13 @@ def send_raw(
 
     client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
-    # Resolve recipient's Nostr pubkey
-    recipient_nostr_pub = _resolve_nostr_pubkey(packet.to_did, p)
+    # A None pubkey here would publish a correctly-signed event addressed to
+    # nobody: every relay accepts it and no peer can ever match it.
+    try:
+        recipient_nostr_pub = nostr_pubkey_for(p, packet.to_did)
+    except NoNostrPubkeyError as exc:
+        _emit_error(ErrorCode.NO_NOSTR_PUBKEY, str(exc), {"to": packet.to_did})
+        return
     event_id = asyncio.run(client.publish(packet, recipient_nostr_pub, encrypt=packet.encrypted))
 
     if idempotency_key:
@@ -734,166 +900,50 @@ def send_cmd(
     """
     logger.debug("send: to=%s, intent=%s, as=%s", to, intent, as_)
     format_ = resolve_format(format_)
+    body = _collect_body(
+        message=message,
+        files=files,
+        seed=seed,
+        opener=opener,
+        context=context,
+        conflict=conflict,
+    )
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = _resolve_instance(p, as_)
-
-        to_did, to_label = _resolve_did(to, p)
-
-        if seed:
-            if not opener:
-                _emit_error(ErrorCode.INVALID_ARGUMENT, "--opener required for seed packets.")
-            packet = Packet.as_seed(
-                from_did=local.did,
-                to_did=to_did,
+        try:
+            result = await relay_ops.send(
+                p,
+                profile,
+                to=to,
                 intent=intent,
-                opener=opener,
-                context_summary=context or "",
+                body=body,
+                instance=as_,
+                relay=relay,
+                in_reply_to=in_reply_to,
+                encrypt=not no_encrypt,
+                idempotency_key=idempotency_key,
+                publish=not dry_run,
+                client_factory=RelayClient,
             )
-        elif files:
-            packet = Packet.from_files(
-                paths=[str(f) for f in files],
-                from_did=local.did,
-                to_did=to_did,
-                intent=intent,
-                context=context,
+        except (InstanceResolutionError, UnknownRecipientError, NoNostrPubkeyError) as exc:
+            code = (
+                ErrorCode.INSTANCE_NOT_FOUND
+                if isinstance(exc, InstanceResolutionError)
+                else ErrorCode.UNKNOWN_RECIPIENT
+                if isinstance(exc, UnknownRecipientError)
+                else ErrorCode.NO_NOSTR_PUBKEY
             )
-        else:
-            if message is not None:
-                content = message
-            elif sys.stdin.isatty():
-                # No body source and no pipe: reading stdin here would just hang
-                # on an interactive terminal, and silently ship an empty packet
-                # in a script. Name the four ways to supply a body instead.
-                _emit_error(
-                    ErrorCode.INVALID_ARGUMENT,
-                    "No packet body. Pass --message/-m, --files, or --seed --opener, "
-                    "or pipe markdown on stdin.",
-                    exit_code=2,
-                )
-                return
-            else:
-                content = sys.stdin.read()
-            if not content.strip():
-                _emit_error(
-                    ErrorCode.INVALID_ARGUMENT,
-                    "Packet body is empty. Pass --message/-m, --files, or --seed --opener, "
-                    "or pipe non-empty markdown on stdin.",
-                    exit_code=2,
-                )
-                return
-            packet = Packet(
-                **{"from": local.did, "to": to_did},
-                intent=intent,
-                context=context,
-                content_type=ContentType.MARKDOWN,
-                content=content,
-                conflict_strategy=conflict,
-            )
-
-        if in_reply_to:
-            if len(in_reply_to) < 8:
-                _emit_error(
-                    ErrorCode.INVALID_ARGUMENT,
-                    "Packet ID for --in-reply-to must be at least 8 characters.",
-                )
-            packet.in_reply_to = in_reply_to
-
-        # Mark the packet encrypted before signing so the flag is covered by the signature.
-        if not no_encrypt:
-            packet.encrypted = True
-
-        signed = packet.sign(local)
+            _emit_error(code, str(exc))
+            return
+        except relay_ops.SendFailedError as exc:
+            _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
+            return
 
         if dry_run:
-            _output_json(json.loads(signed.to_json()))
+            _output_json(json.loads(result.packet.to_json()))
             return
-
-        if idempotency_key:
-            cached = check_idempotency(idempotency_key)
-            if cached:
-                if format_ == OutputFormat.JSON:
-                    _output_json({**cached, "cached": True})
-                    return
-                console.print(
-                    f"[dim]Already sent (cached) — packet {cached.get('packet_id', '?')[:8]}[/dim]"
-                )
-                return
-
-        relay_urls = [relay] if relay else p.default_relays
-        recipient_nostr_pub = _resolve_nostr_pubkey(signed.to_did, p)
-        if recipient_nostr_pub is None:
-            err.print(
-                "[red]No Nostr pubkey found for recipient.[/red]\n"
-                "Add one with [bold]aya trust --nostr-pubkey ...[/bold] "
-                "or establish pairing with [bold]aya pair[/bold]."
-            )
-            raise typer.Exit(1)
-
-        client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-        try:
-            event_id = await client.publish(signed, recipient_nostr_pub, encrypt=not no_encrypt)
-        except Exception:
-            logger.exception("Relay publish failed during send")
-            _emit_error(
-                ErrorCode.SEND_FAILED,
-                "Send failed — event could not be published to relay(s).",
-                {"relay": relay_urls[0] if relay_urls else None},
-            )
-
-        if idempotency_key:
-            record_idempotency(idempotency_key, signed.id, event_id)
-
-        relays_ok, relays_failed = delivery_from_report(
-            getattr(client, "last_publish_report", []), relay_urls
-        )
-        record_sent(
-            p,
-            profile,
-            signed,
-            to_did=to_did,
-            to_label=to_label,
-            event_id=event_id,
-            relays_ok=relays_ok,
-            relays_failed=relays_failed,
-        )
-
-        relay_count = len(relay_urls)
-        # Summarise *delivery*, not attempts. The old "<first> (+N)" form
-        # counted relays tried, so a 1-of-2 partial failure rendered
-        # identically to a clean 2-of-2 send.
-        relay_display = delivery_summary(relays_ok, relay_count)
-
-        if format_ == OutputFormat.JSON:
-            _output_json(
-                {
-                    "packet_id": signed.id,
-                    "event_id": event_id,
-                    "relay": relay_display,
-                    "relays_ok": relays_ok,
-                    "relays_failed": relays_failed,
-                    "intent": signed.intent,
-                }
-            )
-            return
-
-        console.print(
-            Panel.fit(
-                f"[bold green]✓ Sent[/bold green]\n\n"
-                f"Intent:  [cyan]{signed.intent}[/cyan]\n"
-                f"Packet:  [dim]{signed.id[:8]}[/dim]\n"
-                f"Event:   [dim]{event_id[:8]}[/dim]\n"
-                f"To:      [dim]{to_label}[/dim]\n\n"
-                f"Delivery:\n{_render_delivery(relays_ok, relays_failed)}",
-                title="aya — send",
-            )
-        )
-        if relays_failed:
-            err.print(
-                f"[yellow]Delivered to {len(relays_ok)} of {relay_count} relay(s). "
-                "If the peer polls only a failed relay, it will not see this packet.[/yellow]"
-            )
+        _render_send(result, as_json=format_ == OutputFormat.JSON)
 
     asyncio.run(_run())
 
@@ -945,171 +995,59 @@ def ack(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local = _resolve_instance(p, as_)
-
-        # Resolve full packet ID from ingested_ids (prefix match, min 8 chars)
         if len(packet_id) < 8:
             _emit_error(
                 ErrorCode.INVALID_ARGUMENT,
                 "Packet ID prefix must be at least 8 characters.",
                 {"packet_id": packet_id},
             )
-        ingested_ids = [entry["id"] for entry in p.ingested_ids]
-        matched = [pid for pid in ingested_ids if pid.startswith(packet_id)]
-        if not matched:
-            _emit_error(
-                ErrorCode.PACKET_NOT_FOUND,
-                NOT_INGESTED_HINT.format(packet_id=packet_id),
-                {"packet_id": packet_id},
+        try:
+            result = await relay_ops.ack(
+                p,
+                profile,
+                packet_id=packet_id,
+                message=message or "acknowledged",
+                dismiss=dismiss,
+                instance=as_,
+                relay=relay,
+                idempotency_key=idempotency_key,
+                publish=not dry_run,
+                client_factory=RelayClient,
             )
-        if len(matched) > 1:
+        except relay_ops.PacketNotIngestedError as exc:
+            _emit_error(ErrorCode.PACKET_NOT_FOUND, str(exc), {"packet_id": packet_id})
+            return
+        except relay_ops.AmbiguousPrefixError as exc:
+            _emit_error(ErrorCode.AMBIGUOUS_PREFIX, str(exc), {"packet_id": packet_id})
+            return
+        except (relay_ops.AmbiguousAckRecipientError, relay_ops.NoTrustedPeerError) as exc:
+            _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc))
+            return
+        except InstanceResolutionError as exc:
             _emit_error(
-                ErrorCode.AMBIGUOUS_PREFIX,
-                f"Ambiguous prefix '{packet_id}' — matches {len(matched)} packets.",
-                {"packet_id": packet_id, "matches": len(matched)},
+                ErrorCode.INSTANCE_NOT_FOUND,
+                str(exc),
+                {"instance": as_, "available": exc.available},
             )
-
-        full_packet_id = matched[0]
-
-        # Look up the sender's DID from the ingested_ids entry (stored since #132).
-        entry = next((e for e in p.ingested_ids if e["id"] == full_packet_id), None)
-        sender_did = entry.get("from_did") if entry else None
-
-        to_label: str | None = None
-        to_key: TrustedKey | None = None
-        to_did: str | None = None
-        recipient_nostr_pub: str | None = None
-
-        if sender_did:
-            for label, tk in p.trusted_keys.items():
-                if tk.did == sender_did and tk.nostr_pubkey:
-                    to_label, to_key = label, tk
-                    to_did = tk.did
-                    recipient_nostr_pub = tk.nostr_pubkey
-                    break
-            else:
-                # sender_did found but not in trusted_keys or no nostr_pubkey
-                sender_did = None  # fall through to existing logic
-
-        if not sender_did:
-            # Fallback: pick the sole trusted peer with a Nostr pubkey (pre-#132 entries).
-            trusted_with_nostr = [
-                (label, tk) for label, tk in p.trusted_keys.items() if tk.nostr_pubkey
-            ]
-
-            if not trusted_with_nostr:
-                err.print(
-                    "[red]No trusted peers with a Nostr pubkey found.[/red]\n"
-                    "Pair with the sender first: [bold]aya pair[/bold]"
-                )
-                raise typer.Exit(1)
-
-            if len(trusted_with_nostr) > 1:
-                names = ", ".join(lbl for lbl, _ in trusted_with_nostr)
-                err.print(
-                    "[red]Multiple trusted peers — cannot determine ACK recipient.[/red]\n"
-                    f"Available: [cyan]{names}[/cyan]\n"
-                    "[dim]Support for --to <peer> will be added in a future release.[/dim]"
-                )
-                raise typer.Exit(1)
-
-            to_label, to_key = trusted_with_nostr[0]
-            to_did = to_key.did
-            recipient_nostr_pub = to_key.nostr_pubkey  # guaranteed non-None above
-
-        reply_text = message if message else "acknowledged"
-
-        ack_packet = Packet(
-            **{"from": local.did, "to": to_did},
-            intent="ack",
-            content_type=ContentType.JSON,
-            content={
-                "in_reply_to": full_packet_id,
-                "message": reply_text,
-                "dismiss": dismiss,
-            },
-            in_reply_to=full_packet_id,
-        )
-        signed = ack_packet.sign(local)
-
-        if dry_run:
-            _output_json(json.loads(signed.to_json()))
+            return
+        except relay_ops.SendFailedError as exc:
+            _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
             return
 
-        if idempotency_key:
-            cached = check_idempotency(idempotency_key)
-            if cached:
-                if format_ == OutputFormat.JSON:
-                    _output_json({**cached, "cached": True})
-                    return
-                console.print(
-                    f"[dim]Already sent (cached) — ack {cached.get('packet_id', '?')[:8]}[/dim]"
-                )
-                return
+        if dry_run:
+            _output_json(json.loads(result.packet.to_json()))
+            return
 
-        relay_urls = [relay] if relay else p.default_relays
-        client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
+        # Clearing the matching seed alert is best-effort; never block the ACK.
         try:
-            event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
-        except Exception:
-            err.print("[yellow]Could not reach relay — ack failed.[/yellow]")
-            raise typer.Exit(1) from None
-
-        if idempotency_key:
-            record_idempotency(idempotency_key, signed.id, event_id)
-
-        relays_ok, relays_failed = delivery_from_report(
-            getattr(client, "last_publish_report", []), relay_urls
-        )
-        record_sent(
-            p,
-            profile,
-            signed,
-            to_did=to_did or "",
-            to_label=to_label or "",
-            event_id=event_id,
-            relays_ok=relays_ok,
-            relays_failed=relays_failed,
-        )
-
-        # Mark any matching seed alert as seen (best-effort)
-        try:
-            alerts = show_alerts(mark_seen=False)
-            for alert in alerts:
+            for alert in show_alerts(mark_seen=False):
                 if alert.get("source_item_id", "").startswith(packet_id):
                     dismiss_alert(alert["id"])
                     break
         except Exception:  # noqa: S110
-            pass  # alert cleanup is best-effort; do not block the ACK response
+            pass
 
-        if format_ == OutputFormat.JSON:
-            _output_json(
-                {
-                    "packet_id": signed.id,
-                    "event_id": event_id,
-                    "in_reply_to": full_packet_id,
-                    "to": to_label,
-                    "relays_ok": relays_ok,
-                    "relays_failed": relays_failed,
-                }
-            )
-            return
-
-        console.print(
-            Panel.fit(
-                f"[bold green]✓ ACK sent[/bold green]\n\n"
-                f"In reply to: [dim]{full_packet_id[:8]}[/dim]\n"
-                f"To:          [dim]{to_label}[/dim]\n"
-                f"Message:     [cyan]{reply_text}[/cyan]\n"
-                f"Event:       [dim]{event_id[:8]}[/dim]\n\n"
-                f"Delivery:\n{_render_delivery(relays_ok, relays_failed)}",
-                title="aya — ack",
-            )
-        )
-        if relays_failed:
-            err.print(
-                f"[yellow]Delivered to {len(relays_ok)} of {len(relay_urls)} relay(s).[/yellow]"
-            )
+        _render_ack(result, message or "acknowledged", as_json=format_ == OutputFormat.JSON)
 
     asyncio.run(_run())
 
@@ -1143,13 +1081,6 @@ def receive(
     ),
 ) -> None:
     """Poll for pending packets and surface them for review."""
-    logger.debug(
-        "receive: as=%s, auto_ingest=%s, skip_untrusted=%s, quiet=%s",
-        as_,
-        auto_ingest,
-        skip_untrusted,
-        quiet,
-    )
     if skip_untrusted and not auto_ingest and not yes:
         _emit_error(
             ErrorCode.INVALID_ARGUMENT,
@@ -1157,220 +1088,61 @@ def receive(
             exit_code=2,
         )
     format_ = resolve_format(format_)
+    as_json = format_ == OutputFormat.JSON
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local, instance_label = _resolve_instance_labelled(p, as_, quiet=quiet)
 
-        relay_urls = [relay] if relay else p.default_relays
-        client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-
-        def _envelope(packets: list[dict[str, object]], reachable: bool) -> dict[str, object]:
-            """Wrap results with the identity and relays actually queried.
-
-            An empty list alone cannot distinguish "nothing waiting" from
-            "polled the wrong keypair or the wrong relay" — the caller needs
-            to see what was asked before trusting the answer.
-            """
-            return {
-                "packets": packets,
-                "instance": instance_label,
-                "relays": list(relay_urls),
-                "relay_reachable": reachable,
-            }
-
-        def _context_suffix() -> str:
-            return f" (as={instance_label}, relays={', '.join(relay_urls)})"
-
-        # Fetch pending packets for this instance; ingested_ids is the authoritative
-        # dedup mechanism and filters already-seen packets below.  No `since` filter
-        # is applied — the relay's default 7-day TTL window is the correct bound, and
-        # a cursor derived from last_checked can permanently exclude packets that
-        # arrived before the cursor but were never ingested (see issue #246).
-        packets: list[Packet] = []
-        try:
-            async for packet in client.fetch_pending():
-                packets.append(packet)
-        except Exception:
-            logger.exception("Relay fetch failed during receive")
-            if format_ == OutputFormat.JSON:
-                # relay_reachable carries this; prose on stderr would corrupt
-                # the payload for anyone parsing combined output.
-                _output_json(_envelope([], reachable=False))
-                return
-            if not quiet:
-                err.print(
-                    "[yellow]Could not reach relay — skipping relay fetch."
-                    f"{_context_suffix()}[/yellow]"
-                )
-            return
-
-        # Record last poll time per relay for status display.
-        now_check_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        for url in relay_urls:
-            p.last_checked[url] = now_check_iso
-
-        if not packets:
-            if format_ == OutputFormat.JSON:
-                _output_json(_envelope([], reachable=True))
-            elif not quiet:
-                console.print(f"[dim]No pending packets.{_context_suffix()}[/dim]")
-            p.save(profile)
-            return
-
-        sorted_packets = triage(
-            packets,
-            ingested={entry["id"] for entry in p.ingested_ids},
-            dropped=set(p.dropped_ids),
-        )
-        verified = sorted_packets.fresh
-        if not quiet:
-            for packet in sorted_packets.bad_signature:
-                err.print(
-                    f"[red]⚠ Packet {packet.id[:8]} failed signature verification "
-                    f"(from {packet.from_did[:30]}…) — discarded[/red]"
-                )
-
-        if not verified:
-            if format_ == OutputFormat.JSON:
-                _output_json(_envelope([], reachable=True))
-            elif not quiet:
-                console.print(f"[dim]No valid packets.{_context_suffix()}[/dim]")
-            p.save(profile)
-            return
-
-        if format_ != OutputFormat.JSON:
-            _show_inbox(verified, p)
-
-        received_summaries: list[dict[str, object]] = []
-        for packet in verified:
-            trusted = p.is_trusted(packet.from_did)
-            trust_label = "[green]trusted[/green]" if trusted else "[yellow]unknown sender[/yellow]"
-
-            now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        def decide(packet: Packet, trusted: bool) -> relay_ops.Decision:
+            """Turn this command's flags into a per-packet decision."""
             if auto_ingest and trusted:
-                _assert_valid_ulid(packet.id)
-                persisted = _ingest(
-                    packet, quiet=format_ == OutputFormat.JSON, render=_render_ingested
-                )
-                if not persisted:
-                    # Don't advance the cursor on a failed body write: the packet
-                    # would be marked ingested, unreadable by `read`, and filtered
-                    # out of `inbox` — lost with no diagnostic. Retry next poll.
-                    logger.warning(
-                        "Persistence failed for packet %s; not advancing cursor", packet.id
-                    )
-                    received_summaries.append(
-                        {
-                            "id": packet.id,
-                            "intent": packet.intent,
-                            "from": packet.from_did,
-                            "ingested": False,
-                            "error": "persist_failed",
-                        }
-                    )
-                    continue
-                p.ingested_ids.append(
-                    {
-                        "id": packet.id,
-                        "ingested_at": now_iso,
-                        "from_did": packet.from_did,
-                    }
-                )
-                received_summaries.append(
-                    {
-                        "id": packet.id,
-                        "intent": packet.intent,
-                        "from": packet.from_did,
-                        "ingested": True,
-                    }
-                )
-                continue
-
+                return relay_ops.Decision.INGEST
             if skip_untrusted and not trusted:
-                logger.debug(
-                    "Skipping untrusted packet %s from %s",
-                    packet.id[:8],
-                    packet.from_did[:30],
-                )
-                received_summaries.append(
-                    {
-                        "id": packet.id,
-                        "intent": packet.intent,
-                        "from": packet.from_did,
-                        "ingested": False,
-                        "skipped": True,
-                    }
-                )
-                if format_ != OutputFormat.JSON and not quiet:
-                    err.print(f"[dim]Skipped untrusted: {packet.id[:8]} ({packet.intent})[/dim]")
-                continue
-
-            # typer.confirm() has no non-interactive fallback — without a TTY it
-            # raises Abort mid-poll, which reads as a crash rather than a missing
-            # flag. Packets are waiting and reachable, so say exactly that.
-            if not yes and not sys.stdin.isatty():
+                logger.debug("Skipping untrusted packet %s", packet.id[:8])
+                return relay_ops.Decision.SKIP_UNTRUSTED
+            if yes:
+                return relay_ops.Decision.INGEST
+            # typer.confirm has no non-interactive fallback — without a TTY it
+            # aborts mid-poll, which reads as a crash rather than a missing flag.
+            if not sys.stdin.isatty():
                 p.save(profile)
                 _emit_error(
                     ErrorCode.INVALID_ARGUMENT,
-                    f"{len(verified)} packet(s) need confirmation but there is no terminal. "
+                    "Packet(s) need confirmation but there is no terminal. "
                     "Re-run with --auto-ingest (trusted senders only) or --yes (all senders).",
-                    {"pending": [pkt.id for pkt in verified], "instance": instance_label},
+                    {"instance": as_},
                     exit_code=2,
                 )
-            ingest = yes or typer.confirm(
-                f"\nIngest '{packet.intent}' ({trust_label})?",
-                default=trusted,
+            trust_label = "[green]trusted[/green]" if trusted else "[yellow]unknown sender[/yellow]"
+            confirmed = typer.confirm(
+                f"\nIngest '{packet.intent}' ({trust_label})?", default=trusted
             )
-            if ingest:
-                _assert_valid_ulid(packet.id)
-                _ingest(packet, quiet=format_ == OutputFormat.JSON, render=_render_ingested)
-                p.ingested_ids.append(
-                    {
-                        "id": packet.id,
-                        "ingested_at": now_iso,
-                        "from_did": packet.from_did,
-                    }
-                )
-                sender_nostr_pub = _resolve_nostr_pubkey(packet.from_did, p)
-                if sender_nostr_pub:
-                    await client.send_receipt(packet, sender_nostr_pub)
-                received_summaries.append(
-                    {
-                        "id": packet.id,
-                        "intent": packet.intent,
-                        "from": packet.from_did,
-                        "ingested": True,
-                    }
-                )
-            else:
-                received_summaries.append(
-                    {
-                        "id": packet.id,
-                        "intent": packet.intent,
-                        "from": packet.from_did,
-                        "ingested": False,
-                    }
-                )
+            return relay_ops.Decision.INGEST if confirmed else relay_ops.Decision.DECLINE
 
-        if format_ == OutputFormat.JSON:
-            _output_json(_envelope(received_summaries, reachable=True))
+        def show_batch(packets: list[Packet]) -> None:
+            if not as_json:
+                _show_inbox(packets, p)
 
-        if format_ != OutputFormat.JSON and not quiet and auto_ingest:
-            ingested_count = sum(1 for s in received_summaries if s.get("ingested"))
-            skipped_count = sum(1 for s in received_summaries if s.get("skipped"))
-            total = len(received_summaries)
-            if total > 0:
-                parts = [f"[green]✓[/green] Ingested {ingested_count} of {total} packet(s)"]
-                if skipped_count:
-                    parts.append(f"({skipped_count} untrusted, skipped)")
-                declined = total - ingested_count - skipped_count
-                if declined:
-                    parts.append(f"({declined} declined)")
-                console.print("  ".join(parts))
+        try:
+            result = await relay_ops.receive(
+                p,
+                profile,
+                instance=as_,
+                relay=relay,
+                decide=decide,
+                on_fresh=None if quiet else show_batch,
+                client_factory=RelayClient,
+            )
+        except InstanceResolutionError as exc:
+            if not quiet:
+                _emit_error(
+                    ErrorCode.INSTANCE_NOT_FOUND,
+                    str(exc),
+                    {"instance": as_, "available": exc.available},
+                )
+            raise typer.Exit(1) from None
 
-        # Persist updated ingested_ids and last_checked.
-        p.save(profile)
+        _render_receive(result, as_json=as_json, quiet=quiet, auto_ingest=auto_ingest)
 
     asyncio.run(_run())
 
@@ -2844,37 +2616,6 @@ def status(
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _resolve_did(to: str, profile: Profile) -> tuple[str, str]:
-    """Resolve a label ('home') or raw DID to ``(did, resolved_label)``.
-
-    Resolution order:
-    1. Raw DID (starts with "did:") — returned immediately.
-    2. Exact match on label in trusted_keys.
-    3. Smart single-recipient fallback: if exactly one trusted key exists, use it
-       regardless of the requested label (mirrors ``_resolve_instance`` behaviour).
-    4. Otherwise print a descriptive error that lists available labels.
-    """
-    if to.startswith("did:"):
-        return to, to
-    key = profile.trusted_keys.get(to)
-    if key:
-        return key.did, to
-
-    available = list(profile.trusted_keys.keys())
-
-    # Smart default: exactly one trusted key — use it without fuss.
-    if len(available) == 1:
-        label = available[0]
-        return next(iter(profile.trusted_keys.values())).did, label
-
-    _emit_error(
-        ErrorCode.UNKNOWN_RECIPIENT,
-        UnknownRecipientError(to, available).args[0],
-        {"to": to, "available": available},
-    )
-    raise typer.Exit(1)
-
-
 def _output_json(data: object) -> None:
     """Output data as formatted JSON to console."""
     console.out(json.dumps(data, indent=2, default=str))
@@ -2939,17 +2680,6 @@ def _label_for_did(did: str, profile: Profile) -> str:
         if key.did == did:
             return key.label
     return did[:20] + "…"
-
-
-def _resolve_nostr_pubkey(did: str, profile: Profile) -> str | None:
-    """Look up the Nostr pubkey for a DID, or None. See ``resolve.nostr_pubkey_for``."""
-    try:
-        return nostr_pubkey_for(profile, did)
-    except NoNostrPubkeyError:
-        return None
-
-
-# ── read ──────────────────────────────────────────────────────────────────────
 
 
 def _extract_body(content: object, content_type: ContentType | None = None) -> str:

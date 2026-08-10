@@ -416,10 +416,8 @@ async def test_receive_skips_cursor_when_persist_fails(tmp_path):
     profile_path = tmp_path / "profile.json"
     profile.save(profile_path)
 
-    # Point PACKETS_DIR at an empty directory; stub _ingest to a no-op so the
-    # expected file never gets written. Mirrors _ingest's real behavior when
-    # its best-effort write step hits OSError (disk full, permissions, etc.)
-    # and is swallowed by its blanket except.
+    # Simulate the body write failing: persist_packet reports False when the
+    # file is not on disk afterwards (disk full, permissions, etc.).
     empty_dir = tmp_path / "packets_empty"
     empty_dir.mkdir()
 
@@ -433,7 +431,7 @@ async def test_receive_skips_cursor_when_persist_fails(tmp_path):
         patch("aya.paths.PACKETS_DIR", empty_dir),
         patch("aya.mcp_server._load_profile", return_value=profile),
         patch("aya.relay.RelayClient") as mock_cls,
-        patch("aya.ingest.ingest", lambda pkt, *, quiet=False: None),
+        patch("aya.relay_ops.ingest_packet", lambda pkt, **kw: False),
     ):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_receive", {"instance": "default"})

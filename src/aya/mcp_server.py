@@ -10,11 +10,10 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from aya import relay_ops
 from aya.outbox import (
     NOT_INGESTED_HINT,
-    check_idempotency,
     delivery_from_report,
-    record_idempotency,
     record_sent,
 )
 from aya.resolve import (
@@ -24,7 +23,6 @@ from aya.resolve import (
     resolve_instance,
     resolve_recipient,
 )
-from aya.triage import triage
 
 logger = logging.getLogger(__name__)
 
@@ -410,209 +408,55 @@ async def _handle_status() -> list[types.TextContent]:
 
 
 async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
-    instance = arguments.get("instance")
     profile = _load_profile()
-    local, instance_label = _resolve_instance_labelled(profile, instance)
-
-    from aya.relay import RelayClient
-
-    relay_urls = [arguments["relay"]] if arguments.get("relay") else profile.default_relays
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-
-    # An unreachable relay must not be reported as an empty inbox.
-    reachable = True
-    try:
-        all_packets = [pkt async for pkt in client.fetch_pending()]
-    except Exception:
-        logger.exception("Relay fetch failed during inbox")
-        reachable = False
-        all_packets = []
-    new_packets = triage(
-        all_packets,
-        ingested={entry["id"] for entry in profile.ingested_ids},
-        dropped=set(profile.dropped_ids),
-        verify=False,
-    ).fresh
-
-    summaries = [
-        {
-            "id": pkt.id,
-            "intent": pkt.intent,
-            "from": pkt.from_did,
-            "sent_at": pkt.sent_at,
-            "trusted": profile.is_trusted(pkt.from_did),
-            "from_label": _label_for_did(profile, pkt.from_did),
-            "summary": pkt.summary(),
-        }
-        for pkt in new_packets
-    ]
-    return _text(
-        {
-            "packets": summaries,
-            "instance": instance_label,
-            "relays": list(relay_urls),
-            "relay_reachable": reachable,
-        }
+    result, _packets = await relay_ops.inbox(
+        profile,
+        instance=arguments.get("instance"),
+        relay=arguments.get("relay"),
     )
+    return _text(result.envelope())
 
 
 async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
-
-    idempotency_key = arguments.get("idempotency_key")
-    if idempotency_key:
-        cached = check_idempotency(idempotency_key)
-        if cached:
-            return _text(
-                {
-                    "packet_id": cached["packet_id"],
-                    "event_id": cached["event_id"],
-                    "cached": True,
-                }
-            )
-
-    instance = arguments.get("instance")
-    to = arguments["to"]
-    intent = arguments["intent"]
-    content = arguments["content"]
+    from aya.paths import PROFILE_PATH
 
     profile = _load_profile()
-    local = _resolve_instance(profile, instance)
-    to_did, to_label = _resolve_did(to, profile)
-
-    from aya.packet import ContentType, Packet
-    from aya.relay import RelayClient
-
-    in_reply_to = arguments.get("in_reply_to")
-
-    packet = Packet(
-        **{"from": local.did, "to": to_did},
-        intent=intent,
-        content_type=ContentType.MARKDOWN,
-        content=content,
-        in_reply_to=in_reply_to,
-    )
-    packet.encrypted = True
-    signed = packet.sign(local)
-
-    recipient_nostr_pub = _resolve_nostr_pubkey(signed.to_did, profile)
-    if recipient_nostr_pub is None:
-        return _error("No Nostr pubkey found for recipient. Pair first.")
-
-    relay_urls = [arguments["relay"]] if arguments.get("relay") else profile.default_relays
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-    event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
-
-    if idempotency_key:
-        record_idempotency(idempotency_key, signed.id, event_id)
-
-    relays_ok, relays_failed = _record_send(
+    result = await relay_ops.send(
         profile,
-        signed,
-        to_label=to_label,
-        event_id=event_id,
-        client=client,
-        relay_urls=relay_urls,
+        PROFILE_PATH,
+        to=arguments["to"],
+        intent=arguments["intent"],
+        body=relay_ops.PacketBody.markdown(arguments["content"]),
+        instance=arguments.get("instance"),
+        relay=arguments.get("relay"),
+        in_reply_to=arguments.get("in_reply_to"),
+        idempotency_key=arguments.get("idempotency_key"),
     )
+    if result.cached:
+        return _text({"event_id": result.event_id, "cached": True})
     return _text(
         {
-            "packet_id": signed.id,
-            "event_id": event_id,
-            "relays_ok": relays_ok,
-            "relays_failed": relays_failed,
+            "packet_id": result.packet.id if result.packet else "",
+            "event_id": result.event_id,
+            "to": result.to_label,
+            "relays_ok": result.relays_ok,
+            "relays_failed": result.relays_failed,
         }
     )
 
 
 async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
-    instance = arguments.get("instance")
-
-    from datetime import UTC, datetime
-
-    from aya.identity import _assert_valid_ulid
-    from aya.ingest import ingest
-    from aya.packet import Packet
-    from aya.paths import PACKETS_DIR, PROFILE_PATH
-    from aya.relay import RelayClient
+    from aya.paths import PROFILE_PATH
 
     profile = _load_profile()
-    local, instance_label = _resolve_instance_labelled(profile, instance)
-
-    relay_urls = [arguments["relay"]] if arguments.get("relay") else profile.default_relays
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-
-    # No `since` filter — ingested_ids is the authoritative dedup mechanism and
-    # the relay's 7-day TTL window is the correct lower bound.  A last_checked-
-    # derived cursor permanently excludes packets that arrived before the cursor
-    # but were never ingested (see issue #246).
-    packets: list[Packet] = []
-    reachable = True
-    try:
-        async for packet in client.fetch_pending():
-            packets.append(packet)
-    except Exception:
-        logger.exception("Relay fetch failed during receive")
-        reachable = False
-
-    now_check_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    for url in relay_urls:
-        profile.last_checked[url] = now_check_iso
-
-    verified = triage(
-        packets,
-        ingested={entry["id"] for entry in profile.ingested_ids},
-        dropped=set(profile.dropped_ids),
-    ).fresh
-
-    received: list[dict[str, Any]] = []
-    now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    for pkt in verified:
-        trusted = profile.is_trusted(pkt.from_did)
-        if trusted:
-            _assert_valid_ulid(pkt.id)
-            ingest(pkt, quiet=True)
-            # ingest persists best-effort (debug-log on failure). Under MCP the
-            # body write is our only record — if it didn't land, leave ingested_ids
-            # alone so the next poll retries instead of losing the packet.
-            if not (PACKETS_DIR / f"{pkt.id}.json").exists():
-                logger.warning("Persistence failed for packet %s; not advancing cursor", pkt.id)
-                received.append(
-                    {
-                        "id": pkt.id,
-                        "intent": pkt.intent,
-                        "from": pkt.from_did,
-                        "ingested": False,
-                        "error": "persist_failed",
-                    }
-                )
-                continue
-            profile.ingested_ids.append(
-                {"id": pkt.id, "ingested_at": now_iso, "from_did": pkt.from_did}
-            )
-            received.append(
-                {"id": pkt.id, "intent": pkt.intent, "from": pkt.from_did, "ingested": True}
-            )
-        else:
-            # MCP is always non-interactive — skip untrusted packets silently.
-            logger.debug("Skipping untrusted packet %s from %s", pkt.id[:8], pkt.from_did[:30])
-            received.append(
-                {
-                    "id": pkt.id,
-                    "intent": pkt.intent,
-                    "from": pkt.from_did,
-                    "ingested": False,
-                    "skipped": True,
-                }
-            )
-
-    profile.save(PROFILE_PATH)
-    return _text(
-        {
-            "packets": received,
-            "instance": instance_label,
-            "relays": list(relay_urls),
-            "relay_reachable": reachable,
-        }
+    # MCP is always non-interactive: take trusted senders, hold the rest.
+    result = await relay_ops.receive(
+        profile,
+        PROFILE_PATH,
+        instance=arguments.get("instance"),
+        relay=arguments.get("relay"),
     )
+    return _text(result.envelope())
 
 
 async def _handle_schedule_remind(arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -635,103 +479,29 @@ async def _handle_schedule_watch(arguments: dict[str, Any]) -> list[types.TextCo
 
 
 async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
-
-    idempotency_key = arguments.get("idempotency_key")
-    if idempotency_key:
-        cached = check_idempotency(idempotency_key)
-        if cached:
-            return _text(
-                {
-                    "packet_id": cached["packet_id"],
-                    "event_id": cached["event_id"],
-                    "cached": True,
-                }
-            )
-
-    packet_id = arguments["packet_id"]
-    message = arguments.get("message", "acknowledged")
-
-    from aya.packet import ContentType, Packet
-    from aya.relay import RelayClient
+    from aya.paths import PROFILE_PATH
 
     profile = _load_profile()
-
-    if len(packet_id) < 8:
-        return _error("Packet ID prefix must be at least 8 characters.")
-
-    ingested_ids = [entry["id"] for entry in profile.ingested_ids]
-    matched = [pid for pid in ingested_ids if pid.startswith(packet_id)]
-
-    if not matched:
-        return _error(NOT_INGESTED_HINT.format(packet_id=packet_id))
-    if len(matched) > 1:
-        return _error(f"Ambiguous prefix '{packet_id}' -- matches {len(matched)} packets.")
-
-    full_packet_id = matched[0]
-
-    # Look up sender DID
-    entry = next((e for e in profile.ingested_ids if e["id"] == full_packet_id), None)
-    sender_did = entry.get("from_did") if entry else None
-
-    to_did: str | None = None
-    recipient_nostr_pub: str | None = None
-
-    if sender_did:
-        for _label, tk in profile.trusted_keys.items():
-            if tk.did == sender_did and tk.nostr_pubkey:
-                to_did = tk.did
-                recipient_nostr_pub = tk.nostr_pubkey
-                break
-
-    if not to_did:
-        trusted_with_nostr = [
-            (lbl, tk) for lbl, tk in profile.trusted_keys.items() if tk.nostr_pubkey
-        ]
-        if not trusted_with_nostr:
-            return _error("No trusted peers with a Nostr pubkey found.")
-        if len(trusted_with_nostr) > 1:
-            return _error("Multiple trusted peers -- cannot determine ACK recipient.")
-        _lbl, tk = trusted_with_nostr[0]
-        to_did = tk.did
-        recipient_nostr_pub = tk.nostr_pubkey
-
-    local = _resolve_instance(profile, arguments.get("instance"))
-
-    ack_packet = Packet(
-        **{"from": local.did, "to": to_did},
-        intent="ack",
-        content_type=ContentType.JSON,
-        content={"in_reply_to": full_packet_id, "message": message, "dismiss": False},
-        in_reply_to=full_packet_id,
-    )
-    ack_packet.encrypted = True
-    signed = ack_packet.sign(local)
-
-    if recipient_nostr_pub is None:
-        return _error("No Nostr pubkey found for ACK recipient.")
-
-    relay_urls = [arguments["relay"]] if arguments.get("relay") else profile.default_relays
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-    event_id = await client.publish(signed, recipient_nostr_pub, encrypt=True)
-
-    if idempotency_key:
-        record_idempotency(idempotency_key, signed.id, event_id)
-
-    relays_ok, relays_failed = _record_send(
+    result = await relay_ops.ack(
         profile,
-        signed,
-        to_label=_label_for_did(profile, to_did) or "",
-        event_id=event_id,
-        client=client,
-        relay_urls=relay_urls,
+        PROFILE_PATH,
+        packet_id=arguments["packet_id"],
+        message=arguments.get("message", "acknowledged"),
+        dismiss=bool(arguments.get("dismiss", False)),
+        instance=arguments.get("instance"),
+        relay=arguments.get("relay"),
+        idempotency_key=arguments.get("idempotency_key"),
     )
+    if result.cached:
+        return _text({"event_id": result.event_id, "cached": True})
     return _text(
         {
-            "packet_id": signed.id,
-            "event_id": event_id,
-            "in_reply_to": full_packet_id,
-            "relays_ok": relays_ok,
-            "relays_failed": relays_failed,
+            "packet_id": result.packet.id if result.packet else "",
+            "event_id": result.event_id,
+            "in_reply_to": result.in_reply_to,
+            "to": result.to_label,
+            "relays_ok": result.relays_ok,
+            "relays_failed": result.relays_failed,
         }
     )
 

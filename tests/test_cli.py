@@ -2216,12 +2216,44 @@ class TestDryRun:
         assert len(data["items"]) == 0
 
     def test_schedule_watch_dry_run_invalid_target(self) -> None:
-        """--dry-run with invalid github-pr target exits 1."""
+        """--dry-run with an invalid github-pr target is an argument error."""
         result = runner.invoke(
             app,
             ["schedule", "watch", "github-pr", "bad-format", "-m", "test", "--dry-run"],
         )
-        assert result.exit_code == 1
+        assert result.exit_code == 2
+        assert "owner/repo#123" in result.output
+
+    def test_schedule_watch_accepts_ci_checks(self, tmp_path: Path) -> None:
+        """The CLI must accept every provider the scheduler supports.
+
+        A second, narrower gate in the CLI used to reject ci-checks while the
+        MCP surface accepted it — same input, opposite outcome.
+        """
+        result = runner.invoke(
+            app,
+            ["schedule", "watch", "ci-checks", "o/r#1", "-m", "test", "--dry-run"],
+        )
+        assert result.exit_code == 0, result.output
+
+    def test_schedule_watch_rejects_unknown_condition(self) -> None:
+        """Condition validation reaches the CLI now that it shares the validator."""
+        result = runner.invoke(
+            app,
+            [
+                "schedule",
+                "watch",
+                "ci-checks",
+                "o/r#1",
+                "-m",
+                "t",
+                "--condition",
+                "nonsense",
+                "--dry-run",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "checks_failed" in result.output
 
     def test_schedule_recurring_dry_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -4519,4 +4551,53 @@ class TestReceivePersistGuard:
         summary = json.loads(result.output)["packets"][0]
         assert summary["ingested"] is False
         assert summary["error"] == "persist_failed"
+        assert Profile.load(profile_with_trusted).ingested_ids == []
+
+
+class TestDropSurvivesReceive:
+    """`aya drop` must stop a packet resurfacing on *every* path, not just inbox."""
+
+    def test_dropped_packet_is_not_reingested(self, profile_with_trusted: Path):
+        p = Profile.load(profile_with_trusted)
+        sender = Identity.generate("home")
+        p.trusted_keys["home"] = TrustedKey(
+            did=sender.did, label="home", nostr_pubkey=sender.nostr_public_hex
+        )
+        p.save(profile_with_trusted)
+
+        packet = Packet(
+            **{"from": sender.did, "to": p.instances["default"].did},
+            intent="spam",
+            content="unwanted",
+        ).sign(sender)
+
+        async def fetch(*a, **kw):
+            yield packet
+
+        # Drop it, then poll. It must not come back.
+        p = Profile.load(profile_with_trusted)
+        p.dropped_ids.append(packet.id)
+        p.save(profile_with_trusted)
+
+        with patch("aya.cli.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = fetch
+            received = runner.invoke(
+                app,
+                [
+                    "receive",
+                    "--auto-ingest",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+            listed = runner.invoke(
+                app,
+                ["inbox", "--format", "json", "--profile", str(profile_with_trusted)],
+            )
+
+        assert received.exit_code == 0, received.output
+        assert json.loads(received.output)["packets"] == []
+        assert json.loads(listed.output)["packets"] == []
         assert Profile.load(profile_with_trusted).ingested_ids == []

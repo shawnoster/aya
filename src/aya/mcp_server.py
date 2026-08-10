@@ -24,6 +24,7 @@ from aya.resolve import (
     resolve_instance,
     resolve_recipient,
 )
+from aya.triage import triage
 
 logger = logging.getLogger(__name__)
 
@@ -426,13 +427,12 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
         logger.exception("Relay fetch failed during inbox")
         reachable = False
         all_packets = []
-    ingested_set = {entry["id"] for entry in profile.ingested_ids}
-    # Filter dropped packets — same logic as CLI `inbox` so both surfaces agree.
-    # Dropped IDs are user-marked-ignore and must never resurface on any surface.
-    dropped_set = set(profile.dropped_ids)
-    new_packets = [
-        pkt for pkt in all_packets if pkt.id not in ingested_set and pkt.id not in dropped_set
-    ]
+    new_packets = triage(
+        all_packets,
+        ingested={entry["id"] for entry in profile.ingested_ids},
+        dropped=set(profile.dropped_ids),
+        verify=False,
+    ).fresh
 
     summaries = [
         {
@@ -557,8 +557,11 @@ async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
     for url in relay_urls:
         profile.last_checked[url] = now_check_iso
 
-    ingested_set = {entry["id"] for entry in profile.ingested_ids}
-    verified = [pkt for pkt in packets if pkt.id not in ingested_set and pkt.verify_from_did()]
+    verified = triage(
+        packets,
+        ingested={entry["id"] for entry in profile.ingested_ids},
+        dropped=set(profile.dropped_ids),
+    ).fresh
 
     received: list[dict[str, Any]] = []
     now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

@@ -93,8 +93,10 @@ from aya.scheduler import (
     run_tick,
     show_alerts,
     snooze_item,
+    validate_watch,
 )
 from aya.status import run_status
+from aya.triage import triage
 
 logger = logging.getLogger(__name__)
 DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES = 120
@@ -1216,20 +1218,18 @@ def receive(
             p.save(profile)
             return
 
-        # Verify signatures — reject tampered or unsigned packets
-        verified: list[Packet] = []
-        ingested_set = {entry["id"] for entry in p.ingested_ids}
-        for packet in packets:
-            if packet.id in ingested_set:
-                continue  # already ingested — skip silently
-            if packet.verify_from_did():
-                verified.append(packet)
-            else:
-                if not quiet:
-                    err.print(
-                        f"[red]⚠ Packet {packet.id[:8]} failed signature verification "
-                        f"(from {packet.from_did[:30]}…) — discarded[/red]"
-                    )
+        sorted_packets = triage(
+            packets,
+            ingested={entry["id"] for entry in p.ingested_ids},
+            dropped=set(p.dropped_ids),
+        )
+        verified = sorted_packets.fresh
+        if not quiet:
+            for packet in sorted_packets.bad_signature:
+                err.print(
+                    f"[red]⚠ Packet {packet.id[:8]} failed signature verification "
+                    f"(from {packet.from_did[:30]}…) — discarded[/red]"
+                )
 
         if not verified:
             if format_ == OutputFormat.JSON:
@@ -1419,12 +1419,11 @@ def inbox(
         ingested_set = {entry["id"] for entry in p.ingested_ids}
         dropped_set = set(p.dropped_ids)
 
-        # Filter dropped packets out of both default and --all views.
-        # Dropped IDs are explicitly user-marked-ignore (bad-sig, spam, etc.)
-        # and should never resurface regardless of ingested status.
+        # Dropped packets never resurface, in either view.
         all_packets = [pkt for pkt in all_packets if pkt.id not in dropped_set]
-
-        new_packets = [pkt for pkt in all_packets if pkt.id not in ingested_set]
+        new_packets = triage(
+            all_packets, ingested=ingested_set, dropped=dropped_set, verify=False
+        ).fresh
         display_packets = all_packets if show_all else new_packets
 
         if format_ == OutputFormat.JSON:
@@ -1686,14 +1685,13 @@ def schedule_watch(
 ) -> None:
     """Add a condition-based watch."""
     format_ = resolve_format(format_)
-    # Validate provider/target before dry-run output
-    if provider == "github-pr":
-        if not re.match(r"([^/]+)/([^#]+)#(\d+)", target):
-            err.print("[red]Format: owner/repo#123[/red]")
-            raise typer.Exit(1)
-    elif provider not in ("jira-query", "jira-ticket"):
-        err.print(f"[red]Unknown provider: {provider}[/red]")
-        raise typer.Exit(1)
+    # Validate against the scheduler's own rules rather than a second, narrower
+    # copy — the local gate never learned about ci-checks, so the CLI rejected
+    # specs the MCP surface accepted.
+    try:
+        validate_watch(provider, target, condition, interval)
+    except ValueError as exc:
+        _emit_error(ErrorCode.INVALID_ARGUMENT, str(exc), {"provider": provider}, exit_code=2)
 
     if dry_run:
         preview = {

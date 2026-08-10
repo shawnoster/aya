@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **`aya drop` now survives a poll.** The drop filter was applied in the two
+  `inbox` paths and neither `receive` path, so a dropped packet vanished from
+  the listing and was silently re-ingested by the very next poll. All four
+  filter sites (CLI and MCP, receive and inbox) now share `aya/triage.py`.
+- **The CLI accepts every provider the scheduler supports.** `schedule watch`
+  re-implemented a narrower provider gate that never learned about
+  `ci-checks`, so the CLI rejected specs the MCP surface accepted. Both now
+  call `scheduler.validate_watch`, which also means condition validation
+  reaches the CLI for the first time. Invalid specs now exit 2
+  (`INVALID_ARGUMENT`) rather than 1, matching the other argument errors.
 - **The profile is written atomically, under a lock, at 0600.** `save()` was
   read-then-`write_text`, so a crash mid-write truncated the only copy of every
   instance private key, and two writers spanning a relay round-trip silently

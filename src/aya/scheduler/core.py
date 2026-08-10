@@ -108,17 +108,22 @@ def add_reminder(message: str, due_text: str, tags: str = "") -> SchedulerItem:
     return item
 
 
-def add_watch(
+def validate_watch(
     provider: str,
     target: str,
-    message: str,
-    tags: str = "",
     condition: str = "",
     interval: int = 30,
-    remove_when: str = "",
-) -> SchedulerItem:
-    """Add a condition-based watch. Returns the created item."""
-    now = _dt_now(_get_local_tz())
+) -> tuple[GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig, str, int]:
+    """Validate a watch spec and normalise it to ``(config, condition, interval)``.
+
+    Separate from :func:`add_watch` so a caller can check a spec without
+    creating anything — the CLI needs that for ``--dry-run``. Keeping it here
+    means there is one definition of which providers and conditions are valid;
+    the CLI previously re-implemented a narrower gate that never learned about
+    ``ci-checks`` and rejected specs the MCP surface accepted.
+
+    Raises ``ValueError`` describing the problem.
+    """
     watch_config: GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig
 
     if provider == "github-pr":
@@ -169,6 +174,22 @@ def add_watch(
             )
     else:
         raise ValueError(f"Unknown provider: {provider}")
+
+    return watch_config, condition, interval
+
+
+def add_watch(
+    provider: str,
+    target: str,
+    message: str,
+    tags: str = "",
+    condition: str = "",
+    interval: int = 30,
+    remove_when: str = "",
+) -> SchedulerItem:
+    """Add a condition-based watch. Returns the created item."""
+    now = _dt_now(_get_local_tz())
+    watch_config, condition, interval = validate_watch(provider, target, condition, interval)
 
     item: SchedulerItem = {
         "id": _new_id(),

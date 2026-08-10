@@ -1737,10 +1737,15 @@ class TestInbox:
         assert len(data["packets"]) == 1
         assert data["packets"][0]["ingested"] is True
 
-    def test_json_output_no_ingested_field_without_all_flag(
+    def test_json_output_reports_ingested_for_every_packet(
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
-        """inbox --format json (default) must not include an 'ingested' field."""
+        """inbox --format json reports `ingested` for every packet.
+
+        Both surfaces now return the same listing shape; the field used to be
+        omitted here and absent entirely over MCP, so a caller could not read
+        both.
+        """
         p = Profile.load(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did, intent="Fresh")
 
@@ -1758,7 +1763,7 @@ class TestInbox:
         data = json.loads(result.output)
         assert "packets" in data
         assert len(data["packets"]) == 1
-        assert "ingested" not in data["packets"][0]
+        assert data["packets"][0]["ingested"] is False
 
 
 class TestAutoFormat:

@@ -32,7 +32,7 @@ from aya.outbox import (
     record_idempotency,
     record_sent,
 )
-from aya.packet import ConflictStrategy, ContentType, Packet
+from aya.packet import ConflictStrategy, ContentType, Packet, human_age
 from aya.relay import RelayClient
 from aya.resolve import (
     NoNostrPubkeyError,
@@ -495,18 +495,7 @@ async def inbox(
     fresh = triage(visible, ingested=ingested, dropped=dropped, verify=False).fresh
     shown = visible if include_ingested else fresh
 
-    summaries = [
-        {
-            "id": pkt.id,
-            "intent": pkt.intent,
-            "from": pkt.from_did,
-            "from_label": label_for_did(profile, pkt.from_did),
-            "sent_at": pkt.sent_at,
-            "trusted": profile.is_trusted(pkt.from_did),
-            "ingested": pkt.id in ingested,
-        }
-        for pkt in shown
-    ]
+    summaries = [packet_summary(profile, pkt, ingested=pkt.id in ingested) for pkt in shown]
     return (
         PollResult(packets=summaries, instance=label, relays=relay_urls, relay_reachable=reachable),
         shown,
@@ -591,6 +580,25 @@ async def receive(
         relay_reachable=reachable,
         bad_signature=sorted_packets.bad_signature,
     )
+
+
+def packet_summary(profile: Profile, packet: Packet, *, ingested: bool) -> dict[str, Any]:
+    """The listing shape both surfaces return for a pending packet.
+
+    The CLI and MCP used to disagree here — one emitted ``from_did`` plus
+    ``from_label``, the other a bare ``from`` — so a caller could not read both.
+    """
+    return {
+        "id": packet.id,
+        "intent": packet.intent,
+        "from_did": packet.from_did,
+        "from_label": label_for_did(profile, packet.from_did),
+        "sent_at": packet.sent_at,
+        "age": human_age(packet.sent_at),
+        "content_type": packet.content_type,
+        "trusted": profile.is_trusted(packet.from_did),
+        "ingested": ingested,
+    }
 
 
 def _summary(

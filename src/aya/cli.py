@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from aya import __version__
+from aya import __version__, relay_ops
 from aya import paths as _paths
 from aya.config import get_notebook_path, load_config, set_config_value
 from aya.context import build_context_block
@@ -1399,52 +1399,39 @@ def inbox(
 
     async def _run() -> None:
         p = _load_profile(profile)
-        local, instance_label = _resolve_instance_labelled(p, as_)
-
-        relay_urls = [relay] if relay else p.default_relays
-        client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-        context_suffix = f" (as={instance_label}, relays={', '.join(relay_urls)})"
-
-        # A relay that cannot be reached must not read as an empty inbox.
-        reachable = True
         try:
-            all_packets = [pkt async for pkt in client.fetch_pending()]
-        except Exception:
-            logger.exception("Relay fetch failed during inbox")
-            reachable = False
-            all_packets = []
-            if format_ != OutputFormat.JSON:
-                err.print(f"[yellow]Could not reach relay.{context_suffix}[/yellow]")
-
-        ingested_set = {entry["id"] for entry in p.ingested_ids}
-        dropped_set = set(p.dropped_ids)
-
-        # Dropped packets never resurface, in either view.
-        all_packets = [pkt for pkt in all_packets if pkt.id not in dropped_set]
-        new_packets = triage(
-            all_packets, ingested=ingested_set, dropped=dropped_set, verify=False
-        ).fresh
-        display_packets = all_packets if show_all else new_packets
-
-        if format_ == OutputFormat.JSON:
-            ingested_for_json = ingested_set if show_all else None
-            packet_dicts = [_packet_to_dict(pkt, p, ingested_for_json) for pkt in display_packets]
-            _output_json(
-                {
-                    "packets": packet_dicts,
-                    "instance": instance_label,
-                    "relays": list(relay_urls),
-                    "relay_reachable": reachable,
-                }
+            result, packets = await relay_ops.inbox(
+                p,
+                instance=as_,
+                relay=relay,
+                include_ingested=show_all,
+                client_factory=RelayClient,
             )
-        elif not display_packets:
+        except InstanceResolutionError as exc:
+            _emit_error(
+                ErrorCode.INSTANCE_NOT_FOUND,
+                str(exc),
+                {"instance": as_, "available": exc.available},
+            )
+            return
+
+        context_suffix = f" (as={result.instance}, relays={', '.join(result.relays)})"
+        if format_ == OutputFormat.JSON:
+            _output_json(result.envelope())
+            return
+
+        if not result.relay_reachable:
+            err.print(f"[yellow]Could not reach relay.{context_suffix}[/yellow]")
+        if not packets:
             console.print(f"[dim]Inbox empty.{context_suffix}[/dim]")
-        else:
-            _show_inbox(display_packets, p, ingested_set if show_all else None)
-            if show_all and len(all_packets) != len(new_packets):
-                total = len(all_packets)
-                new = len(new_packets)
-                console.print(f"[dim]{total} total, {new} new[/dim]")
+            return
+
+        ingested_set = {entry["id"] for entry in p.ingested_ids} if show_all else None
+        _show_inbox(packets, p, ingested_set)
+        if show_all:
+            new = sum(1 for pkt in packets if pkt.id not in (ingested_set or set()))
+            if new != len(packets):
+                console.print(f"[dim]{len(packets)} total, {new} new[/dim]")
 
     asyncio.run(_run())
 

@@ -22,6 +22,7 @@ from aya.scheduler import (
     SEVERITY_HEARTBEAT,
     SEVERITY_INFO,
     AlertDetails,
+    AlertItem,
     AlertSeverity,
     SchedulerItem,
     WatchState,
@@ -43,12 +44,12 @@ def _hook_watch_now() -> datetime:
     return clock.now().astimezone()
 
 
-def _is_watch_chain(item: dict[str, Any]) -> bool:
+def _is_watch_chain(item: SchedulerItem) -> bool:
     """Return True when a scheduler watch item represents a multi-stage chain."""
     return item.get("type") == "watch" and isinstance(item.get("stages"), list)
 
 
-def _chain_name(item: dict[str, Any]) -> str:
+def _chain_name(item: SchedulerItem) -> str:
     raw = item.get("chain") or item.get("message") or "watch chain"
     return str(raw)
 
@@ -65,7 +66,7 @@ def _chain_stage_action(stage: dict[str, Any]) -> str:
     return "notify" if _chain_stage_watch_spec(stage) is not None else "dispatch"
 
 
-def _chain_stage_autonomy(item: dict[str, Any], stage: dict[str, Any]) -> str:
+def _chain_stage_autonomy(item: SchedulerItem, stage: dict[str, Any]) -> str:
     raw = stage.get("autonomy") or item.get("default_autonomy") or "autonomous"
     return raw if raw in {"autonomous", "confirm", "notify-only"} else "autonomous"
 
@@ -84,8 +85,8 @@ def _chain_stage_watch_spec(stage: dict[str, Any]) -> tuple[str, str] | None:
 
 
 def _build_chain_stage_watch_item(
-    chain: dict[str, Any], stage: dict[str, Any], index: int
-) -> dict[str, Any] | None:
+    chain: SchedulerItem, stage: dict[str, Any], index: int
+) -> SchedulerItem | None:
     """Build an ephemeral watch item for the current chain stage."""
     watch_spec = _chain_stage_watch_spec(stage)
     if watch_spec is None:
@@ -118,7 +119,7 @@ def _build_chain_stage_watch_item(
     elif interval == 30 and provider == "ci-checks":
         interval = 1
 
-    return {
+    watch_item: SchedulerItem = {
         "id": chain["id"],
         "type": "watch",
         "status": "active",
@@ -129,17 +130,20 @@ def _build_chain_stage_watch_item(
         "tags": chain.get("tags", []),
         "session_required": False,
         "provider": provider,
-        "watch_config": watch_config,
+        # The stage spec is parsed from user config, so its shape is only
+        # known to the provider that consumes it.
+        "watch_config": cast(Any, watch_config),
         "condition": stage.get("condition", ""),
         "poll_interval_minutes": interval,
         "last_checked_at": chain.get("last_checked_at"),
         "last_state": chain.get("last_state"),
         "remove_when": stage.get("remove_when", ""),
     }
+    return watch_item
 
 
 def _chain_stage_details(
-    chain: dict[str, Any], stage: dict[str, Any], index: int, **extra: Any
+    chain: SchedulerItem, stage: dict[str, Any], index: int, **extra: Any
 ) -> AlertDetails:
     details: dict[str, Any] = {
         "type": "watch-chain",
@@ -147,17 +151,19 @@ def _chain_stage_details(
         "opener": _chain_stage_name(stage, index),
         "context_summary": stage.get("action", ""),
     }
+    # *extra* is caller-supplied and open-ended, so the narrowing happens here
+    # rather than pretending the literal above is already an AlertDetails.
     details.update(extra)
     return cast(AlertDetails, details)
 
 
 def _append_chain_alert(
     *,
-    alerts: list[dict[str, Any]],
+    alerts: list[AlertItem],
     source_item_id: str,
     now: datetime,
     message: str,
-    details: dict[str, Any],
+    details: AlertDetails,
     severity: AlertSeverity,
 ) -> None:
     from aya.scheduler.display import _create_alert as create_alert
@@ -173,7 +179,7 @@ def _append_chain_alert(
     )
 
 
-def _advance_watch_chain(item: dict[str, Any], next_index: int, now: datetime) -> None:
+def _advance_watch_chain(item: SchedulerItem, next_index: int, now: datetime) -> None:
     item["current_stage_index"] = next_index
     item["current_stage_started_at"] = now.isoformat()
     item["last_checked_at"] = None
@@ -184,7 +190,7 @@ def _advance_watch_chain(item: dict[str, Any], next_index: int, now: datetime) -
 
 
 def _chain_dispatch_message(
-    chain: dict[str, Any], stage: dict[str, Any], index: int, autonomy: str, command: str
+    chain: SchedulerItem, stage: dict[str, Any], index: int, autonomy: str, command: str
 ) -> str:
     label = f"{_chain_name(chain)} · {_chain_stage_name(stage, index)}"
     if autonomy == "confirm":
@@ -195,11 +201,11 @@ def _chain_dispatch_message(
 
 
 def _run_chain_action(
-    chain: dict[str, Any],
+    chain: SchedulerItem,
     stage: dict[str, Any],
     index: int,
     now: datetime,
-    alerts: list[dict[str, Any]],
+    alerts: list[AlertItem],
     rewake_messages: list[str],
 ) -> tuple[bool, bool, bool]:
     """Run the current chain stage action.
@@ -278,7 +284,7 @@ def _run_chain_action(
     return False, True, True
 
 
-def _heartbeat_due(item: dict[str, Any], now: datetime) -> bool:
+def _heartbeat_due(item: SchedulerItem, now: datetime) -> bool:
     interval = item.get("heartbeat_interval_minutes", DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES)
     if not isinstance(interval, int) or interval <= 0:
         interval = DEFAULT_WATCH_CHAIN_HEARTBEAT_MINUTES
@@ -296,7 +302,7 @@ def _heartbeat_due(item: dict[str, Any], now: datetime) -> bool:
 
 
 def _emit_watch_chain_heartbeat(
-    item: dict[str, Any], now: datetime, alerts: list[dict[str, Any]], rewake_messages: list[str]
+    item: SchedulerItem, now: datetime, alerts: list[AlertItem], rewake_messages: list[str]
 ) -> bool:
     stages = item.get("stages")
     if not isinstance(stages, list) or item.get("status") != "active" or not stages:
@@ -332,9 +338,9 @@ def _emit_watch_chain_heartbeat(
 
 
 def _process_watch_chain(
-    item: dict[str, Any],
+    item: SchedulerItem,
     now: datetime,
-    alerts: list[dict[str, Any]],
+    alerts: list[AlertItem],
     rewake_messages: list[str],
 ) -> tuple[bool, bool]:
     """Advance a watch chain as far as possible for this hook invocation."""
@@ -435,9 +441,9 @@ def _process_watch_chain(
     return items_modified, alerts_modified
 
 
-def _extract_watch_updates(raw_payload: dict) -> list[dict]:
+def _extract_watch_updates(raw_payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract normalized pushed watch updates from a hook payload."""
-    updates: list[dict] = []
+    updates: list[dict[str, Any]] = []
     for container in (raw_payload, raw_payload.get("tool_input", {})):
         if not isinstance(container, dict):
             continue
@@ -450,7 +456,7 @@ def _extract_watch_updates(raw_payload: dict) -> list[dict]:
     return updates
 
 
-def _watch_update_key(provider: str, watch_config: dict | None) -> str | None:
+def _watch_update_key(provider: str, watch_config: dict[str, Any] | None) -> str | None:
     """Build a stable lookup key for matching pushed updates to active watches."""
     if not provider or not isinstance(watch_config, dict):
         return None
@@ -464,7 +470,7 @@ def _process_hook_watch_state(
     item: SchedulerItem,
     new_state: WatchState,
     now: datetime,
-    alerts: list[dict],
+    alerts: list[AlertItem],
     rewake_messages: list[str],
 ) -> tuple[bool, bool]:
     """Persist a watch state update and emit any resulting alert."""
@@ -481,7 +487,9 @@ def _process_hook_watch_state(
         alert = create_alert(
             source_item_id=item["id"],
             message=alert_msg,
-            details=AlertDetails(**new_state),  # type: ignore[arg-type]
+            # WatchState carries provider-specific keys AlertDetails does not
+            # declare; the alert store keeps them verbatim.
+            details=cast(AlertDetails, dict(new_state)),
             now=now,
         )
         alerts.append(alert)
@@ -494,7 +502,7 @@ def _process_hook_watch_state(
     return True, alerts_modified
 
 
-def _hook_watch_impl(payload: dict) -> int:
+def _hook_watch_impl(payload: dict[str, Any]) -> int:
     """Core logic for hook watch — testable without typer.Exit."""
     from aya.scheduler.storage import (
         _alerts_file,
@@ -506,7 +514,7 @@ def _hook_watch_impl(payload: dict) -> int:
 
     now = _hook_watch_now()
     rewake_messages: list[str] = []
-    push_updates_by_key: dict[str, list[dict]] = {}
+    push_updates_by_key: dict[str, list[dict[str, Any]]] = {}
     for update in _extract_watch_updates(payload):
         key = _watch_update_key(update.get("provider", ""), update.get("watch_config"))
         if key is None:
@@ -537,10 +545,10 @@ def _hook_watch_impl(payload: dict) -> int:
             if item.get("type") != "watch" or item.get("status") != "active":
                 continue
 
-            matching_updates = push_updates_by_key.get(
-                _watch_update_key(item.get("provider", ""), item.get("watch_config")),
-                [],
+            update_key = _watch_update_key(
+                item.get("provider", ""), cast("dict[str, Any] | None", item.get("watch_config"))
             )
+            matching_updates = push_updates_by_key.get(update_key or "", [])
             if matching_updates:
                 push_consumed = False
                 for update in matching_updates:
@@ -551,7 +559,7 @@ def _hook_watch_impl(payload: dict) -> int:
                     try:
                         item_changed, alerts_changed = _process_hook_watch_state(
                             item,
-                            state,
+                            cast(Any, state),
                             now,
                             alerts,
                             rewake_messages,
@@ -659,7 +667,7 @@ def _maybe_create_ci_watch() -> None:
     for w in existing:
         if w.get("provider") != "ci-checks":
             continue
-        cfg = w.get("watch_config", {})
+        cfg: dict[str, Any] = dict(w.get("watch_config") or {})
         if cfg.get("owner") == owner and cfg.get("repo") == repo and cfg.get("pr") == int(pr_num):
             return  # already watching
 

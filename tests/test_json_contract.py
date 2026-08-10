@@ -167,7 +167,8 @@ class TestInboxContract:
         save_profile(profile, profile_path)
 
         fake_packet = Packet(
-            **{"from": identity.did, "to": identity.did},
+            from_did=identity.did,
+            to_did=identity.did,
             intent="note",
             content="hello",
         )

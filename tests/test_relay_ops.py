@@ -87,7 +87,8 @@ def profile(tmp_path: Path, peer: Identity) -> tuple[Profile, Path]:
 
 def _incoming(peer: Identity, to: Profile, intent: str = "hello") -> Packet:
     return Packet(
-        **{"from": peer.did, "to": to.instances["harbor"].did},
+        from_did=peer.did,
+        to_did=to.instances["harbor"].did,
         intent=intent,
         content="body",
     ).sign(peer)
@@ -202,7 +203,8 @@ class TestReceive:
         FakeClient.queued = [
             _incoming(peer, p, "from peer"),
             Packet(
-                **{"from": stranger.did, "to": p.instances["harbor"].did},
+                from_did=stranger.did,
+                to_did=p.instances["harbor"].did,
                 intent="who?",
                 content="?",
             ).sign(stranger),

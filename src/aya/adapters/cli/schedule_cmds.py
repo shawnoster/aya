@@ -25,7 +25,9 @@ from aya.adapters.install import install_scheduler, uninstall_scheduler
 from aya.scheduler import (
     SEVERITY_ACTIONABLE,
     SEVERITY_HEARTBEAT,
+    AlertItem,
     AlertSeverity,
+    SchedulerItem,
     _display_items,
     add_recurring,
     add_reminder,
@@ -267,6 +269,7 @@ def schedule_dismiss(
 ) -> None:
     """Dismiss a scheduled item or alert."""
     format_ = resolve_format(format_)
+    item: SchedulerItem | AlertItem
     try:
         item = dismiss_item(item_id)
     except ValueError:

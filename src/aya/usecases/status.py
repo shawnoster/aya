@@ -14,6 +14,8 @@ from aya.adapters import paths as _paths
 from aya.adapters.credentials import check_credentials
 from aya.scheduler import (
     LOCAL_TZ,
+    AlertItem,
+    SchedulerItem,
     get_active_watches,
     get_due_reminders,
     get_unseen_alerts,
@@ -128,7 +130,7 @@ def _parse_next_eval(next_eval: Any, now_local: datetime) -> tuple[str, int] | N
 # ── main ──────────────────────────────────────────────────────────────────────
 
 
-def _active_scheduler_items() -> list[dict[str, Any]]:
+def _active_scheduler_items() -> list[SchedulerItem]:
     """Return all active scheduler items (watches, recurring, reminders)."""
     return [i for i in load_items() if i.get("status") == "active"]
 
@@ -151,10 +153,10 @@ def _gather_status() -> dict[str, Any]:
         ),
     ]
 
-    unseen: list[dict[str, Any]] = []
-    due: list[dict[str, Any]] = []
-    upcoming: list[dict[str, Any]] = []
-    active_watches: list[dict[str, Any]] = []
+    unseen: list[AlertItem] = []
+    due: list[SchedulerItem] = []
+    upcoming: list[SchedulerItem] = []
+    active_watches: list[SchedulerItem] = []
     scheduler_ok = True
     try:
         unseen = get_unseen_alerts()

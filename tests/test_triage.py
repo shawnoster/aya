@@ -16,7 +16,8 @@ def sender() -> Identity:
 
 def _packet(sender: Identity, intent: str) -> Packet:
     return Packet(
-        **{"from": sender.did, "to": "did:key:zRECIPIENT"},
+        from_did=sender.did,
+        to_did="did:key:zRECIPIENT",
         intent=intent,
         content="body",
     ).sign(sender)

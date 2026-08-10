@@ -1254,7 +1254,8 @@ class TestReceive:
 
     def _signed_packet(self, sender: Identity, to_did: str, intent: str = "Test packet") -> Packet:
         pkt = Packet(
-            **{"from": sender.did, "to": to_did},
+            from_did=sender.did,
+            to_did=to_did,
             intent=intent,
             content="Test content.",
         )
@@ -1595,7 +1596,8 @@ class TestInbox:
 
     def _signed_packet(self, sender: Identity, to_did: str, intent: str = "Test packet") -> Packet:
         pkt = Packet(
-            **{"from": sender.did, "to": to_did},
+            from_did=sender.did,
+            to_did=to_did,
             intent=intent,
             content="Test content.",
         )
@@ -1850,7 +1852,8 @@ class TestAck:
         from datetime import UTC, datetime
 
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="seed from home",
         )
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -1963,7 +1966,7 @@ class TestAck:
 
         from datetime import UTC, datetime
 
-        pkt = Packet(**{"from": other.did, "to": local.did}, intent="test")
+        pkt = Packet(from_did=other.did, to_did=local.did, intent="test")
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso})
 
@@ -2006,7 +2009,7 @@ class TestAck:
         )
 
         # Ingest a packet from peer_a
-        pkt = Packet(**{"from": peer_a.did, "to": local.did}, intent="seed from A")
+        pkt = Packet(from_did=peer_a.did, to_did=local.did, intent="seed from A")
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": peer_a.did})
 
@@ -2038,7 +2041,7 @@ class TestAck:
         )
 
         # Old-style entry without from_did
-        pkt = Packet(**{"from": peer.did, "to": local.did}, intent="old seed")
+        pkt = Packet(from_did=peer.did, to_did=local.did, intent="old seed")
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso})
 
@@ -2069,7 +2072,8 @@ class TestDryRun:
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="dry run test",
             content="hello",
         )
@@ -2135,7 +2139,7 @@ class TestDryRun:
             did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
         )
 
-        pkt = Packet(**{"from": home.did, "to": local.did}, intent="seed from home")
+        pkt = Packet(from_did=home.did, to_did=local.did, intent="seed from home")
         now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": home.did})
 
@@ -2432,7 +2436,8 @@ class TestJsonFormat:
         local = p.instances["default"]
         home_key = p.trusted_keys["home"]
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="json format test",
             content="hello",
         )
@@ -2516,7 +2521,8 @@ class TestPacketPersistence:
         local = Identity.generate("default")
         home = Identity.generate("home")
         return Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="daily handoff",
             content="Here is today's summary.",
         )
@@ -2531,7 +2537,8 @@ class TestPacketPersistence:
         local = Identity.generate("default")
         home = Identity.generate("home")
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="seed from home",
             content="test content",
         )
@@ -2561,7 +2568,8 @@ class TestPacketPersistence:
         # Body contains text that Rich would normally treat as markup.
         body_with_markup = "log line: [error] something [bold]important[/bold] happened"
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="log",
             content=body_with_markup,
         )
@@ -2583,7 +2591,8 @@ class TestPacketPersistence:
         home = Identity.generate("home")
         for i in range(3):
             pkt = Packet(
-                **{"from": home.did, "to": local.did},
+                from_did=home.did,
+                to_did=local.did,
                 intent=f"packet {i}",
                 content=f"content {i}",
             )
@@ -2619,7 +2628,8 @@ class TestIdempotency:
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="idempotent test",
             content="hello",
         )
@@ -2679,7 +2689,8 @@ class TestIdempotency:
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="test",
             content="hello",
         )
@@ -2783,7 +2794,8 @@ class TestIdempotency:
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="after expiry",
             content="hello",
         )
@@ -2821,7 +2833,8 @@ class TestIdempotency:
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="no key test",
             content="hello",
         )
@@ -2878,7 +2891,8 @@ class TestRead:
         local = Identity.generate("default")
         home = Identity.generate("home")
         return Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="markdown body",
             content="# Notes\n\nA short markdown body.",
         )
@@ -2951,7 +2965,8 @@ class TestRead:
         local = Identity.generate("default")
         home = Identity.generate("home")
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="structured payload",
             content_type=ContentType.JSON,
             content={
@@ -2979,7 +2994,8 @@ class TestRead:
         local = Identity.generate("default")
         home = Identity.generate("home")
         pkt = Packet(
-            **{"from": home.did, "to": local.did},
+            from_did=home.did,
+            to_did=local.did,
             intent="structured payload",
             content_type=ContentType.JSON,
             content={"event": "deployed", "version": "1.2.3"},
@@ -3014,7 +3030,8 @@ class TestDrop:
 
     def _signed_packet(self, sender: Identity, to_did: str, intent: str = "Test packet") -> Packet:
         pkt = Packet(
-            **{"from": sender.did, "to": to_did},
+            from_did=sender.did,
+            to_did=to_did,
             intent=intent,
             content="Test content.",
         )
@@ -3296,7 +3313,8 @@ class TestSendSignatureValidation:
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="hand-edited packet",
             content="hello",
         )
@@ -3332,7 +3350,8 @@ class TestSendSignatureValidation:
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="bad sig packet",
             content="hello",
         )
@@ -3368,7 +3387,8 @@ class TestSendSignatureValidation:
         other_sender = Identity.generate("offline")
 
         pkt = Packet(
-            **{"from": other_sender.did, "to": home_key.did},
+            from_did=other_sender.did,
+            to_did=home_key.did,
             intent="forged-looking packet",
             content="hello",
         )
@@ -3409,7 +3429,8 @@ class TestSendSignatureValidation:
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="properly signed",
             content="hello",
         ).sign(local)
@@ -3445,7 +3466,8 @@ class TestSendSignatureValidation:
         home_key = p.trusted_keys["home"]
 
         pkt = Packet(
-            **{"from": local.did, "to": home_key.did},
+            from_did=local.did,
+            to_did=home_key.did,
             intent="silent resign",
             content="hello",
         )
@@ -4529,7 +4551,8 @@ class TestReceivePersistGuard:
         save_profile(p, profile_with_trusted)
 
         packet = Packet(
-            **{"from": sender.did, "to": p.instances["default"].did},
+            from_did=sender.did,
+            to_did=p.instances["default"].did,
             intent="persist-fail",
             content="body",
         ).sign(sender)
@@ -4572,7 +4595,8 @@ class TestDropSurvivesReceive:
         save_profile(p, profile_with_trusted)
 
         packet = Packet(
-            **{"from": sender.did, "to": p.instances["default"].did},
+            from_did=sender.did,
+            to_did=p.instances["default"].did,
             intent="spam",
             content="unwanted",
         ).sign(sender)
@@ -4619,7 +4643,8 @@ class TestSendRawRequiresPubkey:
 
         packet_file = tmp_path / "pkt.json"
         packet = Packet(
-            **{"from": p.instances["default"].did, "to": "did:key:zBOB"},
+            from_did=p.instances["default"].did,
+            to_did="did:key:zBOB",
             intent="orphan",
             content="body",
         ).sign(p.instances["default"])

@@ -273,8 +273,8 @@ async def test_inbox_filters_dropped_packets(tmp_path):
     )
     profile_path = tmp_path / "profile.json"
 
-    kept = Packet(**{"from": sender.did, "to": local.did}, intent="kept packet").sign(sender)
-    dropped = Packet(**{"from": sender.did, "to": local.did}, intent="dropped packet").sign(sender)
+    kept = Packet(from_did=sender.did, to_did=local.did, intent="kept packet").sign(sender)
+    dropped = Packet(from_did=sender.did, to_did=local.did, intent="dropped packet").sign(sender)
 
     # Pre-populate dropped_ids with the second packet's ID.
     profile.dropped_ids.append(dropped.id)
@@ -319,11 +319,11 @@ async def test_inbox_includes_trusted_flag(tmp_path):
     profile_path = tmp_path / "profile.json"
     save_profile(profile, profile_path)
 
-    trusted_pkt = Packet(
-        **{"from": trusted_sender.did, "to": local.did}, intent="trusted msg"
-    ).sign(trusted_sender)
+    trusted_pkt = Packet(from_did=trusted_sender.did, to_did=local.did, intent="trusted msg").sign(
+        trusted_sender
+    )
     untrusted_pkt = Packet(
-        **{"from": untrusted_sender.did, "to": local.did}, intent="untrusted msg"
+        from_did=untrusted_sender.did, to_did=local.did, intent="untrusted msg"
     ).sign(untrusted_sender)
 
     async def mock_fetch(*args, **kwargs):
@@ -373,7 +373,7 @@ async def test_receive_writes_packet_body_to_disk(tmp_path):
 
     packets_dir = tmp_path / "packets"
 
-    signed = Packet(**{"from": home.did, "to": local.did}, intent="regression check").sign(home)
+    signed = Packet(from_did=home.did, to_did=local.did, intent="regression check").sign(home)
 
     async def mock_fetch(*args, **kwargs):
         yield signed
@@ -422,7 +422,7 @@ async def test_receive_skips_cursor_when_persist_fails(tmp_path):
     empty_dir = tmp_path / "packets_empty"
     empty_dir.mkdir()
 
-    signed = Packet(**{"from": home.did, "to": local.did}, intent="persist-fail").sign(home)
+    signed = Packet(from_did=home.did, to_did=local.did, intent="persist-fail").sign(home)
 
     async def mock_fetch(*args, **kwargs):
         yield signed
@@ -505,7 +505,7 @@ async def test_ack_tool(tmp_path):
     profile.trusted_keys["home"] = TrustedKey(
         did=home.did, label="home", nostr_pubkey=home.nostr_public_hex
     )
-    pkt = Packet(**{"from": home.did, "to": local.did}, intent="test")
+    pkt = Packet(from_did=home.did, to_did=local.did, intent="test")
     now_iso = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     profile.ingested_ids.append({"id": pkt.id, "ingested_at": now_iso, "from_did": home.did})
     profile_path = tmp_path / "profile.json"
@@ -534,7 +534,7 @@ async def test_read_tool_content_only(tmp_path):
     """aya_read returns content only by default."""
     from aya.entities.packet import Packet
 
-    pkt = Packet(**{"from": "did:key:sender", "to": "did:key:receiver"}, intent="test")
+    pkt = Packet(from_did="did:key:sender", to_did="did:key:receiver", intent="test")
     pkt.content = "Hello world"
     packets_dir = tmp_path / "packets"
     packets_dir.mkdir()
@@ -551,7 +551,7 @@ async def test_read_tool_with_meta(tmp_path):
     """aya_read with meta=True returns full metadata."""
     from aya.entities.packet import Packet
 
-    pkt = Packet(**{"from": "did:key:sender", "to": "did:key:receiver"}, intent="test")
+    pkt = Packet(from_did="did:key:sender", to_did="did:key:receiver", intent="test")
     pkt.content = "Hello world"
     packets_dir = tmp_path / "packets"
     packets_dir.mkdir()
@@ -620,7 +620,8 @@ async def test_packets_tool(tmp_path):
 
     for i in range(3):
         pkt = Packet(
-            **{"from": "did:key:sender", "to": "did:key:receiver"},
+            from_did="did:key:sender",
+            to_did="did:key:receiver",
             intent=f"test-{i}",
         )
         (packets_dir / f"{pkt.id}.json").write_text(pkt.to_json())

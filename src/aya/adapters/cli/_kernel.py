@@ -15,7 +15,7 @@ import sys
 import urllib.parse
 from enum import StrEnum
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn, TypedDict
 
 import typer
 from rich.console import Console
@@ -452,7 +452,24 @@ def _output_json(data: object) -> None:
     console.out(json.dumps(data, indent=2, default=str))
 
 
-def _extract_packet_data(pkt: Packet, profile: Profile) -> dict[str, object]:
+class PacketRow(TypedDict):
+    """One packet as the displays need it — fields plus derived values.
+
+    Typed rather than ``dict[str, object]`` so callers can index it without
+    every value degrading to ``object``.
+    """
+
+    id: str
+    intent: str
+    from_did: str
+    from_label: str | None
+    sent_at: str
+    age: str
+    content_type: str
+    trusted: bool
+
+
+def _extract_packet_data(pkt: Packet, profile: Profile) -> PacketRow:
     """Extract all packet fields and computed values for reuse across displays."""
     return {
         "id": pkt.id,
@@ -461,16 +478,16 @@ def _extract_packet_data(pkt: Packet, profile: Profile) -> dict[str, object]:
         "from_label": _label_for_did(pkt.from_did, profile),
         "sent_at": pkt.sent_at,
         "age": human_age(pkt.sent_at),
-        "content_type": pkt.content_type,
+        "content_type": str(pkt.content_type),
         "trusted": profile.is_trusted(pkt.from_did),
     }
 
 
 def _packet_to_dict(
     pkt: Packet, profile: Profile, ingested_set: set[str] | None = None
-) -> dict[str, object]:
-    """Convert packet to dict for JSON output, optionally marking ingested packets."""
-    d = _extract_packet_data(pkt, profile)
+) -> dict[str, Any]:
+    """Packet as a JSON-ready dict, optionally marking ingested packets."""
+    d: dict[str, Any] = dict(_extract_packet_data(pkt, profile))
     if ingested_set is not None:
         d["ingested"] = pkt.id in ingested_set
     return d

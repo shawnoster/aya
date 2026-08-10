@@ -49,7 +49,8 @@ def client(sender: Identity) -> RelayClient:
 @pytest.fixture
 def packet(sender: Identity, recipient: Identity) -> Packet:
     return Packet(
-        **{"from": sender.did, "to": recipient.did},
+        from_did=sender.did,
+        to_did=recipient.did,
         intent="Test packet for relay",
         content="Hello from work.",
     )
@@ -360,7 +361,8 @@ class TestFetchPending:
     ) -> None:
         """fetch_pending should yield un-expired packets from relay events."""
         p = Packet(
-            **{"from": sender.did, "to": recipient.did},
+            from_did=sender.did,
+            to_did=recipient.did,
             intent="Remote task",
             content="Context data.",
         )
@@ -386,7 +388,8 @@ class TestFetchPending:
     ) -> None:
         past = (datetime.now(UTC) - timedelta(days=8)).isoformat()
         p = Packet(
-            **{"from": sender.did, "to": recipient.did},
+            from_did=sender.did,
+            to_did=recipient.did,
             intent="Old packet",
             content="Stale.",
             expires_at=past,
@@ -449,7 +452,8 @@ class TestFetchPending:
     ) -> None:
         """fetch_pending should return whatever packets arrived before EOSE timeout."""
         p = Packet(
-            **{"from": sender.did, "to": recipient.did},
+            from_did=sender.did,
+            to_did=recipient.did,
             intent="Partial fetch",
             content="Some data.",
         )
@@ -477,7 +481,8 @@ class TestFetchPending:
         from aya.entities.encryption import nip44_encrypt
 
         p = Packet(
-            **{"from": sender.did, "to": recipient.did},
+            from_did=sender.did,
+            to_did=recipient.did,
             intent="Encrypted handoff",
             content="This is secret.",
             encrypted=True,
@@ -533,7 +538,8 @@ class TestFetchPagination:
         # Build _FETCH_PAGE_SIZE events for page 1, then 1 event for page 2.
         def _make_event(idx: int) -> dict:
             p = Packet(
-                **{"from": sender.did, "to": recipient.did},
+                from_did=sender.did,
+                to_did=recipient.did,
                 intent=f"Packet {idx}",
                 content="data",
             )
@@ -583,7 +589,8 @@ class TestFetchPagination:
     ) -> None:
         """A partial page (< _FETCH_PAGE_SIZE events) stops pagination."""
         p = Packet(
-            **{"from": sender.did, "to": recipient.did},
+            from_did=sender.did,
+            to_did=recipient.did,
             intent="Single packet",
             content="data",
         )
@@ -617,7 +624,8 @@ class TestFetchPagination:
 
         def _make_event_no_ts(idx: int) -> dict:
             p = Packet(
-                **{"from": sender.did, "to": recipient.did},
+                from_did=sender.did,
+                to_did=recipient.did,
                 intent=f"Packet {idx}",
                 content="data",
             )
@@ -654,7 +662,8 @@ class TestFetchPagination:
 
         def _make_event(idx: int) -> dict:
             p = Packet(
-                **{"from": sender.did, "to": recipient.did},
+                from_did=sender.did,
+                to_did=recipient.did,
                 intent=f"Packet {idx}",
                 content="data",
             )
@@ -693,7 +702,8 @@ class TestFetchPagination:
 
         def _make_event(idx: int, ts: int) -> dict:
             p = Packet(
-                **{"from": sender.did, "to": recipient.did},
+                from_did=sender.did,
+                to_did=recipient.did,
                 intent=f"Packet {idx}",
                 content="data",
             )
@@ -959,7 +969,8 @@ class TestMultiRelayFetch:
     ) -> None:
         """fetch_pending() deduplicates packets returned by multiple relays."""
         p = Packet(
-            **{"from": sender.did, "to": recipient.did},
+            from_did=sender.did,
+            to_did=recipient.did,
             intent="Dedup test",
             content="Content.",
         )

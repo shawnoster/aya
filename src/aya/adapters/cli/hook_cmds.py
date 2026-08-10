@@ -94,7 +94,7 @@ def hook_crons(
     for c in new_crons:
         cid = c.get("id", "")
         schedule = c.get("cron", "")
-        prompt = c.get("prompt") or c.get("message") or c.get("description") or ""
+        prompt = str(c.get("prompt") or c.get("message") or c.get("description") or "")
         prompt = prompt.replace("\n", " ").replace('"', '\\"').strip()
         context = (
             "REQUIRED ACTION \u2014 Call CronCreate for each session cron "

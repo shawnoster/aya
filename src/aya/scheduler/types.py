@@ -87,6 +87,19 @@ class SchedulerItem(TypedDict):
     only_during: NotRequired[str]
     # Event-specific
     trigger: NotRequired[str]
+    # Watch-chain-specific: a chain is a scheduler item whose stages advance
+    # as each one's condition is met.
+    chain: NotRequired[str]
+    stages: NotRequired[list[dict[str, Any]]]
+    current_stage_index: NotRequired[int]
+    current_stage_started_at: NotRequired[str | None]
+    completed_at: NotRequired[str | None]
+    default_autonomy: NotRequired[str]
+    heartbeat_interval_minutes: NotRequired[int]
+    last_heartbeat_at: NotRequired[str | None]
+    awaiting_confirmation: NotRequired[bool]
+    pending_stage_index: NotRequired[int]
+    pending_dispatch: NotRequired[str]
 
 
 class AlertDetails(TypedDict, total=False):

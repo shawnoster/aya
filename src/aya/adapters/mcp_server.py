@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import mcp.types as types
@@ -306,7 +308,8 @@ _TOOLS: list[types.Tool] = [
 ]
 
 
-@server.list_tools()
+# The MCP SDK ships these decorators untyped; the handlers below are typed.
+@server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
 async def list_tools() -> list[types.Tool]:
     return _TOOLS
 
@@ -571,9 +574,9 @@ async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
     if not PACKETS_DIR.exists():
         return _text([])
 
-    def _safe_mtime(f: Any) -> float:
+    def _safe_mtime(f: Path) -> float:
         try:
-            return f.stat().st_mtime
+            return float(f.stat().st_mtime)
         except OSError:
             return 0.0
 
@@ -623,7 +626,9 @@ async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextCont
 
 # ── dispatcher ───────────────────────────────────────────────────────────────
 
-_HANDLERS: dict[str, Any] = {
+Handler = Callable[[dict[str, Any]], Awaitable[list[types.TextContent]]]
+
+_HANDLERS: dict[str, Handler] = {
     "aya_status": lambda args: _handle_status(),
     "aya_inbox": _handle_inbox,
     "aya_send": _handle_send,
@@ -640,7 +645,7 @@ _HANDLERS: dict[str, Any] = {
 }
 
 
-@server.call_tool()
+@server.call_tool()  # type: ignore[untyped-decorator]
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
     handler = _HANDLERS.get(name)
     if handler is None:

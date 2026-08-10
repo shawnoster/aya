@@ -9,6 +9,7 @@ import logging
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import websockets
 from coincurve import PrivateKey as Secp256k1PrivateKey
@@ -53,10 +54,10 @@ def _backoff_delay(attempt: int) -> float:
     """
     base = min(_BACKOFF_BASE * (2**attempt), _BACKOFF_CAP)
     jitter = base * _BACKOFF_JITTER * (2 * random.random() - 1)  # noqa: S311
-    return max(0.0, base + jitter)
+    return float(max(0.0, base + jitter))
 
 
-def _is_rate_limited(response: list) -> bool:
+def _is_rate_limited(response: list[Any]) -> bool:
     """Return True if an OK response indicates rate-limiting."""
     return (
         len(response) >= 4
@@ -162,7 +163,7 @@ class RelayClient:
         raise RelayError(f"All relays rejected the event: {errors}")
 
     async def _publish_to_relay(
-        self, event: dict, relay_url: str, packet: Packet
+        self, event: dict[str, Any], relay_url: str, packet: Packet
     ) -> tuple[str | None, str | None]:
         """Try to publish *event* to *relay_url* with retries.
 
@@ -290,7 +291,7 @@ class RelayClient:
         seen_event_ids: set[str] = set()  # intra-relay dedup for inclusive cursor
 
         while True:
-            filter_: dict = {
+            filter_: dict[str, Any] = {
                 "kinds": [AYA_KIND],
                 "#p": [self.public_key_hex],
                 "limit": _FETCH_PAGE_SIZE,
@@ -303,7 +304,7 @@ class RelayClient:
 
             # Collect the raw events for this page so we can count them and
             # determine the oldest timestamp before deciding whether to paginate.
-            page_events: list[dict] = []
+            page_events: list[dict[str, Any]] = []
             fetch_ok = False
 
             for attempt in range(_MAX_RETRIES_FETCH):
@@ -442,7 +443,7 @@ class RelayClient:
 
     def _build_event(
         self, packet: Packet, recipient_nostr_pubkey: str, encrypt: bool = True
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Build a NIP-01 compliant Nostr event wrapping the Assistant Sync packet.
 
         When *encrypt* is True (default), the packet JSON is NIP-44 encrypted to the
@@ -456,7 +457,10 @@ class RelayClient:
             content = packet.to_json()
         tags = [
             ["p", recipient_pubkey],
-            ["expiration", str(int(datetime.fromisoformat(packet.expires_at).timestamp()))],
+            [
+                "expiration",
+                str(int(datetime.fromisoformat(packet.expires_at or packet.sent_at).timestamp())),
+            ],
             ["aya-version", "0.2"],
             ["aya-packet-id", packet.id],
         ]
@@ -481,7 +485,7 @@ class RelayClient:
             "sig": sig,
         }
 
-    def _build_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> dict:
+    def _build_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> dict[str, Any]:
         content = json.dumps({"packet_id": packet.id, "status": "received"})
         recipient_pubkey = sender_nostr_pubkey
         tags = [
@@ -514,7 +518,7 @@ _EOSE_TIMEOUT = 30.0  # seconds to wait for EOSE before giving up
 
 async def _read_until_eose(
     ws: ClientConnection, sub_id: str, eose_timeout: float = _EOSE_TIMEOUT
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[dict[str, Any]]:
     """Yield EVENT payloads until EOSE (end of stored events) from the relay.
 
     Raises `TimeoutError` if EOSE is not received within *eose_timeout* seconds.
@@ -537,7 +541,7 @@ def _compute_event_id(
     pubkey: str,
     created_at: int,
     kind: int,
-    tags: list,
+    tags: list[Any],
     content: str,
 ) -> str:
     """NIP-01: event ID is SHA-256 of canonical serialisation."""

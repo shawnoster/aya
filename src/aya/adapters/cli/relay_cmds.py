@@ -6,8 +6,9 @@ import asyncio
 import json
 import logging
 import sys
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.panel import Panel
@@ -295,7 +296,7 @@ def send_cmd(
             _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
             return
 
-        if dry_run:
+        if dry_run and result.packet is not None:
             _output_json(json.loads(result.packet.to_json()))
             return
         _render_send(result, as_json=format_ == OutputFormat.JSON)
@@ -385,7 +386,7 @@ def ack(
             _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
             return
 
-        if dry_run:
+        if dry_run and result.packet is not None:
             _output_json(json.loads(result.packet.to_json()))
             return
 
@@ -666,16 +667,17 @@ def pair(
             )
 
         # Poll for response
-        if format_ != OutputFormat.JSON:
-            ctx_mgr = console.status("[bold cyan]Waiting for the other peer…[/bold cyan]")
-        else:
-            ctx_mgr = nullcontext()
+        ctx_mgr: AbstractContextManager[Any] = (
+            console.status("[bold cyan]Waiting for the other peer…[/bold cyan]")
+            if format_ != OutputFormat.JSON
+            else nullcontext()
+        )
         with ctx_mgr:
-            trusted = asyncio.run(
+            trusted_or_none = asyncio.run(
                 poll_for_pair_response(relay_urls, local.nostr_public_hex, request_event_id)
             )
 
-        if trusted is None:
+        if trusted_or_none is None:
             if format_ == OutputFormat.JSON:
                 _emit_error(ErrorCode.PAIR_TIMEOUT, "Pairing timed out")
             console.print(
@@ -684,6 +686,7 @@ def pair(
             )
             raise typer.Exit(1)
 
+        trusted = trusted_or_none
         promoted = _record_pairing(p, profile, peer, trusted, relay_urls)
 
         if format_ == OutputFormat.JSON:

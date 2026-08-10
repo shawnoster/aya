@@ -8,6 +8,7 @@ import json
 import logging
 import secrets
 from datetime import UTC
+from typing import Any
 
 import websockets
 
@@ -359,7 +360,7 @@ async def publish_pair_request(
                     logger.warning("Failed to publish pair request to %s: %s", url, exc)
     if not published:
         raise PairingError("All relays rejected the pair request")
-    return last_event_id
+    return str(last_event_id)
 
 
 async def poll_for_pair_response(
@@ -532,7 +533,7 @@ def _build_pair_request(
     label: str,
     code_hash: str,
     relay_url: str,  # noqa: ARG001
-) -> dict:
+) -> dict[str, Any]:
     """Build a Nostr event for a pairing request."""
     created_at = int(clock.now(UTC).timestamp())
     expiration = created_at + PAIR_TTL_SECONDS
@@ -568,7 +569,7 @@ def _build_pair_response(
     initiator_pubkey: str,
     request_event_id: str,
     relay_url: str,  # noqa: ARG001
-) -> dict:
+) -> dict[str, Any]:
     """Build a Nostr event responding to a pairing request."""
     created_at = int(clock.now(UTC).timestamp())
     expiration = created_at + PAIR_TTL_SECONDS
@@ -602,7 +603,7 @@ def _build_pair_response(
 # ── Relay queries ────────────────────────────────────────────────────────────
 
 
-async def _find_pair_request(relay_url: str | list[str], code_hash: str) -> dict | None:
+async def _find_pair_request(relay_url: str | list[str], code_hash: str) -> dict[str, Any] | None:
     """Find a pair-request on any of the configured relays matching the given code hash."""
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
     since_ts = int(clock.now(UTC).timestamp()) - PAIR_TTL_SECONDS
@@ -632,7 +633,7 @@ _FIND_RETRY_DELAYS = (1, 2, 4)  # seconds — exponential backoff for not-found 
 
 async def _find_pair_request_with_retry(
     relay_urls: list[str], code_hash: str, *, _delays: tuple[int, ...] = _FIND_RETRY_DELAYS
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Wrap :func:`_find_pair_request` with exponential backoff for "not found" results.
 
     Relays may lag behind on propagation, so retry up to ``len(_delays)`` times

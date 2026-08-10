@@ -155,7 +155,8 @@ class PacketBody:
                 context=self.context,
             )
         return Packet(
-            **{"from": from_did, "to": to_did},  # type: ignore[arg-type]
+            from_did=from_did,
+            to_did=to_did,
             intent=intent,
             context=self.context,
             content_type=ContentType.MARKDOWN,
@@ -394,7 +395,8 @@ async def ack(
     to_did, to_label = _resolve_ack_recipient(profile, full_id)
 
     packet = Packet(
-        **{"from": local.did, "to": to_did},  # type: ignore[arg-type]
+        from_did=local.did,
+        to_did=to_did,
         intent="ack",
         content_type=ContentType.JSON,
         content={"in_reply_to": full_id, "message": message, "dismiss": dismiss},

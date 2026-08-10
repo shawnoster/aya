@@ -27,6 +27,19 @@
 
 ### Added
 
+- `aya sent` — the outbound log, counterpart to `aya inbox`. `aya send` left
+  no local trace at all, so "did that actually go out?" was unanswerable
+  (`aya packets` lists received packets only). Entries record recipient,
+  intent, event id, and per-relay delivery, and are pruned after 7 days.
+  `--failed` filters to packets some relay rejected. Sent bodies are now
+  persisted too, so `aya read <id>` works on them. Also exposed as the
+  `aya_sent` MCP tool.
+- **Per-relay delivery reporting on `send` and `ack`.** `publish` succeeds
+  when *any* relay accepts, so a partial failure was invisible — if the peer
+  polled only the rejecting relay, the packet was silently undeliverable
+  despite a green checkmark. Both commands now list each relay with its
+  outcome, warn when delivery was partial, and return `relays_ok` /
+  `relays_failed` under `--format json` and from the MCP tools.
 - `aya whoami` — active local identity, how it was resolved, every
   registered instance, every trusted peer, and the relay list. Previously
   the only way to enumerate instances was to pass a bad `--as` and read the

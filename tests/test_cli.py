@@ -4171,3 +4171,174 @@ class TestWhoami:
         payload = json.loads(result.output)
         assert payload["active_instance"] is None
         assert "ambiguous" in payload["resolved_by"]
+
+
+# ── outbound log + per-relay delivery ────────────────────────────────────────
+
+
+class TestSentLog:
+    """`aya send` must leave a local trace with per-relay delivery status."""
+
+    def _fake_client(self, report):
+        class FakeClient:
+            last_publish_report = report
+
+            def __init__(self, *a, **kw):
+                type(self).last_publish_report = report
+
+            async def publish(self, packet, pubkey, encrypt=True):
+                return "evt" + packet.id[-8:]
+
+        return FakeClient
+
+    def test_send_records_outbound_packet(self, profile_with_trusted: Path):
+        report = [{"url": "wss://a", "ok": True, "error": None}]
+        with patch("aya.cli.RelayClient", self._fake_client(report)):
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "hello",
+                    "-m",
+                    "body",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["relays_ok"] == ["wss://a"]
+        assert payload["relays_failed"] == []
+
+        saved = Profile.load(profile_with_trusted)
+        assert len(saved.sent_ids) == 1
+        assert saved.sent_ids[0]["to_label"] == "home"
+        assert saved.sent_ids[0]["intent"] == "hello"
+
+    def test_partial_delivery_is_reported_not_hidden(self, profile_with_trusted: Path):
+        """A relay that rejected must be named — publish succeeds if any accepts."""
+        report = [
+            {"url": "wss://good", "ok": True, "error": None},
+            {"url": "wss://bad", "ok": False, "error": "503"},
+        ]
+        with patch("aya.cli.RelayClient", self._fake_client(report)):
+            result = runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "hello",
+                    "-m",
+                    "body",
+                    "--format",
+                    "json",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["relays_ok"] == ["wss://good"]
+        assert payload["relays_failed"] == [{"url": "wss://bad", "error": "503"}]
+
+    def test_sent_command_lists_and_filters(self, profile_with_trusted: Path):
+        report = [
+            {"url": "wss://good", "ok": True, "error": None},
+            {"url": "wss://bad", "ok": False, "error": "503"},
+        ]
+        with patch("aya.cli.RelayClient", self._fake_client(report)):
+            runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "partial",
+                    "-m",
+                    "b",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+        with patch(
+            "aya.cli.RelayClient",
+            self._fake_client([{"url": "wss://good", "ok": True, "error": None}]),
+        ):
+            runner.invoke(
+                app,
+                [
+                    "send",
+                    "--to",
+                    "home",
+                    "--intent",
+                    "clean",
+                    "-m",
+                    "b",
+                    "--profile",
+                    str(profile_with_trusted),
+                ],
+            )
+
+        result = runner.invoke(
+            app, ["sent", "--format", "json", "--profile", str(profile_with_trusted)]
+        )
+        assert result.exit_code == 0, result.output
+        intents = [p["intent"] for p in json.loads(result.output)["packets"]]
+        assert intents == ["clean", "partial"]  # newest first
+
+        result = runner.invoke(
+            app,
+            ["sent", "--failed", "--format", "json", "--profile", str(profile_with_trusted)],
+        )
+        failed = json.loads(result.output)["packets"]
+        assert [p["intent"] for p in failed] == ["partial"]
+
+    def test_sent_empty_by_default(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app, ["sent", "--format", "json", "--profile", str(profile_with_trusted)]
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["packets"] == []
+
+    def test_sent_ids_round_trip(self, profile_with_trusted: Path):
+        p = Profile.load(profile_with_trusted)
+        p.sent_ids.append(
+            {
+                "id": "01KZN6N2Q4Q9NHRRQAHN0NFPCB",
+                "sent_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "to_did": "did:key:zAAA",
+                "to_label": "home",
+                "intent": "x",
+                "event_id": "evt",
+                "relays_ok": ["wss://a"],
+                "relays_failed": [],
+            }
+        )
+        p.save(profile_with_trusted)
+        assert len(Profile.load(profile_with_trusted).sent_ids) == 1
+
+    def test_sent_ids_pruned_after_ttl(self, profile_with_trusted: Path):
+        p = Profile.load(profile_with_trusted)
+        old = (datetime.now(UTC) - timedelta(days=8)).isoformat().replace("+00:00", "Z")
+        p.sent_ids.append(
+            {
+                "id": "01KZN6N2Q4Q9NHRRQAHN0NFPCB",
+                "sent_at": old,
+                "to_did": "did:key:zAAA",
+                "to_label": "home",
+                "intent": "stale",
+                "event_id": "evt",
+                "relays_ok": [],
+                "relays_failed": [],
+            }
+        )
+        p.save(profile_with_trusted)
+        assert Profile.load(profile_with_trusted).sent_ids == []

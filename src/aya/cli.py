@@ -341,6 +341,69 @@ def _load_profile(profile_path: Path) -> Profile:
     return Profile.load(profile_path)
 
 
+def _delivery_from_report(
+    report: list[dict[str, object]], relay_urls: list[str]
+) -> tuple[list[str], list[dict[str, object]]]:
+    """Split a RelayClient publish report into (accepted URLs, failures).
+
+    Falls back to "all accepted" for clients that predate the report attribute.
+    """
+    if not report:
+        return list(relay_urls), []
+    ok = [str(r["url"]) for r in report if r.get("ok")]
+    failed = [{"url": r["url"], "error": r.get("error")} for r in report if not r.get("ok")]
+    return ok, failed
+
+
+def _record_sent(
+    p: Profile,
+    profile_path: Path,
+    packet: Packet,
+    *,
+    to_did: str,
+    to_label: str,
+    event_id: str,
+    relays_ok: list[str],
+    relays_failed: list[dict[str, object]],
+) -> None:
+    """Append to the outbound log and persist the body for later `aya read`."""
+    p.sent_ids.append(
+        {
+            "id": packet.id,
+            "sent_at": packet.sent_at,
+            "to_did": to_did,
+            "to_label": to_label,
+            "intent": packet.intent,
+            "event_id": event_id,
+            "relays_ok": relays_ok,
+            "relays_failed": relays_failed,
+        }
+    )
+    p.save(profile_path)
+    # Best-effort body persistence so `aya read <id>` works on sent packets too.
+    try:
+        from aya.paths import PACKETS_DIR
+
+        _assert_valid_ulid(packet.id)
+        PACKETS_DIR.mkdir(parents=True, exist_ok=True)
+        packet_file = PACKETS_DIR / f"{packet.id}.json"
+        packet_file.write_text(packet.to_json())
+        with suppress(OSError):
+            packet_file.chmod(0o600)
+    except Exception:
+        logger.debug("Could not persist sent packet body for %s", packet.id, exc_info=True)
+
+
+def _render_delivery(relays_ok: list[str], relays_failed: list[dict[str, object]]) -> str:
+    """One line per relay, so a partial delivery is visible rather than implied."""
+    lines = [f"  [green]✓[/green] {url}" for url in relays_ok]
+    lines += [
+        f"  [red]✗[/red] {f['url']} [dim]({f.get('error') or 'failed'})[/dim]"
+        for f in relays_failed
+    ]
+    return "\n".join(lines)
+
+
 def _resolve_instance_labelled(
     p: Profile, instance: str | None, *, quiet: bool = False
 ) -> tuple[Identity, str]:
@@ -450,7 +513,7 @@ def use(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
-    """Set the local identity that commands use when ``--as`` is omitted."""
+    """Set the local identity that commands use when --as is omitted."""
     format_ = resolve_format(format_)
     p = _load_profile(profile)
     if label not in p.instances:
@@ -848,6 +911,20 @@ def send_cmd(
         if idempotency_key:
             _record_idempotency(idempotency_key, signed.id, event_id)
 
+        relays_ok, relays_failed = _delivery_from_report(
+            getattr(client, "last_publish_report", []), relay_urls
+        )
+        _record_sent(
+            p,
+            profile,
+            signed,
+            to_did=to_did,
+            to_label=to_label,
+            event_id=event_id,
+            relays_ok=relays_ok,
+            relays_failed=relays_failed,
+        )
+
         relay_count = len(relay_urls)
         relay_display = (
             relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
@@ -859,6 +936,8 @@ def send_cmd(
                     "packet_id": signed.id,
                     "event_id": event_id,
                     "relay": relay_display,
+                    "relays_ok": relays_ok,
+                    "relays_failed": relays_failed,
                     "intent": signed.intent,
                 }
             )
@@ -870,11 +949,16 @@ def send_cmd(
                 f"Intent:  [cyan]{signed.intent}[/cyan]\n"
                 f"Packet:  [dim]{signed.id[:8]}[/dim]\n"
                 f"Event:   [dim]{event_id[:8]}[/dim]\n"
-                f"Relay:   [dim]{relay_display}[/dim]\n"
-                f"To:      [dim]{to_label}[/dim]",
+                f"To:      [dim]{to_label}[/dim]\n\n"
+                f"Delivery:\n{_render_delivery(relays_ok, relays_failed)}",
                 title="aya — send",
             )
         )
+        if relays_failed:
+            err.print(
+                f"[yellow]Delivered to {len(relays_ok)} of {relay_count} relay(s). "
+                "If the peer polls only a failed relay, it will not see this packet.[/yellow]"
+            )
 
     asyncio.run(_run())
 
@@ -1039,6 +1123,20 @@ def ack(
         if idempotency_key:
             _record_idempotency(idempotency_key, signed.id, event_id)
 
+        relays_ok, relays_failed = _delivery_from_report(
+            getattr(client, "last_publish_report", []), relay_urls
+        )
+        _record_sent(
+            p,
+            profile,
+            signed,
+            to_did=to_did or "",
+            to_label=to_label or "",
+            event_id=event_id,
+            relays_ok=relays_ok,
+            relays_failed=relays_failed,
+        )
+
         # Mark any matching seed alert as seen (best-effort)
         try:
             alerts = show_alerts(mark_seen=False)
@@ -1049,11 +1147,6 @@ def ack(
         except Exception:  # noqa: S110
             pass  # alert cleanup is best-effort; do not block the ACK response
 
-        relay_count = len(relay_urls)
-        relay_display = (
-            relay_urls[0] if relay_count == 1 else f"{relay_urls[0]} (+{relay_count - 1})"
-        )
-
         if format_ == OutputFormat.JSON:
             _output_json(
                 {
@@ -1061,6 +1154,8 @@ def ack(
                     "event_id": event_id,
                     "in_reply_to": full_packet_id,
                     "to": to_label,
+                    "relays_ok": relays_ok,
+                    "relays_failed": relays_failed,
                 }
             )
             return
@@ -1071,11 +1166,15 @@ def ack(
                 f"In reply to: [dim]{full_packet_id[:8]}[/dim]\n"
                 f"To:          [dim]{to_label}[/dim]\n"
                 f"Message:     [cyan]{reply_text}[/cyan]\n"
-                f"Event:       [dim]{event_id[:8]}[/dim]\n"
-                f"Relay:       [dim]{relay_display}[/dim]",
+                f"Event:       [dim]{event_id[:8]}[/dim]\n\n"
+                f"Delivery:\n{_render_delivery(relays_ok, relays_failed)}",
                 title="aya — ack",
             )
         )
+        if relays_failed:
+            err.print(
+                f"[yellow]Delivered to {len(relays_ok)} of {len(relay_urls)} relay(s).[/yellow]"
+            )
 
     asyncio.run(_run())
 
@@ -3175,11 +3274,80 @@ def drop(
 
 
 @app.command()
+def sent(
+    limit: int = typer.Option(20, "--limit", "-n", help="Max packets to show"),
+    failed_only: bool = typer.Option(
+        False, "--failed", help="Show only packets that some relay rejected"
+    ),
+    profile: Path = typer.Option(DEFAULT_PROFILE),
+    format_: OutputFormat = typer.Option(OutputFormat.AUTO, "--format", "-f", help="Output format"),
+) -> None:
+    """List packets this instance has sent, with per-relay delivery status.
+
+    The counterpart to 'aya inbox'. 'aya packets' lists received packets
+    only; this is the outbound log. Entries are kept for 7 days.
+
+    A packet with entries under relays_failed was accepted by at least one
+    relay ('aya send' succeeds if any relay takes it) but rejected by others.
+    If the peer polls only a rejected relay, it will never see the packet.
+    """
+    format_ = resolve_format(format_)
+    if limit < 1:
+        limit = 20
+    p = _load_profile(profile)
+
+    entries = list(reversed(p.sent_ids))
+    if failed_only:
+        entries = [e for e in entries if e.get("relays_failed")]
+    entries = entries[:limit]
+
+    if format_ == OutputFormat.JSON:
+        _output_json({"packets": entries})
+        return
+
+    if not entries:
+        console.print(
+            "[dim]No sent packets.[/dim]"
+            if not failed_only
+            else "[dim]No sent packets with relay failures.[/dim]"
+        )
+        return
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("ID")
+    table.add_column("To")
+    table.add_column("Intent")
+    table.add_column("Sent")
+    table.add_column("Delivery")
+    for e in entries:
+        ok = e.get("relays_ok") or []
+        failed = e.get("relays_failed") or []
+        if failed:
+            delivery = f"[yellow]{len(ok)}/{len(ok) + len(failed)} relays[/yellow]"
+        else:
+            delivery = f"[green]{len(ok)}/{len(ok)} relays[/green]"
+        table.add_row(
+            str(e.get("id", ""))[:8],
+            str(e.get("to_label") or e.get("to_did", ""))[:20],
+            str(e.get("intent", ""))[:40],
+            str(e.get("sent_at", ""))[:19],
+            delivery,
+        )
+    console.print(table)
+    partial = [e for e in entries if e.get("relays_failed")]
+    if partial:
+        console.print(
+            f"[yellow]{len(partial)} packet(s) reached only some relays — "
+            "run with --format json to see which.[/yellow]"
+        )
+
+
+@app.command()
 def packets(
     limit: int = typer.Option(20, "--limit", "-n", help="Max packets to show"),
     format_: OutputFormat = typer.Option(OutputFormat.AUTO, "--format", "-f", help="Output format"),
 ) -> None:
-    """List recently ingested packets."""
+    """List recently received (ingested) packets. For outbound, see 'aya sent'."""
     from aya.paths import PACKETS_DIR
 
     format_ = resolve_format(format_)

@@ -24,6 +24,7 @@ Four commands cover almost everything:
 aya receive --auto-ingest --skip-untrusted   # check for new packets
 aya read --meta <packet-id>                  # read one
 aya send --to <peer> --seed --opener "..." --intent "..."   # ask something
+aya sent                                     # did it go out, and to which relays
 aya whoami                                   # who am I, who can I send to
 ```
 
@@ -232,6 +233,12 @@ aya send --to <peer> --intent "<one-line intent>" -m "<markdown body>"
 A missing or whitespace-only body is now rejected (exit 2) rather than
 sent as an empty packet.
 
+`send` succeeds if **any** relay accepts, so check `relays_failed` in the
+JSON (or the Delivery block in text mode) before reporting success. A
+packet that reached only some relays is invisible to a peer polling one of
+the failures. `aya sent --failed` lists every such packet from the last
+7 days.
+
 After every send, **immediately poll** per verb 1, then frame the report.
 
 ---
@@ -243,6 +250,9 @@ After every send, **immediately poll** per verb 1, then frame the report.
   Poll: <empty | N new>
   <one-line note when something's worth noticing>
 ```
+
+If any relay rejected the packet, say so on the third line — that is
+exactly the kind of wrinkle it exists for.
 
 - The first two lines are fixed.
 - The third is *optional* and *focused*: drift between what was asked and
@@ -263,6 +273,7 @@ at the chart table.
 ```bash
 aya relay status     # identity, trusted peers, relays, last poll
 aya whoami           # instances, active one, peers, relays
+aya sent --failed    # outbound packets a relay rejected
 ```
 
 Present as:
@@ -326,6 +337,7 @@ state.
 | `Unknown recipient '<label>'` | Not in `trusted_keys` | `aya pair`, or `aya trust <did> --peer <label>` |
 | `No Nostr pubkey found for recipient` | Trust entry lacks `nostr_pubkey` | Re-pair via `aya pair` |
 | Relay returns HTTP 503 | Transient outage | aya retries 5×; wait 30s |
+| Peer says they never got a packet you sent | Partial delivery — a relay they poll rejected it | `aya sent --failed`; re-send once the relay recovers |
 
 ---
 

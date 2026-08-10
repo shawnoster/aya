@@ -28,6 +28,7 @@ def test_list_tools_names():
         "aya_read",
         "aya_config_set",
         "aya_config_show",
+        "aya_sent",
         "aya_packets",
         "aya_relay_status",
     }

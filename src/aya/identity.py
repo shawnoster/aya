@@ -250,6 +250,10 @@ class Profile:
     last_checked: dict[str, str] = field(default_factory=dict)  # relay → ISO timestamp
     # {id, ingested_at, from_did?} — dedup
     ingested_ids: list[dict[str, str]] = field(default_factory=list)
+    # Outbound log: {id, sent_at, to_did, to_label, intent, event_id,
+    # relays_ok, relays_failed}. `aya send` used to leave no local trace, so
+    # "did that actually go out, and to which relays?" was unanswerable.
+    sent_ids: list[dict[str, Any]] = field(default_factory=list)
     # Packet IDs explicitly dropped from inbox view (e.g. bad-sig packets,
     # spam, anything the user wants to ignore permanently). Filtered out of
     # `aya inbox` listings on every poll.
@@ -375,6 +379,11 @@ class Profile:
             default_relays=relays,
             last_checked=aya_data.get("last_checked", {}),
             ingested_ids=_normalize_ingested_ids(aya_data.get("ingested_ids", [])),
+            sent_ids=[
+                e
+                for e in (aya_data.get("sent_ids") or [])
+                if isinstance(e, dict) and _is_valid_ulid(str(e.get("id", "")))
+            ],
             dropped_ids=_normalize_dropped_ids(aya_data.get("dropped_ids")),
         )
 
@@ -423,6 +432,19 @@ class Profile:
             except (ValueError, AttributeError):
                 pass  # unparseable timestamp — treat as expired
         data["aya"]["ingested_ids"] = pruned
+        # Same 7-day TTL as ingested_ids — the outbound log is an operational
+        # record, not an archive.
+        pruned_sent: list[dict[str, Any]] = []
+        for entry in self.sent_ids:
+            try:
+                ts = datetime.fromisoformat(str(entry.get("sent_at", "")).replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=UTC)
+                if ts >= cutoff:
+                    pruned_sent.append(entry)
+            except (ValueError, AttributeError):
+                pass  # unparseable timestamp — treat as expired
+        data["aya"]["sent_ids"] = pruned_sent
         data["aya"]["dropped_ids"] = self.dropped_ids
         path.write_text(json.dumps(data, indent=2))
         path.chmod(0o600)  # private keys live here — owner-read only

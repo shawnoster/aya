@@ -253,6 +253,27 @@ _TOOLS: list[types.Tool] = [
         },
     ),
     types.Tool(
+        name="aya_sent",
+        description=(
+            "List packets this instance has sent, with per-relay delivery status. "
+            "Counterpart to aya_inbox; aya_packets lists received packets only."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max packets to return (default 20).",
+                },
+                "failed_only": {
+                    "type": "boolean",
+                    "description": "Only packets some relay rejected.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
         name="aya_relay_status",
         description="Show relay health and identity info for an instance.",
         inputSchema={
@@ -332,6 +353,46 @@ def _resolve_nostr_pubkey(did: str, profile: Any) -> str | None:
         if inst.did == did:
             return str(inst.nostr_public_hex)
     return None
+
+
+def _record_send(
+    profile: Any,
+    packet: Any,
+    *,
+    to_label: str,
+    event_id: str,
+    client: Any,
+    relay_urls: list[str],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Log an outbound packet and return its per-relay delivery outcome."""
+    from aya.cli import _delivery_from_report, _record_sent
+    from aya.paths import PROFILE_PATH
+
+    relays_ok, relays_failed = _delivery_from_report(
+        getattr(client, "last_publish_report", []), relay_urls
+    )
+    _record_sent(
+        profile,
+        PROFILE_PATH,
+        packet,
+        to_did=packet.to_did,
+        to_label=to_label,
+        event_id=event_id,
+        relays_ok=relays_ok,
+        relays_failed=relays_failed,
+    )
+    return relays_ok, relays_failed
+
+
+async def _handle_sent(arguments: dict[str, Any]) -> list[types.TextContent]:
+    """Outbound log with per-relay delivery status — counterpart to aya_inbox."""
+    profile = _load_profile()
+    limit = int(arguments.get("limit", 20) or 20)
+    failed_only = bool(arguments.get("failed_only"))
+    entries = list(reversed(profile.sent_ids))
+    if failed_only:
+        entries = [e for e in entries if e.get("relays_failed")]
+    return _text({"packets": entries[:limit]})
 
 
 def _label_for_did(profile: Any, did: str) -> str | None:
@@ -450,7 +511,22 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
     if idempotency_key:
         _record_idempotency(idempotency_key, signed.id, event_id)
 
-    return _text({"packet_id": signed.id, "event_id": event_id})
+    relays_ok, relays_failed = _record_send(
+        profile,
+        signed,
+        to_label=signed.to_did,
+        event_id=event_id,
+        client=client,
+        relay_urls=relay_urls,
+    )
+    return _text(
+        {
+            "packet_id": signed.id,
+            "event_id": event_id,
+            "relays_ok": relays_ok,
+            "relays_failed": relays_failed,
+        }
+    )
 
 
 async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -645,7 +721,23 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
     if idempotency_key:
         _record_idempotency(idempotency_key, signed.id, event_id)
 
-    return _text({"packet_id": signed.id, "event_id": event_id, "in_reply_to": full_packet_id})
+    relays_ok, relays_failed = _record_send(
+        profile,
+        signed,
+        to_label=_label_for_did(profile, to_did) or "",
+        event_id=event_id,
+        client=client,
+        relay_urls=relay_urls,
+    )
+    return _text(
+        {
+            "packet_id": signed.id,
+            "event_id": event_id,
+            "in_reply_to": full_packet_id,
+            "relays_ok": relays_ok,
+            "relays_failed": relays_failed,
+        }
+    )
 
 
 async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
@@ -776,6 +868,7 @@ _HANDLERS: dict[str, Any] = {
     "aya_config_set": _handle_config_set,
     "aya_config_show": _handle_config_show,
     "aya_packets": _handle_packets,
+    "aya_sent": _handle_sent,
     "aya_relay_status": _handle_relay_status,
 }
 

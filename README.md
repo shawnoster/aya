@@ -55,6 +55,9 @@ aya receive --auto-ingest --skip-untrusted
 
 # Who am I, and who can I send to?
 aya whoami
+
+# Did that actually go out, and to which relays?
+aya sent
 ```
 
 Labels can be anything — `home`/`work`, names, machine hostnames. They're local aliases for the keypair on each side.
@@ -273,11 +276,12 @@ session to pick up changes — no reinstall needed.
 | `aya send` | Build, sign, and publish a knowledge packet (body from `-m`, `--files`, `--seed --opener`, or stdin) |
 | `aya send-raw` | Publish a pre-built packet file to a Nostr relay |
 | `aya inbox` | List pending (un-ingested) packets |
+| `aya sent` | List packets you have sent, with per-relay delivery status (`--failed` to filter) |
 | `aya receive` | Review and ingest packets from the relay |
 | `aya read` | Read the body of a stored packet (`--meta` for headers, `--panel` for boxed display) |
 | `aya ack` | Acknowledge a received packet (sends a reply back) |
 | `aya drop` | Drop a packet from inbox view so it stops resurfacing |
-| `aya packets` | List stored packets, most recent first |
+| `aya packets` | List stored *received* packets, most recent first (outbound: `aya sent`) |
 | `aya context` | Build a context block from workspace state |
 | `aya status` | Workspace readiness check — systems, schedule, focus |
 | `aya mcp-server` | Start the MCP server (stdio transport) for Claude Code |

@@ -874,6 +874,18 @@ class TestMultiRelayPublish:
 
         assert len(event_id) == 64
 
+        # The rejecting relay must be recoverable — a bare success would hide
+        # that a peer polling only relay1 will never see this packet.
+        report = multi_client.last_publish_report
+        assert [r["url"] for r in report] == [
+            "wss://relay1.example.com",
+            "wss://relay2.example.com",
+        ]
+        assert report[0]["ok"] is False
+        assert report[0]["error"] == "blocked"
+        assert report[1]["ok"] is True
+        assert report[1]["error"] is None
+
     async def test_publish_raises_when_all_relays_fail(
         self, sender: Identity, packet: Packet, recipient: Identity
     ) -> None:

@@ -103,6 +103,8 @@ class RelayClient:
             raise ValueError("relay_urls must contain at least one non-empty string URL")
         self._private_key_hex = nostr_private_hex
         self.public_key_hex = nostr_public_hex
+        # Populated by publish(); one entry per relay, in polling order.
+        self.last_publish_report: list[dict[str, str | bool | None]] = []
 
     @property
     def relay_url(self) -> str:
@@ -150,13 +152,22 @@ class RelayClient:
         event = self._build_event(packet, recipient_nostr_pubkey, encrypt=encrypt)
         errors: list[str] = []
         last_event_id: str | None = None
+        # Per-relay outcome for the caller to surface. `publish` succeeds when
+        # *any* relay accepts, so a bare success hides a peer-visible partial
+        # failure: the one relay that rejected may be the only one the
+        # recipient polls.
+        report: list[dict[str, str | bool | None]] = []
 
         for relay_url in self._relay_urls:
-            event_id = await self._publish_to_relay(event, relay_url, packet)
+            event_id, error = await self._publish_to_relay(event, relay_url, packet)
             if event_id is not None:
                 last_event_id = event_id
+                report.append({"url": relay_url, "ok": True, "error": None})
             else:
                 errors.append(relay_url)
+                report.append({"url": relay_url, "ok": False, "error": error})
+
+        self.last_publish_report = report
 
         if last_event_id is not None:
             logger.debug("Packet %s published as event %s", packet.id[:8], last_event_id[:8])
@@ -164,8 +175,13 @@ class RelayClient:
 
         raise RelayError(f"All relays rejected the event: {errors}")
 
-    async def _publish_to_relay(self, event: dict, relay_url: str, packet: Packet) -> str | None:
-        """Try to publish *event* to *relay_url* with retries. Returns event ID or None."""
+    async def _publish_to_relay(
+        self, event: dict, relay_url: str, packet: Packet
+    ) -> tuple[str | None, str | None]:
+        """Try to publish *event* to *relay_url* with retries.
+
+        Returns ``(event_id, None)`` on success or ``(None, reason)`` on failure.
+        """
         for attempt in range(_MAX_RETRIES_PUBLISH):
             try:
                 async with websockets.connect(relay_url) as ws:
@@ -178,7 +194,7 @@ class RelayClient:
                             event["id"][:8],
                             relay_url,
                         )
-                        return event["id"]
+                        return event["id"], None
                     if _is_rate_limited(response):
                         delay = _backoff_delay(attempt)
                         logger.warning(
@@ -191,7 +207,8 @@ class RelayClient:
                         await asyncio.sleep(delay)
                         continue
                     logger.warning("Relay %s rejected event: %s", relay_url, response)
-                    return None
+                    reason = str(response[3]) if len(response) > 3 and response[3] else "rejected"
+                    return None, reason
             except Exception as exc:
                 if _is_transient_error(exc) and attempt < _MAX_RETRIES_PUBLISH - 1:
                     delay = _backoff_delay(attempt)
@@ -206,8 +223,8 @@ class RelayClient:
                     await asyncio.sleep(delay)
                 else:
                     logger.warning("Failed to publish to %s: %s", relay_url, exc)
-                    return None
-        return None
+                    return None, f"{type(exc).__name__}: {exc}"
+        return None, "rate-limited (retries exhausted)"
 
     async def fetch_pending(
         self,

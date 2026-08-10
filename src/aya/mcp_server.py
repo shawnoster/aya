@@ -667,7 +667,9 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
     matched = [pid for pid in ingested_ids if pid.startswith(packet_id)]
 
     if not matched:
-        return _error(f"Packet ID '{packet_id}' not found in ingested_ids.")
+        from aya.cli import _NOT_INGESTED_HINT
+
+        return _error(_NOT_INGESTED_HINT.format(packet_id=packet_id))
     if len(matched) > 1:
         return _error(f"Ambiguous prefix '{packet_id}' -- matches {len(matched)} packets.")
 

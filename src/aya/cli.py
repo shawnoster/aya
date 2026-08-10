@@ -394,6 +394,15 @@ def _record_sent(
         logger.debug("Could not persist sent packet body for %s", packet.id, exc_info=True)
 
 
+# A packet listed by `aya inbox` is not yet readable, and a bare "not found"
+# reads like a wrong ID or a bug when the packet is plainly visible in the
+# inbox. Always name the remedy.
+_NOT_INGESTED_HINT = (
+    "Packet '{packet_id}' is not ingested. If `aya inbox` lists it, it is still "
+    "pending — run `aya receive --auto-ingest` to ingest it first, then retry."
+)
+
+
 def _delivery_summary(relays_ok: list[str], attempted: int) -> str:
     """One-line delivery summary that never overstates reach.
 
@@ -1043,7 +1052,7 @@ def ack(
         if not matched:
             _emit_error(
                 ErrorCode.PACKET_NOT_FOUND,
-                f"Packet ID '{packet_id}' not found in ingested_ids.",
+                _NOT_INGESTED_HINT.format(packet_id=packet_id),
                 {"packet_id": packet_id},
             )
         if len(matched) > 1:
@@ -3072,10 +3081,12 @@ def read(
 ) -> None:
     """Read a previously ingested packet — extracts body without dumping the envelope JSON.
 
-    The packet must already be **ingested**. IDs listed by ``aya inbox`` are
-    still pending and are not readable until ``aya receive`` ingests them —
-    reading one returns PACKET_NOT_FOUND. The usual order is
-    ``aya receive --auto-ingest`` then ``aya read <id>``.
+    The packet must already be ingested. IDs listed by 'aya inbox' are still
+    pending and are not readable until 'aya receive' ingests them. The usual
+    order is 'aya receive --auto-ingest' then 'aya read <id>'.
+
+    Takes no --as: ingested packets are stored per-machine, not per-identity,
+    so every local instance reads the same store.
 
     For seed packets, prints the opener (and context_summary, open_questions
     if present). For content packets, prints the content directly. Use
@@ -3091,14 +3102,14 @@ def read(
         _emit_error(ErrorCode.INVALID_ARGUMENT, "Packet ID prefix must be at least 8 characters.")
 
     if not PACKETS_DIR.exists():
-        _emit_error(ErrorCode.PACKET_NOT_FOUND, "No ingested packets found.")
+        _emit_error(ErrorCode.PACKET_NOT_FOUND, _NOT_INGESTED_HINT.format(packet_id=packet_id))
 
     matches = [f for f in PACKETS_DIR.glob("*.json") if f.stem.startswith(packet_id)]
     if not matches:
         _emit_error(
             ErrorCode.PACKET_NOT_FOUND,
-            f"Packet '{packet_id}' not found.",
-            {"packet_id": packet_id},
+            _NOT_INGESTED_HINT.format(packet_id=packet_id),
+            {"packet_id": packet_id, "remedy": "aya receive --auto-ingest"},
         )
     if len(matches) > 1:
         _emit_error(
@@ -3366,7 +3377,10 @@ def packets(
     limit: int = typer.Option(20, "--limit", "-n", help="Max packets to show"),
     format_: OutputFormat = typer.Option(OutputFormat.AUTO, "--format", "-f", help="Output format"),
 ) -> None:
-    """List recently received (ingested) packets. For outbound, see 'aya sent'."""
+    """List recently received (ingested) packets. For outbound, see 'aya sent'.
+
+    Takes no --as: the packet store is per-machine, not per-identity.
+    """
     from aya.paths import PACKETS_DIR
 
     format_ = resolve_format(format_)

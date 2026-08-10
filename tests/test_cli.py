@@ -4398,3 +4398,36 @@ class TestDeliverySummary:
     def test_send_help_warns_exit_code_is_not_delivery(self):
         result = runner.invoke(app, ["send", "--help"])
         assert "relays_failed" in result.output
+
+
+class TestNotIngestedErrorIsActionable:
+    """A packet visible in `aya inbox` must not error as a bare 'not found'."""
+
+    def test_read_names_the_remedy(self, profile_with_trusted: Path):
+        result = runner.invoke(app, ["read", "--format", "json", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"])
+        assert result.exit_code != 0
+        payload = json.loads(result.output)["error"]
+        assert payload["code"] == "PACKET_NOT_FOUND"
+        assert "aya receive" in payload["message"]
+        assert "inbox" in payload["message"]
+
+    def test_ack_names_the_remedy(self, profile_with_trusted: Path):
+        result = runner.invoke(
+            app,
+            [
+                "ack",
+                "01ZZZZZZZZZZZZZZZZZZZZZZZZ",
+                "hi",
+                "--format",
+                "json",
+                "--profile",
+                str(profile_with_trusted),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "aya receive" in json.loads(result.output)["error"]["message"]
+
+    def test_identity_less_commands_say_why(self):
+        for cmd in ("read", "packets"):
+            result = runner.invoke(app, [cmd, "--help"])
+            assert "no --as" in result.output, cmd

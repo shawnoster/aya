@@ -321,6 +321,36 @@ session to pick up changes — no reinstall needed.
 - **Packets**: Signed JSON envelopes with markdown content, TTL, and conflict strategies
 - **Security**: End-to-end encryption, signature verification, user approval before ingest, trust registry
 
+## Working on aya
+
+The package is laid out in layers, and dependencies point inward only:
+
+| Layer | Holds | May import |
+| ---- | ---- | ---- |
+| `entities/` | `Packet`, `Identity`, `TrustedKey`, `Profile`, crypto | nothing else |
+| `usecases/` | `relay_ops`, `ingest`, `triage`, `resolve`, `pair`, `watch_chains`, `status` | `entities` |
+| `adapters/` | `cli/`, `mcp_server`, `relay`, `clock`, `paths`, and the storage gateways | `usecases`, `entities` |
+| `scheduler/` | a bounded subsystem, layered internally | — |
+
+Two rules matter more than the rest, and `tests/test_architecture.py` fails
+if either breaks:
+
+- **Nothing below `adapters/` imports `typer`, `rich` or `mcp`.** A use case
+  that can print or exit cannot be reused by the other surface — that is how
+  the CLI and MCP implementations drifted apart in the first place.
+- **The CLI and the MCP server do not import each other.** They are peers
+  over the same use cases, not layers.
+
+New behaviour goes in `usecases/`; the surfaces parse input and render
+results. See [`docs/architecture.md`](docs/architecture.md) for the full map.
+
+```bash
+uv sync
+uv run pytest                     # ~1000 tests, isolated from your real ~/.aya
+uv run ruff check --fix . && uv run ruff format .
+uv run mypy src/aya/              # strict, no exclusions
+```
+
 ## License
 
 MIT

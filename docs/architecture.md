@@ -200,51 +200,74 @@ Workspace structure (CLAUDE.md, AGENTS.md, skills, hooks) is defined in your wor
 
 ## Component Map
 
-Layered inward-to-outward. Source dependencies point inward only; the
-boundaries are enforced by `tests/test_architecture.py`.
+Layered inward to outward. Source dependencies point inward only, and the
+boundaries are enforced by `tests/test_architecture.py` — not left to
+convention.
 
 ```
 src/aya/
-├── entities/          — rules that hold without this application; no I/O
-│   ├── packet.py      — Packet, ContentType, ConflictStrategy, signing
-│   ├── identity.py    — Identity, TrustedKey, Profile
-│   └── encryption.py  — NIP-44 v2
+├── entities/           rules that hold without this application; no I/O
+│   ├── packet.py       Packet, ContentType, ConflictStrategy, signing
+│   ├── identity.py     Identity, TrustedKey, Profile
+│   └── encryption.py   NIP-44 v2
 │
-├── usecases/          — what aya does; no printing, no exit codes
-│   ├── relay_ops.py   — send / ack / receive / inbox, once for both surfaces
-│   ├── ingest.py      — persist a packet, alert on seeds
-│   ├── pair.py        — pairing exchange
-│   ├── resolve.py     — instance, recipient, relay and label resolution
-│   ├── triage.py      — which fetched packets to act on
-│   ├── status.py      — gather workspace readiness (facts only)
-│   ├── context.py     — context-block builder
-│   └── log.py         — daily-notes logger
+├── usecases/           what aya does; no printing, no exit codes
+│   ├── relay_ops.py    send / ack / receive / inbox, once for both surfaces
+│   ├── ingest.py       persist a packet, alert on seeds
+│   ├── triage.py       which fetched packets to act on
+│   ├── resolve.py      instance, recipient, relay and label resolution
+│   ├── pair.py         the pairing exchange
+│   ├── watch_chains.py multi-stage watches that advance as stages complete
+│   ├── status.py       gather workspace readiness (facts only)
+│   ├── context.py      context-block builder
+│   └── log.py          daily-notes logger
 │
-├── adapters/          — everything touching the outside world
-│   ├── cli.py         — driving: typer app, input parsing, renderers
-│   ├── mcp_server.py  — driving: MCP tools over stdio
-│   ├── status_view.py — presenters for `aya status` (json/plain/rich)
-│   ├── relay.py       — driven: Nostr transport
-│   ├── paths.py       — driven: AYA_HOME resolution
-│   ├── atomic.py      — driven: file lock + atomic replace
-│   ├── ledger.py      — driven: ingested / sent / dropped logs
-│   ├── outbox.py      — driven: idempotency, delivery, sent log
-│   ├── config.py      — driven: workspace config
-│   ├── credentials.py — driven: credential checks
-│   ├── install.py     — driven: crontab + Claude Code hooks
-│   └── rewake.py      — driven: asyncRewake for PostToolUse watch hits
+├── adapters/           everything that touches the outside world
+│   ├── cli/            driving: the Typer app
+│   │   ├── _kernel.py    app, sub-apps, output formats, error codes
+│   │   ├── _render.py    all terminal output
+│   │   ├── send_cmds.py  send, send-raw, ack
+│   │   ├── poll_cmds.py  receive, inbox
+│   │   ├── packet_cmds.py read, drop, sent, packets
+│   │   ├── pair_cmds.py  pair
+│   │   ├── schedule_cmds.py, config_cmds.py, identity_cmds.py,
+│   │   └── hook_cmds.py, workspace_cmds.py
+│   ├── mcp_server.py   driving: MCP tools over stdio
+│   ├── status_view.py  presenters for `aya status` (json / plain / rich)
+│   ├── relay.py        driven: Nostr transport
+│   ├── clock.py        driven: the system clock, in one place
+│   ├── paths.py        driven: AYA_HOME resolution, on access
+│   ├── atomic.py       driven: file lock + atomic replace
+│   ├── profile_store.py driven: load/save profile.json
+│   ├── ledger.py       driven: ingested / sent / dropped logs
+│   ├── outbox.py       driven: idempotency, delivery, sent log
+│   ├── config.py       driven: workspace config
+│   ├── credentials.py  driven: credential checks
+│   ├── install.py      driven: crontab + Claude Code hooks
+│   └── rewake.py       driven: asyncRewake for PostToolUse watch hits
 │
-└── scheduler/         — bounded subsystem, layered internally
-    ├── core.py        — CRUD, poll, tick, pending
-    ├── storage.py     — persistence, locking, atomic writes
-    ├── providers.py   — github-pr, jira, ci-checks pollers
-    ├── display.py     — alert rendering
-    ├── time_utils.py  — due-date parsing, timezones
-    └── types.py       — SchedulerItem, AlertItem, SuppressedCron
+└── scheduler/          bounded subsystem, layered internally
+    ├── core.py         CRUD, poll, tick, pending, watch validation
+    ├── storage.py      persistence, locking, atomic writes
+    ├── providers.py    github-pr, jira, ci-checks pollers
+    ├── display.py      alert rendering
+    ├── time_utils.py   due-date parsing, timezones
+    └── types.py        SchedulerItem, AlertItem, SuppressedCron
 ```
 
 The two driving adapters are peers: each parses its own input, calls a use
-case, and renders the result. Neither imports the other.
+case, and renders the result. Neither imports the other — `cli` imports
+`mcp_server` in one direction only, to start it.
+
+### Why the layers
+
+`send`, `ack`, `receive` and `inbox` used to exist twice, once per surface.
+The copies drifted: read receipts fired on one of four ingest paths, one
+surface encrypted acks and the other did not, one honoured `--dismiss` and
+the other hardcoded it, and a packet dropped with `aya drop` was silently
+re-ingested by the next poll. Every one of those was the same shape — one
+rule, written more than once. The use-case layer exists so there is one
+place for each to be written.
 
 ## Security Model
 

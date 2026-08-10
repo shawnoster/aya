@@ -7,7 +7,7 @@
 - **`aya drop` now survives a poll.** The drop filter was applied in the two
   `inbox` paths and neither `receive` path, so a dropped packet vanished from
   the listing and was silently re-ingested by the very next poll. All four
-  filter sites (CLI and MCP, receive and inbox) now share `aya/triage.py`.
+  filter sites (CLI and MCP, receive and inbox) now share `aya/usecases/triage.py`.
 - **The CLI accepts every provider the scheduler supports.** `schedule watch`
   re-implemented a narrower provider gate that never learned about
   `ci-checks`, so the CLI rejected specs the MCP surface accepted. Both now
@@ -18,7 +18,7 @@
   read-then-`write_text`, so a crash mid-write truncated the only copy of every
   instance private key, and two writers spanning a relay round-trip silently
   lost one side's changes. The scheduler already had lock + atomic-replace;
-  those primitives now live in `aya/atomic.py` and both use them. The mode is
+  those primitives now live in `aya/adapters/atomic.py` and both use them. The mode is
   applied before the rename, closing the window where the key file existed at
   the umask default.
 - **Packet ledgers moved out of the key file** into `ledger.json`, with their
@@ -88,7 +88,84 @@
 - `from_label` on `aya_inbox` results, removing the `aya_relay_status`
   round-trip previously needed to map a sender DID to a human label.
 
+#### Testing
+
+- **`tests/conftest.py` isolates `AYA_HOME` for every test.** The suite wrote
+  packet files into the developer's real `~/.aya/packets`, where `ingest`
+  unlinks anything older than 7 days — running the tests destroyed real
+  packets. Isolation was previously opt-in per test class and inconsistent.
+- **`tests/test_architecture.py`** makes the layering executable: entities
+  import no outer layer, entities and usecases import no typer/rich/mcp,
+  usecases import no driving adapter, the two surfaces do not import each
+  other, and no module sits loose at the package root.
+- **Advertised MCP tools must have a handler.** A tool in `_TOOLS` with no
+  `_HANDLERS` entry returned `{"error": "Unknown tool"}` as a *successful*
+  result, and `_HANDLERS` appeared in no test at all.
+- **`adapters/clock.py` is the one place time is read.** `datetime.now()` was
+  called at ~40 sites, so time-dependent behaviour could only be tested by
+  patching `datetime` itself — which had already grown production
+  scaffolding (`scheduler.core._dt_now`, and a `datetime` re-export commented
+  "exposed for test monkeypatching"). Both are deleted; freezing time is now
+  one patch of `aya.adapters.clock.now`.
+- **`RelayClient` takes an injectable `sleep`.** One rejection test spent
+  29.4s in real `asyncio.sleep` — 74% of the suite — which is why the retry
+  matrix had no other coverage. Suite runtime: 42.6s → ~20s.
+
 ### Changed
+
+#### Package structure
+
+The package is laid out in Clean Architecture layers, and the boundaries are
+enforced by `tests/test_architecture.py` rather than left to convention:
+
+    entities/   packet, identity, encryption            no I/O, no framework
+    usecases/   relay_ops, ingest, pair, resolve,
+                triage, status, context, log,
+                watch_chains                            no printing, no exit codes
+    adapters/   cli/, mcp_server, status_view, relay,
+                clock, paths, atomic, ledger, outbox,
+                profile_store, config, credentials,
+                install, rewake                         everything external
+    scheduler/  unchanged bounded subsystem, layered internally
+
+**Breaking: every module path changes.** The console entry point is now
+`aya.adapters.cli:app`.
+
+- **The four relay operations are single-sourced.** `send`, `ack`, `receive`
+  and `inbox` existed twice — a Typer command and an MCP handler, each with
+  its own packet construction, signing, publishing, cursor advancement and
+  ledger bookkeeping. `usecases/relay_ops.py` is that logic once; both
+  surfaces became adapters over it. `mcp_server` no longer imports from `cli`,
+  so the two are peers rather than a cycle.
+- **`cli.py` is a package.** It was 3,804 lines holding 43 commands, their
+  helpers, and a 635-line watch-chain state machine that was application
+  logic, not presentation. Now: `_kernel` (app, sub-apps, plumbing),
+  `_render` (all terminal output), and one module per command group —
+  `send_cmds`, `poll_cmds`, `packet_cmds`, `pair_cmds`, `schedule_cmds`,
+  `config_cmds`, `identity_cmds`, `hook_cmds`, `workspace_cmds`. Largest is
+  500 lines.
+- **Profile no longer persists itself.** `load_profile` / `save_profile` live
+  in `adapters/profile_store.py`; the entity keeps `resolve_instance_name`,
+  `add_relay` and `is_trusted` — rules about the data, not about where it
+  lives. **Breaking: `Profile.load` and `Profile.save` are gone.**
+- **`aya status` gathers and renders separately.** Gathering stays in
+  `usecases/status.py`; the JSON, plain and Rich presenters moved to
+  `adapters/status_view.py`.
+
+#### Type checking
+
+- **The whole package is type-checked.** Six modules — the six largest — were
+  excluded from mypy under a note about pre-existing errors. The exclusion
+  list is gone and `mypy src/aya/` passes strict on every file.
+- **Breaking:** `Packet` is constructed with `from_did=` / `to_did=` rather
+  than `**{"from": …, "to": …}`. The model has always accepted the field
+  names via `populate_by_name`; the aliased-dict form defeated type checking
+  at 62 call sites. The wire format is unchanged.
+- Watch-chain bookkeeping keys are declared on `SchedulerItem` alongside the
+  reminder, watch and recurring variants, instead of every helper taking
+  `dict[str, Any]`.
+
+#### Other
 
 - `aya_inbox` and `aya_receive` return `{"packets": [...], ...}` instead of a
   bare list, matching the CLI. **Breaking** for callers that indexed the

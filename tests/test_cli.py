@@ -255,10 +255,10 @@ class TestPair:
         )
 
         with (
-            patch("aya.adapters.cli.generate_code", return_value="TEST-CODE-0001"),
-            patch("aya.adapters.cli.hash_code", return_value="deadbeef"),
-            patch("aya.adapters.cli.publish_pair_request", return_value="req_event_id"),
-            patch("aya.adapters.cli.poll_for_pair_response", return_value=buggy_trusted),
+            patch("aya.adapters.cli.relay_cmds.generate_code", return_value="TEST-CODE-0001"),
+            patch("aya.adapters.cli.relay_cmds.hash_code", return_value="deadbeef"),
+            patch("aya.adapters.cli.relay_cmds.publish_pair_request", return_value="req_event_id"),
+            patch("aya.adapters.cli.relay_cmds.poll_for_pair_response", return_value=buggy_trusted),
         ):
             result = runner.invoke(
                 app,
@@ -305,7 +305,7 @@ class TestPair:
             nostr_pubkey=initiator_identity.nostr_public_hex,
         )
 
-        with patch("aya.adapters.cli.join_pairing", return_value=initiator_trusted):
+        with patch("aya.adapters.cli.relay_cmds.join_pairing", return_value=initiator_trusted):
             result = runner.invoke(
                 app,
                 [
@@ -1088,7 +1088,7 @@ class TestHookWatchPushUpdates:
             patch("aya.usecases.watch_chains.poll_watch") as mock_poll,
             patch("aya.usecases.watch_chains.rewake_emit") as mock_rewake,
         ):
-            from aya.adapters.cli import _hook_watch_impl
+            from aya.usecases.watch_chains import _hook_watch_impl
 
             result = _hook_watch_impl(payload)
 
@@ -1152,7 +1152,7 @@ class TestHookWatchPushUpdates:
             patch("aya.usecases.watch_chains.poll_watch", return_value=(None, False)) as mock_poll,
             patch("aya.usecases.watch_chains.rewake_emit") as mock_rewake,
         ):
-            from aya.adapters.cli import _hook_watch_impl
+            from aya.usecases.watch_chains import _hook_watch_impl
 
             result = _hook_watch_impl(payload)
 
@@ -1770,10 +1770,10 @@ class TestInbox:
 class TestAutoFormat:
     def test_auto_resolves_to_text_in_tty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When stdout is a TTY, AUTO should produce text output."""
-        from aya.adapters.cli import OutputFormat, resolve_format
+        from aya.adapters.cli._kernel import OutputFormat, resolve_format
 
         monkeypatch.delenv("AYA_FORMAT", raising=False)
-        with patch("aya.adapters.cli.sys") as mock_sys:
+        with patch("aya.adapters.cli._kernel.sys") as mock_sys:
             mock_sys.stdout.isatty.return_value = True
             assert resolve_format(OutputFormat.AUTO) == OutputFormat.TEXT
 
@@ -2339,16 +2339,16 @@ class TestStructuredErrors:
         """TTY stderr emits Rich-formatted text, not JSON."""
         import io
 
-        from aya.adapters.cli import ErrorCode, _emit_error
+        from aya.adapters.cli._kernel import ErrorCode, _emit_error
 
         fake_stderr = io.StringIO()
         fake_stderr.isatty = lambda: True  # type: ignore[attr-defined]
-        monkeypatch.setattr("aya.adapters.cli.sys.stderr", fake_stderr)
+        monkeypatch.setattr("aya.adapters.cli._kernel.sys.stderr", fake_stderr)
 
         # _emit_error writes to the module-level `err` Console, which
         # resolves sys.stderr lazily — so we also redirect the Console's
         # output to our fake stream for capture.
-        monkeypatch.setattr("aya.adapters.cli.err", Console(file=fake_stderr))
+        monkeypatch.setattr("aya.adapters.cli._kernel.err", Console(file=fake_stderr))
 
         with pytest.raises(typer.Exit):
             _emit_error(
@@ -3207,7 +3207,7 @@ class TestDrop:
         """
         import asyncio as _asyncio
 
-        monkeypatch.setattr("aya.adapters.cli._RELAY_FETCH_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr("aya.adapters.cli.relay_cmds._RELAY_FETCH_TIMEOUT_SECONDS", 0.1)
 
         async def slow_fetch(*args, **kwargs):
             # Simulate a relay that keeps sending packets but each one
@@ -4489,7 +4489,7 @@ class TestRelayPromotion:
 
         peer = Identity.generate("bob")
         trusted = TrustedKey(did=peer.did, label="", nostr_pubkey=peer.nostr_public_hex)
-        from aya.adapters.cli import _record_pairing
+        from aya.adapters.cli._kernel import _record_pairing
 
         p = load_profile(profile_with_instance)
         promoted = _record_pairing(
@@ -4508,7 +4508,7 @@ class TestRelayPromotion:
         save_profile(p, profile_with_instance)
         peer = Identity.generate("bob")
         trusted = TrustedKey(did=peer.did, label="", nostr_pubkey=peer.nostr_public_hex)
-        from aya.adapters.cli import _record_pairing
+        from aya.adapters.cli._kernel import _record_pairing
 
         p = load_profile(profile_with_instance)
         assert (

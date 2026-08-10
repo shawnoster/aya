@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aya.adapters.cli import _hook_watch_impl
+from aya.usecases.watch_chains import _hook_watch_impl
 
 
 @pytest.fixture

@@ -137,8 +137,8 @@ known-first-party = ["aya"]
 "src/aya/usecases/watch_chains.py" = [
     "PLC0415",  # deferred scheduler/subprocess imports keep hook startup lean
 ]
-"src/aya/adapters/cli.py" = [
-    "PLC0415",  # deferred import of mcp_server avoids pulling heavy deps at CLI startup
+"src/aya/adapters/cli/*.py" = [
+    "PLC0415",  # deferred imports keep CLI startup lean
 ]
 "src/aya/usecases/log.py" = [
     "S603",     # subprocess call — git CLI, not untrusted input
@@ -181,7 +181,7 @@ module = [
     "aya.adapters.relay",
     "aya.usecases.pair",
     "aya.usecases.status",
-    "aya.adapters.cli",
+    "aya.adapters.cli.*",
     "aya.adapters.mcp_server",
     # Extracted from cli.py, where it had never been type-checked.
     # The 30 errors are pre-existing, not introduced by the move.

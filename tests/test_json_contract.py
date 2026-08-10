@@ -213,7 +213,7 @@ class TestReceiveContract:
             if False:  # pragma: no cover
                 yield
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,

@@ -426,7 +426,7 @@ class TestSend:
         self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         mock_publish = AsyncMock(return_value="a" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -450,7 +450,7 @@ class TestSend:
 
     def test_send_seed(self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_publish = AsyncMock(return_value="b" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -508,7 +508,7 @@ class TestSend:
     def test_send_default_resolves_to_single_trusted_key(self, profile_with_trusted: Path) -> None:
         """'--to default' should succeed when exactly one trusted key exists."""
         mock_publish = AsyncMock(return_value="b" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -603,7 +603,7 @@ class TestSend:
 
     def test_send_relay_error_exits_cleanly(self, profile_with_trusted: Path) -> None:
         """Relay connection failure should print a friendly message, not a traceback."""
-        with patch("aya.adapters.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = AsyncMock(side_effect=Exception("conn refused"))
             result = runner.invoke(
                 app,
@@ -630,7 +630,7 @@ class TestSend:
             captured_packet = signed
             return "c" * 64
 
-        with patch("aya.adapters.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = AsyncMock(side_effect=_capture_publish)
             result = runner.invoke(
                 app,
@@ -659,7 +659,7 @@ class TestSend:
         async def _capture_publish(signed, *a, **kw):
             return "d" * 64
 
-        with patch("aya.adapters.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = AsyncMock(side_effect=_capture_publish)
             result = runner.invoke(
                 app,
@@ -1273,7 +1273,7 @@ class TestReceive:
             fetch_calls.append((args, kwargs))
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             runner.invoke(
                 app,
@@ -1301,7 +1301,7 @@ class TestReceive:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1320,7 +1320,7 @@ class TestReceive:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1339,7 +1339,7 @@ class TestReceive:
                 yield  # makes this an async generator
             raise OSError("connection refused")
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1350,7 +1350,7 @@ class TestReceive:
 
         # Under --format json the same failure is machine-readable instead, so
         # a caller can tell an unreachable relay from a genuinely empty inbox.
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1370,7 +1370,7 @@ class TestReceive:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             mock_cls.return_value.send_receipt = AsyncMock()
             result = runner.invoke(
@@ -1397,7 +1397,7 @@ class TestReceive:
             mock_confirm.side_effect = AssertionError(
                 "typer.confirm should not be called when -y is used"
             )
-            with patch("aya.adapters.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.fetch_pending = mock_fetch
                 mock_cls.return_value.send_receipt = AsyncMock()
                 result = runner.invoke(
@@ -1433,7 +1433,7 @@ class TestReceive:
             fetch_calls.append((args, kwargs))
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             runner.invoke(
                 app,
@@ -1453,7 +1453,7 @@ class TestReceive:
             if False:  # pragma: no cover
                 yield  # makes this an async generator
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1482,7 +1482,7 @@ class TestReceive:
             mock_confirm.side_effect = AssertionError(
                 "typer.confirm should not be called with --skip-untrusted"
             )
-            with patch("aya.adapters.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.fetch_pending = mock_fetch
                 result = runner.invoke(
                     app,
@@ -1517,7 +1517,7 @@ class TestReceive:
             mock_confirm.side_effect = AssertionError(
                 "typer.confirm should not be called with --skip-untrusted"
             )
-            with patch("aya.adapters.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.fetch_pending = mock_fetch
                 result = runner.invoke(
                     app,
@@ -1557,7 +1557,7 @@ class TestReceive:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             mock_cls.return_value.send_receipt = AsyncMock()
             result = runner.invoke(
@@ -1619,7 +1619,7 @@ class TestInbox:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1638,7 +1638,7 @@ class TestInbox:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1666,7 +1666,7 @@ class TestInbox:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1697,7 +1697,7 @@ class TestInbox:
             yield ingested_packet
             yield new_packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1725,7 +1725,7 @@ class TestInbox:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1753,7 +1753,7 @@ class TestInbox:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -1864,7 +1864,7 @@ class TestAck:
         """ack sends an ACK packet and prints confirmation."""
         profile_path, packet_id, _home = profile_with_ingested
         mock_publish = AsyncMock(return_value="c" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -1888,7 +1888,7 @@ class TestAck:
         profile_path, packet_id, _home = profile_with_ingested
         prefix = packet_id[:8]
         mock_publish = AsyncMock(return_value="d" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -1901,7 +1901,7 @@ class TestAck:
         """--dismiss sets the dismiss flag in the ACK content and uses default message."""
         profile_path, packet_id, _home = profile_with_ingested
         mock_publish = AsyncMock(return_value="e" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -1931,7 +1931,7 @@ class TestAck:
         """ACK packet must have intent='ack' and in_reply_to set to the original packet ID."""
         profile_path, packet_id, _home = profile_with_ingested
         mock_publish = AsyncMock(return_value="f" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             runner.invoke(
                 app,
@@ -1980,7 +1980,7 @@ class TestAck:
         """ack must exit non-zero when the relay publish fails."""
         profile_path, packet_id, _home = profile_with_ingested
         mock_publish = AsyncMock(side_effect=Exception("relay down"))
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2014,7 +2014,7 @@ class TestAck:
         save_profile(profile, profile_path)
 
         mock_publish = AsyncMock(return_value="a" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2046,7 +2046,7 @@ class TestAck:
         save_profile(profile, profile_path)
 
         mock_publish = AsyncMock(return_value="b" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2076,7 +2076,7 @@ class TestDryRun:
         packet_file = tmp_path / "packet.json"
         packet_file.write_text(pkt.to_json())
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_publish = AsyncMock(return_value="a" * 64)
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
@@ -2099,7 +2099,7 @@ class TestDryRun:
         self, profile_with_trusted: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """--dry-run prints signed packet JSON and does not call publish."""
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_publish = AsyncMock(return_value="a" * 64)
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
@@ -2142,7 +2142,7 @@ class TestDryRun:
         profile_path = tmp_path / "profile.json"
         save_profile(profile, profile_path)
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_publish = AsyncMock(return_value="c" * 64)
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
@@ -2441,7 +2441,7 @@ class TestJsonFormat:
 
         mock_event_id = "e" * 64
         mock_publish = AsyncMock(return_value=mock_event_id)
-        with patch("aya.adapters.cli.RelayClient") as mock_client_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2627,7 +2627,7 @@ class TestIdempotency:
         packet_file.write_text(pkt.to_json())
 
         mock_publish = AsyncMock(return_value="e" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             # First send
             result1 = runner.invoke(
@@ -2648,7 +2648,7 @@ class TestIdempotency:
 
         # Second send with same key — should be cached
         mock_publish2 = AsyncMock(return_value="f" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls2:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls2:
             mock_cls2.return_value.publish = mock_publish2
             result2 = runner.invoke(
                 app,
@@ -2688,7 +2688,7 @@ class TestIdempotency:
 
         for key_name in ("key-a", "key-b"):
             mock_publish = AsyncMock(return_value="a" * 64)
-            with patch("aya.adapters.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.publish = mock_publish
                 result = runner.invoke(
                     app,
@@ -2712,7 +2712,7 @@ class TestIdempotency:
         monkeypatch.setenv("AYA_FORMAT", "json")
 
         mock_publish = AsyncMock(return_value="d" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result1 = runner.invoke(
                 app,
@@ -2736,7 +2736,7 @@ class TestIdempotency:
 
         # Second send with same key — cached
         mock_publish2 = AsyncMock(return_value="e" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls2:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls2:
             mock_cls2.return_value.publish = mock_publish2
             result2 = runner.invoke(
                 app,
@@ -2791,7 +2791,7 @@ class TestIdempotency:
         packet_file.write_text(pkt.to_json())
 
         mock_publish = AsyncMock(return_value="n" * 64)
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = mock_publish
             result = runner.invoke(
                 app,
@@ -2830,7 +2830,7 @@ class TestIdempotency:
 
         for _ in range(2):
             mock_publish = AsyncMock(return_value="a" * 64)
-            with patch("aya.adapters.cli.RelayClient") as mock_cls:
+            with patch("aya.adapters.relay.RelayClient") as mock_cls:
                 mock_cls.return_value.publish = mock_publish
                 result = runner.invoke(
                     app,
@@ -3029,7 +3029,7 @@ class TestDrop:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3053,7 +3053,7 @@ class TestDrop:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3095,7 +3095,7 @@ class TestDrop:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3118,7 +3118,7 @@ class TestDrop:
             if False:  # pragma: no cover
                 yield
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3152,7 +3152,7 @@ class TestDrop:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3175,7 +3175,7 @@ class TestDrop:
         async def mock_fetch(*args, **kwargs):
             yield packet
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = mock_fetch
             result = runner.invoke(
                 app,
@@ -3219,7 +3219,7 @@ class TestDrop:
             if False:  # pragma: no cover
                 yield
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = slow_fetch
             result = runner.invoke(
                 app,
@@ -3255,7 +3255,7 @@ class TestDrop:
             if False:  # pragma: no cover
                 yield
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = unreachable_fetch
             result = runner.invoke(
                 app,
@@ -3311,7 +3311,7 @@ class TestSendSignatureValidation:
             captured["packet"] = packet
             return "e" * 64
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3348,7 +3348,7 @@ class TestSendSignatureValidation:
             captured["packet"] = packet
             return "e" * 64
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3383,7 +3383,7 @@ class TestSendSignatureValidation:
             publish_calls += 1
             return "e" * 64
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3424,7 +3424,7 @@ class TestSendSignatureValidation:
             captured["packet"] = packet
             return "e" * 64
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -3456,7 +3456,7 @@ class TestSendSignatureValidation:
         async def fake_publish(packet, *args, **kwargs):
             return "e" * 64
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.publish = fake_publish
             result = runner.invoke(
                 app,
@@ -4035,7 +4035,7 @@ class TestEmptyResultsAreSelfDescribing:
             return
             yield  # pragma: no cover
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = empty_fetch
             result = runner.invoke(
                 app,
@@ -4062,7 +4062,7 @@ class TestEmptyResultsAreSelfDescribing:
             raise OSError("connection refused")
             yield  # pragma: no cover
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = failing_fetch
             result = runner.invoke(
                 app,
@@ -4084,7 +4084,7 @@ class TestEmptyResultsAreSelfDescribing:
             return
             yield  # pragma: no cover
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = empty_fetch
             result = runner.invoke(
                 app,
@@ -4102,7 +4102,7 @@ class TestEmptyResultsAreSelfDescribing:
             raise OSError("connection refused")
             yield  # pragma: no cover
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = failing_fetch
             result = runner.invoke(
                 app,
@@ -4200,7 +4200,7 @@ class TestSentLog:
 
     def test_send_records_outbound_packet(self, profile_with_trusted: Path):
         report = [{"url": "wss://a", "ok": True, "error": None}]
-        with patch("aya.adapters.cli.RelayClient", self._fake_client(report)):
+        with patch("aya.adapters.relay.RelayClient", self._fake_client(report)):
             result = runner.invoke(
                 app,
                 [
@@ -4233,7 +4233,7 @@ class TestSentLog:
             {"url": "wss://good", "ok": True, "error": None},
             {"url": "wss://bad", "ok": False, "error": "503"},
         ]
-        with patch("aya.adapters.cli.RelayClient", self._fake_client(report)):
+        with patch("aya.adapters.relay.RelayClient", self._fake_client(report)):
             result = runner.invoke(
                 app,
                 [
@@ -4260,7 +4260,7 @@ class TestSentLog:
             {"url": "wss://good", "ok": True, "error": None},
             {"url": "wss://bad", "ok": False, "error": "503"},
         ]
-        with patch("aya.adapters.cli.RelayClient", self._fake_client(report)):
+        with patch("aya.adapters.relay.RelayClient", self._fake_client(report)):
             runner.invoke(
                 app,
                 [
@@ -4276,7 +4276,7 @@ class TestSentLog:
                 ],
             )
         with patch(
-            "aya.adapters.cli.RelayClient",
+            "aya.adapters.relay.RelayClient",
             self._fake_client([{"url": "wss://good", "ok": True, "error": None}]),
         ):
             runner.invoke(
@@ -4383,7 +4383,7 @@ class TestDeliverySummary:
             async def publish(self, packet, pubkey, encrypt=True):
                 return "evt" + packet.id[-8:]
 
-        with patch("aya.adapters.cli.RelayClient", FakeClient):
+        with patch("aya.adapters.relay.RelayClient", FakeClient):
             result = runner.invoke(
                 app,
                 [
@@ -4538,7 +4538,7 @@ class TestReceivePersistGuard:
             yield packet
 
         with (
-            patch("aya.adapters.cli.RelayClient") as mock_cls,
+            patch("aya.adapters.relay.RelayClient") as mock_cls,
             patch("aya.usecases.relay_ops.ingest_packet", return_value=False),
         ):
             mock_cls.return_value.fetch_pending = fetch
@@ -4585,7 +4585,7 @@ class TestDropSurvivesReceive:
         p.dropped_ids.append(packet.id)
         save_profile(p, profile_with_trusted)
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             mock_cls.return_value.fetch_pending = fetch
             received = runner.invoke(
                 app,
@@ -4625,7 +4625,7 @@ class TestSendRawRequiresPubkey:
         ).sign(p.instances["default"])
         packet_file.write_text(packet.to_json())
 
-        with patch("aya.adapters.cli.RelayClient") as mock_cls:
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
             result = runner.invoke(
                 app,
                 ["send-raw", str(packet_file), "--profile", str(profile_with_instance)],

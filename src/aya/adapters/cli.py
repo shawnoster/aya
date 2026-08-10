@@ -24,6 +24,7 @@ from rich.text import Text
 
 from aya import __version__
 from aya.adapters import paths as _paths
+from aya.adapters import relay as _relay
 from aya.adapters.config import get_notebook_path, load_config, set_config_value
 from aya.adapters.install import install_scheduler, uninstall_scheduler
 from aya.adapters.outbox import (
@@ -33,7 +34,7 @@ from aya.adapters.outbox import (
     record_idempotency,
 )
 from aya.adapters.profile_store import load_profile, save_profile
-from aya.adapters.relay import RelayClient, RelayUnreachableError
+from aya.adapters.relay import RelayUnreachableError
 
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
@@ -799,7 +800,7 @@ def send_raw(
             )
             return
 
-    client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
+    client = _relay.RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
 
     # A None pubkey here would publish a correctly-signed event addressed to
     # nobody: every relay accepts it and no peer can ever match it.
@@ -917,7 +918,6 @@ def send_cmd(
                 encrypt=not no_encrypt,
                 idempotency_key=idempotency_key,
                 publish=not dry_run,
-                client_factory=RelayClient,
             )
         except (InstanceResolutionError, UnknownRecipientError, NoNostrPubkeyError) as exc:
             code = (
@@ -1005,7 +1005,6 @@ def ack(
                 relay=relay,
                 idempotency_key=idempotency_key,
                 publish=not dry_run,
-                client_factory=RelayClient,
             )
         except relay_ops.PacketNotIngestedError as exc:
             _emit_error(ErrorCode.PACKET_NOT_FOUND, str(exc), {"packet_id": packet_id})
@@ -1124,7 +1123,6 @@ def receive(
                 relay=relay,
                 decide=decide,
                 on_fresh=None if quiet else show_batch,
-                client_factory=RelayClient,
             )
         except InstanceResolutionError as exc:
             if not quiet:
@@ -1170,7 +1168,6 @@ def inbox(
                 instance=as_,
                 relay=relay,
                 include_ingested=show_all,
-                client_factory=RelayClient,
             )
         except InstanceResolutionError as exc:
             _emit_error(
@@ -2230,7 +2227,7 @@ def drop(
             # report RELAY_TIMEOUT so the caller can retry with a full
             # ID or a different --relay.
             relay_urls = [relay] if relay else p.default_relays
-            client = RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
+            client = _relay.RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
             relay_matches: list[str] = []
             try:
                 async with asyncio.timeout(_RELAY_FETCH_TIMEOUT_SECONDS):

@@ -166,9 +166,12 @@ def _assert_valid_ulid(id_: str) -> None:
 
 @dataclass
 class Profile:
-    """
-    Persistent assistant profile — personality + identity.
-    Stored at ~/.copilot/assistant_profile.json (or configured path).
+    """Local identities, trusted peers, relays and packet-ledger state.
+
+    Read and written by :mod:`aya.adapters.profile_store`, which resolves the
+    file under ``AYA_HOME`` (``~/.aya/profile.json`` by default). This class
+    holds the data and the rules over it — instance resolution, relay
+    ordering, trust checks — and knows nothing about storage.
     """
 
     instances: dict[str, Identity] = field(default_factory=dict)

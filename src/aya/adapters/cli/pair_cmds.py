@@ -49,7 +49,9 @@ def pair(
         "--as",
         help="Local identity to act as (default: primary instance)",
     ),
-    relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    relay: str = typer.Option(
+        None, help="Pair over only this relay, replacing the profile list (no fallback)"
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show pairing intent without publishing"
     ),

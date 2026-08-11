@@ -29,14 +29,16 @@ aya whoami                                   # who am I, who can I send to
 ```
 
 Identity and relays resolve from the profile — you do **not** need `--as` or
-`--relay`. Pass them only to override. If a command reports an ambiguous
-identity, run `aya whoami` and then `aya use <label>` once.
+`--relay` once pairing has run, because pairing promotes the relay it proved.
+Pass them only to override, and note `--relay` *replaces* the profile list
+rather than narrowing it — see [Relay strategy](#relay-strategy). If a command
+reports an ambiguous identity, run `aya whoami` and then `aya use <label>` once.
 
 Every empty result tells you what produced it:
 
 ```json
 {"packets": [], "instance": "guild-shawnoster",
- "relays": ["wss://relay.monocularjack.com"], "relay_reachable": true}
+ "relays": ["wss://nos.lol"], "relay_reachable": true}
 ```
 
 If `packets` is empty, check `instance` and `relay_reachable` **before**
@@ -324,6 +326,74 @@ state.
 
 ---
 
+## Relay strategy
+
+The one authoritative account of which relay a command talks to. Everything
+below is a property of the code, not a convention.
+
+**`--relay` replaces the profile list — it does not narrow it or fall back.**
+
+```python
+# usecases/resolve.py
+return [relay] if relay else list(profile.default_relays)
+```
+
+So `--relay X` means *only* X. If X is down, the command fails; it will not
+try the relays in your profile. Omit `--relay` to use the whole list, which
+is published to in full and polled in order.
+
+**Where the list comes from.** `aya init` seeds two public relays,
+`wss://relay.damus.io` and `wss://nos.lol`. `aya init --relay X` seeds X as
+the *only* relay and drops both — you lose the fallbacks, which is usually
+not what you want on a laptop.
+
+**Pairing uses the same list, and fixes it for you.** `aya pair` publishes
+the request to every relay in `default_relays` and polls all of them, so
+both sides must already share at least one relay for pairing to work at all.
+Whichever relay actually carried the exchange is then promoted to primary on
+*each* side independently — the initiator promotes the relay the response
+came back on, the joiner promotes the relay it found the request on. Neither
+side needs `--relay` for that to happen, and neither ends up promoting a
+relay that failed.
+
+The practical consequence: **`--relay` on `pair` is for reaching a peer who
+is only on a private relay.** Both ends must pass it, because a pairing
+request published only to a private relay cannot be found by a peer polling
+the public defaults. This is the mistake that looks like
+`No matching pairing request found (Relay mismatch)`.
+
+**To make a relay primary without re-pairing:** `aya relay add <url> --first`.
+Prefer this to hand-editing `~/.aya/profile.json`.
+
+**To check both ends agree:** `aya relay list` on each machine, or
+`aya relay status` for health plus identity.
+
+---
+
+## Delivery, duplicates and idempotency
+
+**`send` reports publish, not delivery.** Exit 0 means at least one relay
+accepted the event. Check `relays_failed`: a packet that reached only some
+relays is invisible to a peer polling one of the failures. `aya sent --failed`
+lists every such packet from the last 7 days.
+
+**There is no delivery receipt.** The receiver does publish a read receipt
+(Nostr kind 6999) on ingest, but nothing fetches it — `fetch_pending` filters
+on kind 5999 only, so receipts are write-only and invisible to the sender.
+`aya ack` is a *reply* the peer chooses to send, not a receipt: its message
+is delivered as a body. So "did they get it?" is answered by them acking, or
+not at all. Don't describe an ack as confirmation of delivery.
+
+**Duplicate protection is thin, and opt-in.** Inbound dedup is keyed on
+packet ID alone, so two packets with byte-identical content and different IDs
+are both ingested, stored and rendered with no warning. On the sending side,
+`--idempotency-key <key>` is the only guard: a repeat send with the same key
+inside 24 h returns the cached result instead of publishing again. Without a
+key, every `send` publishes unconditionally. Use a key whenever a retry could
+plausibly fire twice.
+
+---
+
 ## Failure modes
 
 | Symptom | Likely cause | Fix |
@@ -336,7 +406,9 @@ state.
 | `aya read <id>` → `PACKET_NOT_FOUND` | Not ingested yet | Run verb 1 (Check) first |
 | `Unknown recipient '<label>'` | Not in `trusted_keys` | `aya pair`, or `aya trust <did> --peer <label>` |
 | `No Nostr pubkey found for recipient` | Trust entry lacks `nostr_pubkey` | Re-pair via `aya pair` |
-| Peer unreachable on a fresh install | Only public relays seeded; peer is on a private one | Re-pair once with `aya pair --relay <url>` — it becomes primary |
+| Peer unreachable on a fresh install | Only public relays seeded; peer is on a private one | Re-pair with `aya pair --relay <url>` **on both machines** — each promotes the relay that carried it |
+| `No matching pairing request found (Relay mismatch)` | One end pinned `--relay`, the other polled the public defaults | Both ends must pass the same `--relay`, or neither |
+| Peer received the same content twice | Inbound dedup is by packet ID only — a resend with a new ID is a new packet | Send with `--idempotency-key` so a retry cannot double-publish |
 | Relay returns HTTP 503 | Transient outage | aya retries 5×; wait 30s |
 | Peer says they never got a packet you sent | Partial delivery — a relay they poll rejected it | `aya sent --failed`; re-send once the relay recovers |
 

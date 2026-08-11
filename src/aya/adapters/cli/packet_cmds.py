@@ -129,7 +129,9 @@ def drop(
         "--as",
         help="Local identity to act as (default: primary instance)",
     ),
-    relay: str | None = typer.Option(None, help="Relay URL (overrides profile default)"),
+    relay: str | None = typer.Option(
+        None, help="Use only this relay, replacing the profile list (no fallback)"
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(OutputFormat.AUTO, "--format", "-f", help="Output format"),
 ) -> None:
@@ -329,13 +331,12 @@ def packets(
 ) -> None:
     """List packets stored on this machine, newest first.
 
-    Both directions appear: received packets, and your own sent ones, whose
-    bodies ``outbox.record_sent`` saves so ``aya read`` works on them too. The
-    "From" column is how you tell them apart. For per-relay delivery status of
-    what you sent, use 'aya sent'.
+    Both directions appear: packets you received, and your own sent ones, whose
+    bodies are kept so 'aya read' works on them too. The "From" column tells
+    them apart. For per-relay delivery status of what you sent, use 'aya sent'.
 
-    Ordering is by local file write time, not ``sent_at`` — a batch ingested in
-    one poll shares an order unrelated to when the peer sent it.
+    Ordering is by local write time, not sent_at, so a batch ingested in one
+    poll shares an order unrelated to when the peer sent it.
 
     Takes no --as: the packet store is per-machine, not per-identity.
     """

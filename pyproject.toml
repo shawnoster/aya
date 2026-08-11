@@ -5,15 +5,15 @@ description = "Personal AI assistant toolkit — sync, schedule, identity"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "typer>=0.24",
-    "cryptography>=46",
-    "websockets>=16",
-    "python-ulid>=3",
+    "typer>=0.27",
+    "cryptography>=50",
+    "websockets>=17",
+    "python-ulid>=4",
     "pydantic>=2",
-    "rich>=14",
+    "rich>=15",
     "base58>=2",
     "coincurve>=20.0.0,<22",  # 21.0.0 has no cp314 wheel; source build fails on cffi 2.0.0 (see #101)
-    "mcp>=1.0",
+    "mcp>=2",  # 2.0 replaced the Server list_tools/call_tool decorators with on_* callbacks
 ]
 
 [project.scripts]
@@ -28,11 +28,11 @@ packages = ["src/aya"]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15",
+    "ruff>=0.16",
     "pylint>=4",
     "pytest>=9",
     "pytest-asyncio>=1",
-    "mypy>=1.19",
+    "mypy>=2.3",
     "respx>=0.22",
     "pre-commit>=4",
     "pytest-cov>=7.1.0",

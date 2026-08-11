@@ -52,10 +52,10 @@ def test_list_tools_names():
 
 
 def test_list_tools_have_schemas():
-    """Every tool has a non-empty inputSchema."""
+    """Every tool has a non-empty input_schema."""
     for tool in _TOOLS:
-        assert tool.inputSchema, f"{tool.name} missing inputSchema"
-        assert tool.inputSchema.get("type") == "object"
+        assert tool.input_schema, f"{tool.name} missing input_schema"
+        assert tool.input_schema.get("type") == "object"
 
 
 # ---------------------------------------------------------------------------
@@ -774,13 +774,13 @@ async def test_schedule_watch_tool_with_condition(tmp_path, monkeypatch):
 
 
 def test_schedule_watch_schema_includes_condition():
-    """aya_schedule_watch inputSchema exposes condition as an optional property."""
+    """aya_schedule_watch input_schema exposes condition as an optional property."""
     tool = next(t for t in _TOOLS if t.name == "aya_schedule_watch")
-    props = tool.inputSchema.get("properties", {})
+    props = tool.input_schema.get("properties", {})
     assert "condition" in props
     assert props["condition"]["type"] == "string"
     # condition must NOT be required
-    assert "condition" not in tool.inputSchema.get("required", [])
+    assert "condition" not in tool.input_schema.get("required", [])
 
 
 # ---------------------------------------------------------------------------

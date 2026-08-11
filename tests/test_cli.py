@@ -1186,10 +1186,6 @@ class TestHookWatchPushUpdates:
 
 @pytest.mark.usefixtures("_isolate_scheduler")
 class TestScheduleStatusCLI:
-    def test_status_exits_zero(self):
-        result = runner.invoke(app, ["schedule", "status"])
-        assert result.exit_code == 0
-
     def test_status_json_is_valid(self):
         result = runner.invoke(app, ["schedule", "status", "--format", "json"])
         assert result.exit_code == 0
@@ -1202,10 +1198,6 @@ class TestScheduleStatusCLI:
         result = runner.invoke(app, ["schedule", "status"])
         assert result.exit_code == 0
         assert "items" in result.output
-
-    def test_pending_exits_zero(self):
-        result = runner.invoke(app, ["schedule", "pending"])
-        assert result.exit_code == 0
 
     def test_pending_json_is_valid(self):
         result = runner.invoke(app, ["schedule", "pending", "--format", "json"])

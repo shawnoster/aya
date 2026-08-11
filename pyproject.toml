@@ -178,7 +178,18 @@ strict = true
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 build_command = "python -m pip install --quiet build && python -m build"
-commit_parser = "angular"
+# "angular" was renamed to "conventional" and is removed in v11.
+commit_parser = "conventional"
+
+[tool.semantic_release.changelog]
+# Insert each release under the flag rather than regenerating the whole file.
+mode = "update"
+insertion_flag = "<!-- version list -->"
+
+[tool.semantic_release.changelog.default_templates]
+# Only read here. At [tool.semantic_release] it is silently ignored, which is
+# why CHANGELOG.md went 88 tags without an update, and the flatter
+# [tool.semantic_release.changelog] form is deprecated.
 changelog_file = "CHANGELOG.md"
 
 [tool.semantic_release.remote]

@@ -77,6 +77,7 @@ select = [
     "PLW",  # pylint warnings
     "RUF",  # Ruff-specific rules
     "ANN",  # flake8-annotations
+    "SLF",  # flake8-self — src/ must not reach into private members
 ]
 ignore = [
     "B008",    # Typer/Click intentionally uses function calls in parameter defaults
@@ -90,6 +91,7 @@ known-first-party = ["aya"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
     "ANN",      # test signatures don't need full annotations
+    "SLF001",   # tests assert on private state on purpose
     "ARG",      # pytest fixtures often look unused
     "PLR2004",  # magic values in test assertions
     "S",        # tests may use patterns flagged by security rules
@@ -173,6 +175,9 @@ addopts = "-v"
 plugins = ["pydantic.mypy"]
 python_version = "3.13"
 strict = true
+# PEP 702: fail when we call something a dependency marked @deprecated, so a
+# removal in a later release surfaces here rather than at runtime.
+enable_error_code = ["deprecated"]
 
 
 [tool.semantic_release]

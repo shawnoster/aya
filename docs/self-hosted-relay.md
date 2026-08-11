@@ -170,7 +170,10 @@ curl -i https://nostr.yourdomain.com
 # {"name":"My aya relay","description":"Private relay for aya packet sync",...}
 ```
 
-Test with aya:
+Test with aya. `--relay` **replaces** your configured relay list for that one
+call rather than adding to it, so there is no fallback if the relay you name is
+unreachable. Use it for one-off checks like these. To use the relay
+permanently, add it to your profile in Step 5 and then omit the flag.
 
 ```bash
 # Check inbox via your relay
@@ -190,25 +193,25 @@ aya receive --relay wss://nostr.yourdomain.com
 
 ## Step 5 — Configure aya to use your relay
 
-Edit `~/.aya/profile.json` and update `default_relays`:
+Add your relay as the primary, keeping a public relay behind it:
 
-```json
-{
-  "aya": {
-    "default_relays": [
-      "wss://nostr.yourdomain.com",
-      "wss://nos.lol"
-    ]
-  }
-}
+```bash
+aya relay add wss://nostr.yourdomain.com --first
+aya relay add wss://nos.lol
+aya relay list
 ```
 
-Put your relay first — aya publishes to all configured relays and queries each
-one in order with deduplication, so the first entry is simply tried first. Keep
-`nos.lol` second as a fallback for when you're away from home and the NAS isn't
-reachable.
+`--first` puts your relay at the front of the list. aya publishes to every
+configured relay and queries each one in turn with deduplication, so the first
+entry is tried first. Keeping `nos.lol` behind it gives you a fallback for when
+you are away from home and the NAS is unreachable.
 
-Both instances (work and home) need the same update.
+Run both commands on both machines. Two instances that share no relay cannot
+reach each other, so the lists have to overlap.
+
+Prefer these commands to editing `~/.aya/profile.json` by hand: the profile is
+written atomically under a lock, and a hand-edit that races a running command
+can be overwritten.
 
 ---
 

@@ -126,7 +126,7 @@ Setup is **mostly CLI-only** — no MCP tools cover `aya init`,
    - **Symlink pattern.** If the consuming workspace has its own `Makefile` with a `link-skills` target, symlink each skill's `SKILL.md` into `~/.claude/commands/`. Typical wiring: `<workspace>/skills/{aya,relay}/` are symlinks into the aya repo's `.claude-plugin/skills/{aya,relay}/`, and `make link-skills` exposes them as flat slash commands. A SessionStart hook can keep the links fresh.
    - **Plugin-dir alias (portable, no Makefile needed).** If there's no symlink workflow:
      ```bash
-     alias claude='claude --plugin-dir /path/to/aya'
+     alias claude='claude --plugin-dir /path/to/aya/.claude-plugin'
      ```
      Adjust the path to the local aya clone. Loads `/aya` and `/relay` under the plugin namespace.
 

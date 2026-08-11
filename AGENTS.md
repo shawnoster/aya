@@ -60,7 +60,7 @@ aya receive --as alice --auto-ingest --yes --quiet
 
 # Set up recurring relay poll (persists across sessions)
 aya schedule recurring -m "relay-poll" -c "*/10 * * * *" \
-  -p "Run: aya receive --as alice --auto-ingest --quiet. If any packets were ingested, surface their content to the user."
+  -p "Run: aya receive --as alice --auto-ingest --skip-untrusted --quiet. If any packets were ingested, surface their content to the user."
 ```
 
 > **New machine?** See the "One-prompt setup" section in `README.md` for a single prompt that installs aya, pairs instances, wires hooks, and registers relay polling.
@@ -80,37 +80,20 @@ aya pair --code WORD-WORD-1234 --peer alice --as bob
 aya status
 ```
 
-> **`--as` vs `--label` vs `--peer`** — three flags, three roles:
-> - `--as` is your **local identity** (which keypair to act as). Matches the label from `aya init --label <name>`.
-> - `--label` is used with `aya init` to **name a new local identity**.
-> - `--peer` names a **remote machine** (used in `pair` and `trust`).
->
-> Common label patterns: `home`/`work` (personal setup), first names (sharing with a friend), `laptop`/`desktop`/`server` (by machine).
+> `--as` is the local identity, `--label` names a new one at `aya init`, and
+> `--peer` names a remote machine. See
+> [README](README.md#identity-flags---as---label---peer) for how the primary
+> instance resolves when `--as` is omitted.
 
-## Plugin & Slash Commands
+## Plugin Skills
 
-aya ships as a Claude Code plugin. Load it with:
-
-```bash
-claude --plugin-dir /path/to/aya
-```
-
-Or add a permanent alias to your shell profile:
-
-```bash
-alias claude='claude --plugin-dir /path/to/aya'
-```
-
-Available plugin skills (work in any project):
-
-| Skill | Verbs | What it does |
-|-------|-------|--------------|
-| `/aya` | setup, pair, status, refresh, watch | Manage aya — identity, pairing, health, updates, watches |
-| `/relay` | check, read, reply, send, status | Relay communication — send/receive packets between instances |
+`/aya` manages identity, pairing, health and updates. `/relay` sends and
+receives packets. Both work in any project once the plugin is loaded — see
+[README](README.md#claude-code-plugin) for the `--plugin-dir` setup.
 
 After editing skill files, run `/reload-plugins` to pick up changes live.
 
-## How Session Crons Work
+## Session Cron Mechanics
 
 aya persists recurring schedules. Claude Code fires them during sessions. The bridge:
 
@@ -130,7 +113,7 @@ Filtering happens at hook-time, not at fire-time. Both filters below are evaluat
 | Provider | Target | Condition | Notes |
 |----------|--------|-----------|-------|
 | `github-pr` | `owner/repo#123` | `approved_or_merged` (default), `merged`, `new_comments` | Uses `gh` CLI. `new_comments` fires when the total count of general PR comments (issue comments) or inline review comments increases since the last poll — does not fire on the first poll. `--remove-when merged_or_closed` auto-cleans. |
-| `jira-query` | JQL string | `new_results` | Requires `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`, `ATLASSIAN_SERVER_URL` env vars. |
+| `jira-query` | Jira Query Language (JQL) string | `new_results` | Requires `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`, `ATLASSIAN_SERVER_URL` env vars. |
 | `jira-ticket` | `CSD-225` | `status_changed` | Same Jira env vars. |
 
 ## Packet Types

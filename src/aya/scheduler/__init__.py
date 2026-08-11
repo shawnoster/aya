@@ -1,7 +1,7 @@
 """Unified scheduler — reminders, watches, recurring items, and events.
 
 Persists across AI sessions via scheduler.json.
-Out-of-session polling via systemd timer.
+Out-of-session polling via a crontab entry (see adapters/install.py).
 
 Usage (via CLI):
     aya schedule remind  --due "tomorrow 9am" -m "Check the PR"

@@ -48,7 +48,7 @@ This folder contains architecture and operational guides for aya.
 - Difference between session-required crons (ephemeral) and other jobs (persistent)
 - Why session-required crons skip when Claude isn't running (by design)
 - How system crontab tick complements Claude's session-scoped scheduler
-- 8 potential failure modes and mitigations (race conditions, env vars, idle backoff interaction, etc.)
+- Failure modes and their mitigations (race conditions, missing cron environment, idle back-off interaction)
 
 **Read this when:** You're debugging why a job didn't run, implementing `aya schedule install`, or understanding the split between system and session scheduling.
 
@@ -61,9 +61,19 @@ This folder contains architecture and operational guides for aya.
 - Relay options (nostr-rs-relay vs strfry)
 - Step-by-step setup on Synology with Docker
 - Configuration (auth, limits, retention)
-- Running multiple relays (failover, sync)
+- Reverse proxy and TLS, plus an optional NIP-42 lockdown to your own keypairs
 
 **Read this when:** You want to run aya packet sync locally instead of relying on public Nostr relays.
+
+---
+
+### [mcp-config-example.json](./mcp-config-example.json)
+
+**What it covers:** A ready-to-paste MCP server entry for `aya mcp-server`.
+
+Copy the `aya` block into your MCP client's config to expose the `aya_*` tools.
+
+**Read this when:** You are wiring aya into an MCP client and want the config shape rather than the prose explanation.
 
 ---
 

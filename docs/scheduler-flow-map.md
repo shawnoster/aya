@@ -1,4 +1,4 @@
-# Scheduler Flow Map: systemd → aya → Claude Code
+# Scheduler Flow Map: crontab → aya → Claude Code
 
 ## Core Design: Ephemeral Session Crons
 

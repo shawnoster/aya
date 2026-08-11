@@ -269,51 +269,19 @@ session to pick up changes — no reinstall needed.
 
 ## Commands
 
+The ones you will use most:
+
 | Command | What it does |
 | ---- | ---- |
-| `aya version` | Show the installed aya version |
-| `aya whoami` | Show the active local identity, all instances, and trusted peers |
-| `aya use` | Set which instance commands act as when `--as` is omitted |
-| `aya init` | Generate identity keypair for this instance |
-| `aya pair` | Pair two instances via short-lived relay code |
-| `aya trust` | Manually trust a DID |
-| `aya send` | Build, sign, and publish a knowledge packet (body from `-m`, `--files`, `--seed --opener`, or stdin) |
-| `aya send-raw` | Publish a pre-built packet file to a Nostr relay |
-| `aya inbox` | List pending (un-ingested) packets |
-| `aya sent` | List packets you have sent, with per-relay delivery status (`--failed` to filter) |
+| `aya whoami` | Who am I, and who can I send to |
+| `aya send` | Build, sign, and publish a packet |
 | `aya receive` | Review and ingest packets from the relay |
-| `aya read` | Read the body of a stored packet (`--meta` for headers, `--panel` for boxed display) |
-| `aya ack` | Acknowledge a received packet (sends a reply back) |
-| `aya drop` | Drop a packet from inbox view so it stops resurfacing |
-| `aya packets` | List stored packets — received *and* sent, newest local write first (delivery status: `aya sent`) |
-| `aya context` | Build a context block from workspace state |
-| `aya status` | Workspace readiness check — systems, schedule, focus |
-| `aya mcp-server` | Start the MCP server (stdio transport) for Claude Code |
-| `aya schedule remind` | Add a one-shot reminder |
-| `aya schedule watch` | Add a polling watch (GitHub PR, Jira ticket/query) |
-| `aya schedule recurring` | Add a persistent recurring session job |
-| `aya schedule activity` | Record user activity — resets the idle back-off timer |
-| `aya schedule is-idle` | Check whether the session is currently idle |
-| `aya schedule list` | List scheduled items |
-| `aya schedule dismiss` | Dismiss a scheduled item or alert (prefix match OK) |
-| `aya schedule snooze` | Snooze a reminder until a given time |
-| `aya schedule alerts` | Show alerts from the background watcher |
-| `aya schedule tick` | One scheduler cycle — poll watches, expire alerts (system cron uses this) |
-| `aya schedule pending` | Show unclaimed alerts + session crons (SessionStart hook reads this) |
-| `aya schedule install` | Install scheduler integrations — system crontab + Claude Code hooks |
-| `aya schedule uninstall` | Remove scheduler integrations |
-| `aya schedule status` | Scheduler overview — watches, reminders, deliveries |
-| `aya relay list` | List configured relays |
-| `aya relay add` | Add a relay to the default list (`--first` makes it primary) |
-| `aya relay remove` | Remove a relay from the default list |
-| `aya relay status` | Show relay health and identity info |
-| `aya config show` | Show the current workspace configuration |
-| `aya config set` | Set a workspace configuration value |
-| `aya log show` | Show daily notes |
-| `aya log append` | Append to daily notes |
-| `aya log auto` | Enable auto-logging of session notes |
-| `aya hook crons` | (Internal — wired by `aya schedule install`) Convert active recurring schedules into Claude Code `CronCreate` instructions |
-| `aya hook watch` | (Internal — wired by `aya schedule install`) Poll due watches and emit `asyncRewake` on change |
+| `aya sent` | What went out, and to which relays |
+| `aya status` | Workspace readiness — systems, schedule, focus |
+| `aya schedule install` | Wire up the crontab entry and Claude Code hooks |
+
+[`docs/commands.md`](docs/commands.md) has the full reference, grouped by what
+each command acts on.
 
 ## How it works
 
@@ -323,35 +291,13 @@ session to pick up changes — no reinstall needed.
 - **Packets**: Signed JSON envelopes with markdown content, TTL, and conflict strategies
 - **Security**: End-to-end encryption, signature verification, user approval before ingest, trust registry
 
-## Working on aya
+See [`docs/architecture.md`](docs/architecture.md) for the full map.
 
-The package is laid out in layers, and dependencies point inward only:
+## Contributing
 
-| Layer | Holds | May import |
-| ---- | ---- | ---- |
-| `entities/` | `Packet`, `Identity`, `TrustedKey`, `Profile`, crypto | nothing else |
-| `usecases/` | `relay_ops`, `ingest`, `triage`, `resolve`, `pair`, `watch_chains`, `status` | `entities` |
-| `adapters/` | `cli/`, `mcp_server`, `relay`, `clock`, `paths`, and the storage gateways | `usecases`, `entities` |
-| `scheduler/` | a bounded subsystem, layered internally | — |
-
-Two rules matter more than the rest, and `tests/test_architecture.py` fails
-if either breaks:
-
-- **Nothing below `adapters/` imports `typer`, `rich` or `mcp`.** A use case
-  that can print or exit cannot be reused by the other surface — that is how
-  the CLI and MCP implementations drifted apart in the first place.
-- **The CLI and the MCP server do not import each other.** They are peers
-  over the same use cases, not layers.
-
-New behaviour goes in `usecases/`; the surfaces parse input and render
-results. See [`docs/architecture.md`](docs/architecture.md) for the full map.
-
-```bash
-uv sync
-uv run pytest                     # ~1000 tests, isolated from your real ~/.aya
-uv run ruff check --fix . && uv run ruff format .
-uv run mypy src/aya/              # strict, no exclusions
-```
+Setup, the verification loop, commit conventions, and the layering rules are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Vulnerability reports go through
+[`SECURITY.md`](SECURITY.md).
 
 ## License
 

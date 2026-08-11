@@ -215,6 +215,7 @@ src/aya/
 │   ├── relay_ops.py    send / ack / receive / inbox, once for both surfaces
 │   ├── ingest.py       persist a packet, alert on seeds
 │   ├── triage.py       which fetched packets to act on
+│   ├── packet_view.py  how a packet is projected for reading, once for both surfaces
 │   ├── resolve.py      instance, recipient, relay and label resolution
 │   ├── pair.py         the pairing exchange
 │   ├── watch_chains.py multi-stage watches that advance as stages complete

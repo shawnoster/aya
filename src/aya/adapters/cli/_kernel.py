@@ -237,21 +237,26 @@ def _record_pairing(
     profile_path: Path,
     peer: str,
     trusted: TrustedKey,
-    relay_urls: list[str],
+    used_relay: str | None,
 ) -> str | None:
     """Persist everything a successful pairing just proved.
 
-    The relay that carried the exchange is demonstrably one both sides can
-    reach, so it becomes the primary. Without this the fact is discarded and
-    every later send/receive needs ``--relay`` to rediscover it.
+    *used_relay* is the relay that actually carried the exchange — reported by
+    :class:`~aya.usecases.pair.PairResult`, not guessed from the configured
+    order. It is demonstrably one both sides can reach, so it becomes primary;
+    without this the fact is discarded and every later send/receive needs
+    ``--relay`` to rediscover it.
+
+    Passing ``relay_urls[0]`` here instead would name whichever relay was
+    configured first even when it failed and a fallback did the work.
 
     Returns the promoted relay URL, or None if the order was already right.
     """
     trusted.label = peer
     p.trusted_keys[peer] = trusted
-    promoted = relay_urls and p.add_relay(relay_urls[0], first=True)
+    promoted = p.add_relay(used_relay, first=True) if used_relay else False
     save_profile(p, profile_path)
-    return relay_urls[0] if promoted else None
+    return used_relay if promoted else None
 
 
 def _resolve_instance_labelled(

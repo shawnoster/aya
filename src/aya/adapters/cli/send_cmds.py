@@ -56,7 +56,9 @@ logger = logging.getLogger(__name__)
 @app.command("send-raw")
 def send_raw(
     packet_file: Path = typer.Argument(help="Packet JSON file to send"),
-    relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    relay: str = typer.Option(
+        None, help="Use only this relay, replacing the profile list (no fallback)"
+    ),
     as_: str | None = typer.Option(
         None,
         "--as",
@@ -183,7 +185,9 @@ def send_cmd(
         "--as",
         help="Local identity to act as (default: primary instance)",
     ),
-    relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    relay: str = typer.Option(
+        None, help="Use only this relay, replacing the profile list (no fallback)"
+    ),
     conflict: ConflictStrategy = typer.Option(
         ConflictStrategy.LAST_WRITE_WINS, help="Conflict resolution strategy"
     ),
@@ -287,7 +291,9 @@ def ack(
         "--as",
         help="Local identity to act as (default: primary instance)",
     ),
-    relay: str = typer.Option(None, help="Relay URL (overrides profile default)"),
+    relay: str = typer.Option(
+        None, help="Use only this relay, replacing the profile list (no fallback)"
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show ACK packet without publishing"
     ),

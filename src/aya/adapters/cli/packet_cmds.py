@@ -36,7 +36,8 @@ from aya.adapters.relay import RelayUnreachableError
 
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
-from aya.entities.packet import ContentType, Packet
+from aya.entities.packet import Packet
+from aya.usecases.packet_view import read_view
 
 logger = logging.getLogger(__name__)
 
@@ -92,25 +93,11 @@ def read(
     packet = Packet.from_json(matches[0].read_text())
 
     if format_ == OutputFormat.JSON:
-        # In JSON output mode, non-seed dict content (e.g. application/json
-        # packets) is passed through as a structured value rather than
-        # stringified. Callers that ``jq`` or ``python -c 'json.load'`` over
-        # the output get a real object, not a string containing pretty-printed
-        # JSON. Seed-shape dicts still go through _extract_body so the
-        # ``body`` field stays a readable string (opener + context + qs).
-        body_value: object
-        if isinstance(packet.content, dict) and packet.content_type != ContentType.SEED:
-            body_value = packet.content
-        else:
-            body_value = _extract_body(packet.content, packet.content_type)
-
-        result: dict[str, object] = {"id": packet.id, "body": body_value}
-        if meta:
-            result["from"] = packet.from_did
-            result["sent_at"] = packet.sent_at
-            result["intent"] = packet.intent
-            result["in_reply_to"] = getattr(packet, "in_reply_to", None)
-        _output_json(result)
+        # Shape lives in usecases.packet_view so `aya_read` over MCP answers
+        # with the same keys. Non-seed dict content is passed through as a real
+        # object rather than stringified, so `jq` over the output gets a value
+        # and not a string of pretty-printed JSON.
+        _output_json(read_view(packet, meta=meta))
         raise typer.Exit(0)
 
     # Text mode — always render as a string via _extract_body.
@@ -142,7 +129,9 @@ def drop(
         "--as",
         help="Local identity to act as (default: primary instance)",
     ),
-    relay: str | None = typer.Option(None, help="Relay URL (overrides profile default)"),
+    relay: str | None = typer.Option(
+        None, help="Use only this relay, replacing the profile list (no fallback)"
+    ),
     profile: Path = typer.Option(DEFAULT_PROFILE),
     format_: OutputFormat = typer.Option(OutputFormat.AUTO, "--format", "-f", help="Output format"),
 ) -> None:
@@ -340,7 +329,14 @@ def packets(
     limit: int = typer.Option(20, "--limit", "-n", help="Max packets to show"),
     format_: OutputFormat = typer.Option(OutputFormat.AUTO, "--format", "-f", help="Output format"),
 ) -> None:
-    """List recently received (ingested) packets. For outbound, see 'aya sent'.
+    """List packets stored on this machine, newest first.
+
+    Both directions appear: packets you received, and your own sent ones, whose
+    bodies are kept so 'aya read' works on them too. The "From" column tells
+    them apart. For per-relay delivery status of what you sent, use 'aya sent'.
+
+    Ordering is by local write time, not sent_at, so a batch ingested in one
+    poll shares an order unrelated to when the peer sent it.
 
     Takes no --as: the packet store is per-machine, not per-identity.
     """
@@ -385,7 +381,8 @@ def packets(
         raise typer.Exit(0)
 
     # Rich table display
-    table = Table(title=f"Ingested Packets ({len(items)})")
+    # "Stored", not "Ingested" — sent packets share this directory.
+    table = Table(title=f"Stored Packets ({len(items)})")
     table.add_column("ID", width=10)
     table.add_column("Intent")
     table.add_column("From", width=8)

@@ -100,7 +100,7 @@ wheels = [
 
 [[package]]
 name = "aya-ai-assist"
-version = "1.45.0"
+version = "1.45.1"
 source = { editable = "." }
 dependencies = [
     { name = "base58" },

@@ -161,7 +161,7 @@ aya instance with another machine.
 
 ### Steps
 
-1. **Check identity exists.** Run `aya status`. If no instance is initialized, run `aya init --label {label}` first (ask the user what label to use — typically "home", "work", or "laptop").
+1. **Check identity exists.** Run `aya whoami`. It lists the active identity, every instance, and trusted peers — `aya status` reports workspace readiness and carries no identity or trust data, so it cannot answer this. If no instance is initialized, run `aya init --label {label}` first (ask the user what label to use — typically "home", "work", or "laptop").
 
 2. **Determine role.** Ask the user:
    - **"Are you starting the pairing, or do you have a code from the other machine?"**
@@ -192,7 +192,7 @@ aya instance with another machine.
    - `--peer`: what to call the remote peer (e.g., "home" if pairing from work).
    - `--as`: this machine's local identity.
 
-5. **Verify.** After pairing completes, run `aya status` to confirm the trusted key was added. Report success:
+5. **Verify.** After pairing completes, run `aya whoami` to confirm the trusted key was added — it is the command that lists trusted peers. Report success:
 
    ```
    Paired successfully.
@@ -345,6 +345,11 @@ When the receipt is missing or non-editable:
 
 If the final command returns `true`, installation succeeded. If it returns `false` or errors, the installation failed — report the error to the user.
 
+`systems.ok` covers the profile and the scheduler store. A box with nothing
+scheduled yet is fine: `scheduler.json` is written by the first `aya schedule`
+command, and its absence is reported as "not created yet" rather than counted
+as a failure.
+
 Do not continue if any step fails.
 
 ---
@@ -414,7 +419,7 @@ Add a watch on a GitHub PR (or other target) with sensible defaults.
 
 ## Cross-cutting rules
 
-1. **Always resolve the local identity** before running aya commands that need `--as`. Run `aya status` and use the instance label from the output.
+1. **Always resolve the local identity** before running aya commands that need `--as`. Run `aya whoami` and use the instance label from the output — `aya status` emits no instance label.
 
 2. **Hand off between verbs** when the flow calls for it — Setup offers Pair at the end, Status can lead into triage. Don't make the user re-invoke.
 

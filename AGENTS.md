@@ -147,11 +147,22 @@ All aya data lives under `~/.aya/`:
 
 ```
 ~/.aya/
-  profile.json      # Identity, keypairs, trusted keys
+  profile.json      # Identity, keypairs, trusted keys, relay list
   config.json       # Workflow config
-  scheduler.json    # Reminders, watches, recurring crons
+  scheduler.json    # Reminders, watches, recurring crons — written lazily by
+                    #   the first `aya schedule` command; absence is normal
   alerts.json       # Unseen alerts from watchers
   activity.json     # Last activity timestamp (idle tracking)
+  ledger.json       # Packet ledgers: ingested, sent, dropped (7-day TTL).
+                    #   Split from profile.json so polling does not rewrite
+                    #   the keystore. `aya sent` reads the sent log here.
+  sent_cache.json   # Idempotency cache, keyed by SHA-256 of the
+                    #   `--idempotency-key` value, 24-hour TTL. Only written
+                    #   when a key is passed; nothing reads it but the
+                    #   duplicate-send check.
+  packets/          # Packet bodies, one <ulid>.json per packet, mode 0600.
+                    #   Holds both received packets and your own sent ones,
+                    #   so `aya read` works on either.
 ```
 
 ## Claude Code Integration

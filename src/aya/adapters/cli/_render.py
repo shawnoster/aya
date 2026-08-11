@@ -8,7 +8,6 @@ whole command, and so the plumbing stays free of Rich.
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from typing import Any, TypedDict
@@ -24,8 +23,9 @@ from aya.adapters.outbox import (
 from aya.entities.identity import (
     Profile,
 )
-from aya.entities.packet import ContentType, Packet, human_age
+from aya.entities.packet import Packet, human_age
 from aya.usecases import relay_ops
+from aya.usecases.packet_view import extract_body
 
 
 def _render_send(result: relay_ops.SendResult, *, as_json: bool) -> None:
@@ -267,41 +267,9 @@ def _label_for_did(did: str, profile: Profile) -> str:
     return did[:20] + "…"
 
 
-def _extract_body(content: object, content_type: ContentType | None = None) -> str:
-    """Extract a packet body string from raw content for display.
-
-    For seed packets (`application/aya-seed`), content is a dict with
-    ``opener``, ``context_summary``, and ``open_questions``. For content
-    packets (markdown, text), content is a plain string. JSON dict content
-    that isn't a seed is serialized with ``json.dumps``. Anything else
-    falls back to ``str(content)``.
-    """
-    lines: list[str] = []
-    if isinstance(content, dict):
-        if content_type == ContentType.SEED:
-            opener = content.get("opener")
-            if opener:
-                lines.append(str(opener))
-            context_summary = content.get("context_summary")
-            if context_summary:
-                if lines:
-                    lines.append("")
-                lines.append("--- context ---")
-                lines.append(str(context_summary))
-            open_questions = content.get("open_questions") or []
-            if open_questions:
-                if lines:
-                    lines.append("")
-                lines.append("--- open questions ---")
-                for q in open_questions:
-                    lines.append(f"- {q}")
-        else:
-            lines.append(json.dumps(content, indent=2, default=str))
-    elif isinstance(content, str):
-        lines.append(content)
-    else:
-        lines.append(str(content))
-    return "\n".join(lines)
+# Re-exported so CLI call sites keep the private name; the definition is shared
+# with mcp_server via usecases.packet_view so the two surfaces cannot diverge.
+_extract_body = extract_body
 
 
 def _copy_to_clipboard(text: str) -> None:

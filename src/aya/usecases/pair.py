@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import secrets
+from dataclasses import dataclass
 from datetime import UTC
 from typing import Any
 
@@ -26,6 +27,21 @@ from aya.adapters.relay import (
 from aya.entities.identity import Identity, TrustedKey
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PairResult:
+    """A completed pairing, and the relay that demonstrably carried it.
+
+    ``relay`` is the one relay both sides are known to reach: one end published
+    there and the other read it back. Callers promote it to primary, so the
+    fact the exchange just proved is not thrown away. Reporting the *configured*
+    first relay instead would name a relay that may have failed outright.
+    """
+
+    trusted: TrustedKey
+    relay: str
+
 
 PAIR_TTL_SECONDS = 600  # 10 minutes
 PAIR_POLL_INTERVAL = 3  # seconds
@@ -368,20 +384,24 @@ async def poll_for_pair_response(
     my_pubkey: str,
     request_event_id: str,
     timeout_seconds: int = PAIR_TTL_SECONDS,
-) -> TrustedKey | None:
+) -> PairResult | None:
     """Poll all configured relays for a pair-response. **ASYNC.**
 
     Polls each relay in turn, returning as soon as any relay yields a response.
     Applies per-relay exponential backoff when a relay has transient failures to
     avoid hammering rate-limited relays on reconnect.
 
+    The returned :class:`PairResult` names the relay the response came back on,
+    which is the relay the peer could publish to and we could read from — the
+    only one of the configured relays proven to work for this pair.
+
     Usage::
 
         # In async context: await
-        trusted = await poll_for_pair_response(relay_url, my_pubkey, event_id)
+        result = await poll_for_pair_response(relay_url, my_pubkey, event_id)
 
         # In sync context: asyncio.run()
-        trusted = asyncio.run(poll_for_pair_response(relay_url, my_pubkey, event_id))
+        result = asyncio.run(poll_for_pair_response(relay_url, my_pubkey, event_id))
     """
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
     since_ts = int(clock.now(UTC).timestamp()) - 5
@@ -401,7 +421,7 @@ async def poll_for_pair_response(
                 url, my_pubkey, request_event_id, since_ts, deadline
             )
             if result is not None:
-                return result
+                return PairResult(trusted=result, relay=url)
             relay_failures[url] = (failures + 1) if had_error else 0
         remaining = deadline - clock.now(UTC).timestamp()
         if remaining <= 0:
@@ -462,28 +482,28 @@ async def join_pairing(
     identity: Identity,
     code: str,
     relay_url: str | list[str],
-) -> TrustedKey:
+) -> PairResult:
     """Joiner half of pairing flow — join using a pairing code. **ASYNC.**
 
     Joiner flow:
       1. Hash the code, find matching pair-request on relay
       2. Publish pair-response
-      3. Return TrustedKey for the initiator
+      3. Return the initiator's TrustedKey and the relay it was found on
 
     Usage::
 
         # In async context: await
-        trusted = await join_pairing(identity, code, relay_url)
+        result = await join_pairing(identity, code, relay_url)
 
         # In sync context: asyncio.run()
-        trusted = asyncio.run(join_pairing(identity, code, relay_url))
+        result = asyncio.run(join_pairing(identity, code, relay_url))
     """
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
     code_h = hash_code(code)
 
     # Find the pair request on any relay, with retry backoff
-    request = await _find_pair_request_with_retry(relay_urls, code_h)
-    if not request:
+    found = await _find_pair_request_with_retry(relay_urls, code_h)
+    if not found:
         raise PairingError(
             "No matching pairing request found.\n"
             "\n"
@@ -496,6 +516,7 @@ async def join_pairing(
             "Wait a few seconds and retry, or restart the pairing flow."
         )
 
+    request, found_on = found
     req_content = json.loads(request["content"])
     initiator_did = req_content["did"]
     initiator_label = req_content["label"]
@@ -522,7 +543,12 @@ async def join_pairing(
     if not published:
         raise PairingError("All relays rejected the pair response")
 
-    return TrustedKey(did=initiator_did, label=initiator_label, nostr_pubkey=initiator_pubkey)
+    # `found_on` — not relay_urls[0] — is the relay the initiator's request
+    # actually arrived on, so it is the one both sides are proven to reach.
+    return PairResult(
+        trusted=TrustedKey(did=initiator_did, label=initiator_label, nostr_pubkey=initiator_pubkey),
+        relay=found_on,
+    )
 
 
 # ── Event builders ───────────────────────────────────────────────────────────
@@ -603,8 +629,15 @@ def _build_pair_response(
 # ── Relay queries ────────────────────────────────────────────────────────────
 
 
-async def _find_pair_request(relay_url: str | list[str], code_hash: str) -> dict[str, Any] | None:
-    """Find a pair-request on any of the configured relays matching the given code hash."""
+async def _find_pair_request(
+    relay_url: str | list[str], code_hash: str
+) -> tuple[dict[str, Any], str] | None:
+    """Find a pair-request on any configured relay matching the given code hash.
+
+    Returns ``(event, relay_url)``. The URL is the point of the tuple: the
+    initiator published there and we read it back, so it is a relay both sides
+    reach — which is what the caller promotes to primary.
+    """
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
     since_ts = int(clock.now(UTC).timestamp()) - PAIR_TTL_SECONDS
     filter_ = {
@@ -621,7 +654,7 @@ async def _find_pair_request(relay_url: str | list[str], code_hash: str) -> dict
                 await ws.send(json.dumps(["REQ", sub_id, filter_]))
                 async for event in _read_until_eose(ws, sub_id):
                     await ws.send(json.dumps(["CLOSE", sub_id]))
-                    return event
+                    return event, url
                 await ws.send(json.dumps(["CLOSE", sub_id]))
         except Exception as exc:
             logger.warning("Failed to query %s for pair request: %s", url, exc)
@@ -633,7 +666,7 @@ _FIND_RETRY_DELAYS = (1, 2, 4)  # seconds — exponential backoff for not-found 
 
 async def _find_pair_request_with_retry(
     relay_urls: list[str], code_hash: str, *, _delays: tuple[int, ...] = _FIND_RETRY_DELAYS
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any], str] | None:
     """Wrap :func:`_find_pair_request` with exponential backoff for "not found" results.
 
     Relays may lag behind on propagation, so retry up to ``len(_delays)`` times

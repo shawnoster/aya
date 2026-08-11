@@ -40,7 +40,10 @@ logger = logging.getLogger(__name__)
 
 @app.command()
 def receive(
-    relay: str = typer.Option(None),
+    relay: str = typer.Option(
+        None,
+        help="Poll only this relay, replacing the profile list (no fallback)",
+    ),
     as_: str | None = typer.Option(
         None,
         "--as",
@@ -131,7 +134,10 @@ def receive(
 
 @app.command()
 def inbox(
-    relay: str = typer.Option(None),
+    relay: str = typer.Option(
+        None,
+        help="Poll only this relay, replacing the profile list (no fallback)",
+    ),
     as_: str | None = typer.Option(
         None,
         "--as",

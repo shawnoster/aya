@@ -145,7 +145,11 @@ def init(
     label: str = typer.Option("default", help="Label for this instance (work, home, laptop…)"),
     profile: Path = typer.Option(DEFAULT_PROFILE, help="Path to profile.json"),
     relay: str | None = typer.Option(
-        None, help="Override the default relay URL (omit to use the built-in two-relay default)"
+        None,
+        help=(
+            "Seed this relay as the only one, dropping both public defaults "
+            "(omit to keep the built-in two-relay default)"
+        ),
     ),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"

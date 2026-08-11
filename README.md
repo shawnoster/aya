@@ -62,7 +62,9 @@ aya sent
 
 Labels can be anything — `home`/`work`, names, machine hostnames. They're local aliases for the keypair on each side.
 
-Pairing over a specific relay (`aya pair --relay wss://…`) makes that relay primary for both sides, since the exchange proves it reaches the peer. Public relays seeded by `aya init` stay on as fallbacks, so later `send`/`receive` calls need no `--relay`.
+Pairing promotes the relay that actually carried the exchange to primary, independently on each side — the initiator promotes the relay the response arrived on, the joiner the relay it found the request on. That relay is proven to reach the peer, so later `send`/`receive` calls need no `--relay`. Relays seeded by `aya init` (`relay.damus.io` and `nos.lol`) stay on as fallbacks.
+
+`--relay` **replaces** the configured list rather than narrowing it — `--relay X` talks to X only, with no fallback if X is down. Pairing is the one case where both machines must pass the same `--relay`: a request published only to a private relay cannot be found by a peer polling the public defaults. See [`skills/relay/SKILL.md`](skills/relay/SKILL.md#relay-strategy) for the full account.
 
 ### Identity flags: `--as`, `--label`, `--peer`
 
@@ -144,7 +146,7 @@ CCR minimum interval is 1 hour. aya can fire at any cron interval.
 
 Already have aya installed on another machine? Give Claude Code this prompt on the new machine and it will handle everything:
 
-> Install aya (`uv tool install aya-ai-assist`), initialize identity with `aya init --label <LABEL>`, then pair with my other instance. If I have a pairing code from the other machine, run `aya pair --code <CODE> --peer <OTHER_LABEL> --as <LABEL>` and we're done. If not, run `aya pair --peer <OTHER_LABEL> --as <LABEL>` — this will block waiting for the other machine to join (up to 10 minutes), so give me the short code it displays and immediately run `aya pair --code <CODE>` on the other machine before the window expires. After pairing, install hooks and crontab with `aya schedule install`. Finally, add the aya plugin to your shell profile: `alias claude='claude --plugin-dir /path/to/aya/.claude-plugin'` and verify everything with `aya status`.
+> Install aya (`uv tool install aya-ai-assist`), initialize identity with `aya init --label <LABEL>`, then pair with my other instance. If I have a pairing code from the other machine, run `aya pair --code <CODE> --peer <OTHER_LABEL> --as <LABEL>` and we're done. If not, run `aya pair --peer <OTHER_LABEL> --as <LABEL>` — this will block waiting for the other machine to join (up to 10 minutes), so give me the short code it displays and immediately run `aya pair --code <CODE>` on the other machine before the window expires. After pairing, install hooks and crontab with `aya schedule install`. Finally, add the aya plugin to your shell profile: `alias claude='claude --plugin-dir /path/to/aya/.claude-plugin'` then confirm the trust exchange with `aya whoami` (it lists instances and trusted peers; `aya status` covers workspace readiness, not relay trust).
 
 Replace `<LABEL>` with a name for this machine (e.g. `home`, `work`, `laptop`, your name), `<OTHER_LABEL>` with the other machine's label, and `<CODE>` with the pairing code.
 
@@ -283,7 +285,7 @@ session to pick up changes — no reinstall needed.
 | `aya read` | Read the body of a stored packet (`--meta` for headers, `--panel` for boxed display) |
 | `aya ack` | Acknowledge a received packet (sends a reply back) |
 | `aya drop` | Drop a packet from inbox view so it stops resurfacing |
-| `aya packets` | List stored *received* packets, most recent first (outbound: `aya sent`) |
+| `aya packets` | List stored packets — received *and* sent, newest local write first (delivery status: `aya sent`) |
 | `aya context` | Build a context block from workspace state |
 | `aya status` | Workspace readiness check — systems, schedule, focus |
 | `aya mcp-server` | Start the MCP server (stdio transport) for Claude Code |
@@ -302,7 +304,7 @@ session to pick up changes — no reinstall needed.
 | `aya schedule uninstall` | Remove scheduler integrations |
 | `aya schedule status` | Scheduler overview — watches, reminders, deliveries |
 | `aya relay list` | List configured relays |
-| `aya relay add` | Add a relay to the default list |
+| `aya relay add` | Add a relay to the default list (`--first` makes it primary) |
 | `aya relay remove` | Remove a relay from the default list |
 | `aya relay status` | Show relay health and identity info |
 | `aya config show` | Show the current workspace configuration |

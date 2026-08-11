@@ -144,15 +144,6 @@ def _gather_status() -> dict[str, Any]:
     user = profile.get("user_name", "Shawn") if profile else "Shawn"
     next_eval = profile.get("name_next_reevaluation_at", "unknown") if profile else "unknown"
 
-    checks: list[CheckResult] = [
-        CheckResult("profile", profile is not None, str(_paths.PROFILE_PATH)),
-        CheckResult(
-            name="scheduler",
-            ok=_paths.SCHEDULER_FILE.exists(),
-            detail=str(_paths.SCHEDULER_FILE),
-        ),
-    ]
-
     unseen: list[AlertItem] = []
     due: list[SchedulerItem] = []
     upcoming: list[SchedulerItem] = []
@@ -168,8 +159,21 @@ def _gather_status() -> dict[str, Any]:
         logger.warning("Failed to load scheduler status: %s", e)
         scheduler_ok = False
 
-    # Add synthetic check for scheduler data integrity
-    checks.append(CheckResult("scheduler-data", scheduler_ok, "Scheduler alerts/reminders loaded"))
+    # One scheduler check, on whether the data loads — not on whether the file
+    # exists. scheduler.json is written lazily by the first `schedule` command
+    # (see scheduler.storage.save_items), and load_items() returns [] for a
+    # missing file rather than raising. Failing the gate on its absence made
+    # every fresh install report `systems.ok: false`, which skills/aya/SKILL.md
+    # reads as "installation failed".
+    scheduler_detail = (
+        str(_paths.SCHEDULER_FILE)
+        if _paths.SCHEDULER_FILE.exists()
+        else f"{_paths.SCHEDULER_FILE} (not created yet — nothing scheduled)"
+    )
+    checks: list[CheckResult] = [
+        CheckResult("profile", profile is not None, str(_paths.PROFILE_PATH)),
+        CheckResult("scheduler", scheduler_ok, scheduler_detail),
+    ]
 
     # Pre-compute check totals once, reuse in all render functions
     checks_ok = sum(1 for c in checks if c.ok)

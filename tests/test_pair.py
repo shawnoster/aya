@@ -197,15 +197,17 @@ class TestPairingFlowMocked:
         with (
             patch(
                 "aya.usecases.pair._find_pair_request",
-                return_value=request_event,
+                return_value=(request_event, "wss://relay.test"),
             ),
             patch(
                 "aya.usecases.pair.websockets.connect",
                 return_value=_make_ws_mock([]),
             ),
         ):
-            trusted = await join_pairing(home, code, "wss://relay.test")
+            result = await join_pairing(home, code, "wss://relay.test")
 
+        trusted = result.trusted
+        assert result.relay == "wss://relay.test"
         assert trusted.did == work.did
         assert trusted.label == "work"
         assert trusted.nostr_pubkey == work.nostr_public_hex
@@ -245,7 +247,10 @@ class TestPairingFlowMocked:
                 pass
 
         with (
-            patch("aya.usecases.pair._find_pair_request", return_value=request_event),
+            patch(
+                "aya.usecases.pair._find_pair_request",
+                return_value=(request_event, "wss://relay.test"),
+            ),
             patch("aya.usecases.pair.websockets.connect", return_value=CapturingWS()),
         ):
             await join_pairing(home, code, "wss://relay.test")
@@ -255,6 +260,54 @@ class TestPairingFlowMocked:
         # The label in the response must be the joiner's own label, not the --peer value
         assert response_content["label"] == home.label  # "home", not "work"
         assert response_content["did"] == home.did
+
+    async def test_find_pair_request_reports_the_relay_that_answered(self, work):
+        """The URL in the return value must be the relay that actually had the event.
+
+        This is the guard for the promotion bug: pairing used to promote
+        ``relay_urls[0]`` regardless, so a first relay that was unreachable
+        became "primary" while the relay that did the work stayed a fallback.
+        """
+        code_h = hash_code("TEST-CODE-9999")
+        request_event = _build_pair_request(work, work.label, code_h, "wss://second.test")
+
+        class AnsweringWS:
+            """Echoes the caller's own subscription id, which _read_until_eose matches on."""
+
+            async def send(self, data):
+                msg = json.loads(data)
+                if msg[0] == "REQ":
+                    self._out = [
+                        json.dumps(["EVENT", msg[1], request_event]),
+                        json.dumps(["EOSE", msg[1]]),
+                    ]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if getattr(self, "_out", None):
+                    return self._out.pop(0)
+                raise StopAsyncIteration
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        def connect(url, *args, **kwargs):
+            if url == "wss://first.test":
+                raise OSError("connection refused")
+            return AnsweringWS()
+
+        with patch("aya.usecases.pair.websockets.connect", side_effect=connect):
+            found = await _find_pair_request(["wss://first.test", "wss://second.test"], code_h)
+
+        assert found is not None
+        event, url = found
+        assert event["id"] == request_event["id"]
+        assert url == "wss://second.test"  # not first.test, which never answered
 
     async def test_find_pair_request_no_match(self):
         # Relay returns EOSE immediately — no matching events
@@ -290,12 +343,12 @@ class TestPairingFlowMocked:
         async def fake_find(relay_urls, code_hash):
             nonlocal call_count
             call_count += 1
-            return fake_event
+            return fake_event, "wss://relay.test"
 
         with patch("aya.usecases.pair._find_pair_request", side_effect=fake_find):
             result = await _find_pair_request_with_retry(["wss://relay.test"], "hash")
 
-        assert result == fake_event
+        assert result == (fake_event, "wss://relay.test")
         assert call_count == 1
 
     async def test_find_pair_request_with_retry_retries_on_not_found(self):

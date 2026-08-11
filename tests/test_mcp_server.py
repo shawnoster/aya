@@ -544,11 +544,12 @@ async def test_read_tool_content_only(tmp_path):
         result = await call_tool("aya_read", {"packet_id": pkt.id[:8]})
 
     payload = json.loads(result[0].text)
-    assert payload == {"content": "Hello world"}
+    # Same keys as `aya read --format json`: id + body, not a bare content field.
+    assert payload == {"id": pkt.id, "body": "Hello world"}
 
 
 async def test_read_tool_with_meta(tmp_path):
-    """aya_read with meta=True returns full metadata."""
+    """aya_read with meta=True returns the envelope fields the CLI returns."""
     from aya.entities.packet import Packet
 
     pkt = Packet(from_did="did:key:sender", to_did="did:key:receiver", intent="test")
@@ -563,7 +564,33 @@ async def test_read_tool_with_meta(tmp_path):
     payload = json.loads(result[0].text)
     assert payload["id"] == pkt.id
     assert payload["intent"] == "test"
-    assert payload["content"] == "Hello world"
+    assert payload["body"] == "Hello world"
+    assert payload["from"] == "did:key:sender"
+    assert "in_reply_to" in payload  # was missing from the MCP shape entirely
+
+
+async def test_read_tool_shape_matches_the_cli(tmp_path):
+    """The two surfaces must project a packet identically.
+
+    They did not: MCP answered {content} / {id, intent, from, sent_at,
+    content_type, content} while the CLI answered {id, body} / plus
+    {from, sent_at, intent, in_reply_to}. Only the CLI shape was documented,
+    so an agent following the skills over MCP looked for a `body` that was
+    never there. Both now go through usecases.packet_view.read_view.
+    """
+    from aya.entities.packet import Packet
+    from aya.usecases.packet_view import read_view
+
+    pkt = Packet(from_did="did:key:sender", to_did="did:key:receiver", intent="test")
+    pkt.content = "Hello world"
+    packets_dir = tmp_path / "packets"
+    packets_dir.mkdir()
+    (packets_dir / f"{pkt.id}.json").write_text(pkt.to_json())
+
+    for meta in (False, True):
+        with patch("aya.adapters.paths.PACKETS_DIR", packets_dir):
+            result = await call_tool("aya_read", {"packet_id": pkt.id[:8], "meta": meta})
+        assert json.loads(result[0].text) == read_view(pkt, meta=meta)
 
 
 async def test_read_tool_short_prefix():

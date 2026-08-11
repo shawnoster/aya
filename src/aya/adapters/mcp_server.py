@@ -30,8 +30,6 @@ from aya.usecases.resolve import (
 
 logger = logging.getLogger(__name__)
 
-server = Server("aya")
-
 # ---------------------------------------------------------------------------
 # Tool catalogue
 # ---------------------------------------------------------------------------
@@ -40,7 +38,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_status",
         description="Return workspace readiness status (systems, alerts, reminders, watches).",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {},
             "additionalProperties": False,
@@ -49,7 +47,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_inbox",
         description="List pending (un-ingested) relay packets for an instance.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "instance": {
@@ -67,7 +65,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_send",
         description="Build, sign, and publish a packet to a relay.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "to": {
@@ -106,7 +104,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_receive",
         description="Poll the relay, auto-ingest trusted packets, and return summaries.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "instance": {
@@ -124,7 +122,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_schedule_remind",
         description="Create a one-shot reminder in the scheduler.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "message": {
@@ -143,7 +141,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_schedule_watch",
         description="Create a condition-based watch in the scheduler.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "provider": {
@@ -177,7 +175,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_ack",
         description="Acknowledge a received packet, sending a reply back to the sender.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "packet_id": {
@@ -213,7 +211,7 @@ _TOOLS: list[types.Tool] = [
             "meta, adds from, sent_at, intent and in_reply_to. Same shape as "
             "`aya read`."
         ),
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "packet_id": {
@@ -236,7 +234,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_config_set",
         description="Set a workspace configuration value.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "key": {
@@ -255,7 +253,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_config_show",
         description="Show the current workspace configuration.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {},
             "additionalProperties": False,
@@ -269,7 +267,7 @@ _TOOLS: list[types.Tool] = [
             "Ordered by local write time, newest first. For delivery status of "
             "what you sent, use aya_sent."
         ),
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "limit": {
@@ -288,7 +286,7 @@ _TOOLS: list[types.Tool] = [
             "List packets this instance has sent, with per-relay delivery status. "
             "Counterpart to aya_inbox; aya_packets lists received packets only."
         ),
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "limit": {
@@ -306,7 +304,7 @@ _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_relay_status",
         description="Show relay health and identity info for an instance.",
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {
                 "instance": {
@@ -321,9 +319,8 @@ _TOOLS: list[types.Tool] = [
 ]
 
 
-# The MCP SDK ships these decorators untyped; the handlers below are typed.
-@server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
 async def list_tools() -> list[types.Tool]:
+    """The advertised catalogue. Kept as a plain function so it stays testable."""
     return _TOOLS
 
 
@@ -644,8 +641,8 @@ _HANDLERS: dict[str, Handler] = {
 }
 
 
-@server.call_tool()  # type: ignore[untyped-decorator]
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
+    """Dispatch one tool call. Transport-independent, so tests can call it directly."""
     handler = _HANDLERS.get(name)
     if handler is None:
         return _error(f"Unknown tool: {name}")
@@ -654,6 +651,35 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
     except Exception as exc:
         logger.exception("Tool %s failed", name)
         return _error(str(exc))
+
+
+# ── transport wiring ─────────────────────────────────────────────────────────
+#
+# mcp 2.0 dropped the `@server.list_tools()` / `@server.call_tool()` decorators
+# in favour of `on_*` callbacks passed to the constructor, which is why these
+# two adapters exist: they translate the SDK's (context, params) -> Result
+# shape to and from the plain functions above. Keeping the dispatch itself out
+# of them means a tool call can be exercised without a transport.
+
+
+async def _on_list_tools(
+    _ctx: object, _params: types.PaginatedRequestParams | None
+) -> types.ListToolsResult:
+    return types.ListToolsResult(tools=await list_tools())
+
+
+async def _on_call_tool(_ctx: object, params: types.CallToolRequestParams) -> types.CallToolResult:
+    content = await call_tool(params.name, params.arguments or {})
+    return types.CallToolResult(content=list(content))
+
+
+# Constructed here rather than at import top: the handlers close over _TOOLS and
+# _HANDLERS, which are defined above.
+server: Server[None] = Server(
+    "aya",
+    on_list_tools=_on_list_tools,
+    on_call_tool=_on_call_tool,
+)
 
 
 # ── entry point ──────────────────────────────────────────────────────────────

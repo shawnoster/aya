@@ -104,8 +104,10 @@ def pair(
         lines = [
             "[bold green]✓ Paired![/bold green]\n",
             f"Trusted: [cyan]{peer}[/cyan]",
-            f"DID:     [dim]{trusted.did}[/dim]"
-            "  [dim italic](ed25519 · identity & signing)[/dim italic]",
+            (
+                f"DID:     [dim]{trusted.did}[/dim]"
+                "  [dim italic](ed25519 · identity & signing)[/dim italic]"
+            ),
         ]
         if trusted.nostr_pubkey:
             lines.append(
@@ -194,8 +196,10 @@ def pair(
         lines = [
             "[bold green]✓ Paired![/bold green]\n",
             f"Trusted: [cyan]{peer}[/cyan]",
-            f"DID:     [dim]{trusted.did}[/dim]"
-            "  [dim italic](ed25519 · identity & signing)[/dim italic]",
+            (
+                f"DID:     [dim]{trusted.did}[/dim]"
+                "  [dim italic](ed25519 · identity & signing)[/dim italic]"
+            ),
         ]
         if trusted.nostr_pubkey:
             lines.append(

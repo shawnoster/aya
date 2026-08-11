@@ -136,6 +136,34 @@ class TestRenderRich:
         output = console.export_text()
         assert "Systems" in output
 
+    def test_fresh_install_with_nothing_scheduled_is_ok(self, monkeypatch, tmp_path):
+        """A missing scheduler.json must not read as a failed install.
+
+        scheduler.json is written lazily by the first `aya schedule` command, and
+        load_items() returns [] when it is absent. Failing the gate on its
+        absence made every fresh box report `systems.ok: false`, which
+        skills/aya/SKILL.md turns into "the installation failed".
+        """
+        profile_file = tmp_path / "profile.json"
+        profile_file.write_text(json.dumps({"ship_mind_name": "GSV Test", "user_name": "Test"}))
+        monkeypatch.setattr("aya.adapters.paths.PROFILE_PATH", profile_file)
+        monkeypatch.setattr("aya.adapters.paths.SCHEDULER_FILE", tmp_path / "scheduler.json")
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", list)
+
+        data = _gather_status()
+
+        assert not (tmp_path / "scheduler.json").exists()
+        assert data["checks_ok"] == data["checks_total"], [
+            (c.name, c.ok, c.detail) for c in data["checks"]
+        ]
+        assert json.loads(_render_json(data))["systems"]["ok"] is True
+        # The absence is still reported, just not as a failure.
+        scheduler = next(c for c in data["checks"] if c.name == "scheduler")
+        assert "not created yet" in scheduler.detail
+
     def test_name_reeval_z_suffix(self, monkeypatch, tmp_path):
         """name_next_reevaluation_at stored with 'Z' suffix must parse without error."""
         import json

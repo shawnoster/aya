@@ -19,6 +19,7 @@ from aya.adapters.outbox import (
 )
 from aya.adapters.profile_store import load_profile
 from aya.usecases import relay_ops
+from aya.usecases.packet_view import read_view
 from aya.usecases.resolve import (
     NoNostrPubkeyError,
     label_for_did,
@@ -207,7 +208,11 @@ _TOOLS: list[types.Tool] = [
     ),
     types.Tool(
         name="aya_read",
-        description="Read the content of a stored packet by ID or prefix.",
+        description=(
+            "Read a stored packet by ID or prefix. Returns {id, body}; with "
+            "meta, adds from, sent_at, intent and in_reply_to. Same shape as "
+            "`aya read`."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -217,7 +222,10 @@ _TOOLS: list[types.Tool] = [
                 },
                 "meta": {
                     "type": "boolean",
-                    "description": "If true, return full metadata; otherwise return content only.",
+                    "description": (
+                        "If true, add the envelope fields (from, sent_at, "
+                        "intent, in_reply_to) alongside id and body."
+                    ),
                     "default": False,
                 },
             },
@@ -255,7 +263,12 @@ _TOOLS: list[types.Tool] = [
     ),
     types.Tool(
         name="aya_packets",
-        description="List stored packets, most recent first.",
+        description=(
+            "List packets stored on this machine — received ones plus your own "
+            "sent packets, whose bodies are saved so they can be read back. "
+            "Ordered by local write time, newest first. For delivery status of "
+            "what you sent, use aya_sent."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -531,22 +544,8 @@ async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
 
     pkt = Packet.from_json(matches[0].read_text())
 
-    if meta:
-        return _text(
-            {
-                "id": pkt.id,
-                "intent": pkt.intent,
-                "from": pkt.from_did,
-                "sent_at": pkt.sent_at,
-                "content_type": (
-                    pkt.content_type.value
-                    if hasattr(pkt.content_type, "value")
-                    else str(pkt.content_type)
-                ),
-                "content": pkt.content,
-            }
-        )
-    return _text({"content": pkt.content})
+    # Same projection as `aya read`, so both surfaces return the same keys.
+    return _text(read_view(pkt, meta=meta))
 
 
 async def _handle_config_set(arguments: dict[str, Any]) -> list[types.TextContent]:

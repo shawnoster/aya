@@ -251,6 +251,7 @@ class TestPair:
         label from the response content (which was the initiator's own label), so
         the peer DID overwrote the local self-trust entry.
         """
+        from aya.usecases.pair import PairResult
         from aya.usecases.pair import TrustedKey as PairTrustedKey
 
         local_identity = Identity.generate("guild-shawnoster")
@@ -272,7 +273,10 @@ class TestPair:
             patch("aya.adapters.cli.pair_cmds.generate_code", return_value="TEST-CODE-0001"),
             patch("aya.adapters.cli.pair_cmds.hash_code", return_value="deadbeef"),
             patch("aya.adapters.cli.pair_cmds.publish_pair_request", return_value="req_event_id"),
-            patch("aya.adapters.cli.pair_cmds.poll_for_pair_response", return_value=buggy_trusted),
+            patch(
+                "aya.adapters.cli.pair_cmds.poll_for_pair_response",
+                return_value=PairResult(trusted=buggy_trusted, relay="wss://relay.test"),
+            ),
         ):
             result = runner.invoke(
                 app,
@@ -303,6 +307,7 @@ class TestPair:
 
     def test_joiner_stores_peer_under_peer_label(self, profile_with_instance: Path) -> None:
         """Joiner must store the initiator DID under --peer label."""
+        from aya.usecases.pair import PairResult
         from aya.usecases.pair import TrustedKey as PairTrustedKey
 
         local_identity = Identity.generate("sean-okeefe")
@@ -319,7 +324,10 @@ class TestPair:
             nostr_pubkey=initiator_identity.nostr_public_hex,
         )
 
-        with patch("aya.adapters.cli.pair_cmds.join_pairing", return_value=initiator_trusted):
+        with patch(
+            "aya.adapters.cli.pair_cmds.join_pairing",
+            return_value=PairResult(trusted=initiator_trusted, relay="wss://relay.test"),
+        ):
             result = runner.invoke(
                 app,
                 [
@@ -2617,6 +2625,31 @@ class TestPacketPersistence:
         data = json.loads(result.output)
         assert len(data["packets"]) == 3
 
+    def test_packets_lists_sent_packets_too(self, packets_dir: Path) -> None:
+        """Outbound packets share the store, so `aya packets` shows both directions.
+
+        outbox.record_sent writes sent bodies into PACKETS_DIR so `aya read`
+        works on them, and `packets` globs that directory unfiltered. The docs
+        called this "received packets", which is why a sender reading them
+        expected to see nothing of their own.
+        """
+        local = Identity.generate("default")
+        peer = Identity.generate("home")
+        inbound = Packet(from_did=peer.did, to_did=local.did, intent="inbound", content="from them")
+        outbound = Packet(from_did=local.did, to_did=peer.did, intent="outbound", content="from me")
+        for pkt in (inbound, outbound):
+            (packets_dir / f"{pkt.id}.json").write_text(pkt.to_json())
+
+        result = runner.invoke(app, ["packets", "--format", "json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+
+        intents = {p["intent"] for p in data["packets"]}
+        assert intents == {"inbound", "outbound"}
+        # The From column is what distinguishes them.
+        by_intent = {p["intent"]: p for p in data["packets"]}
+        assert by_intent["outbound"]["from"] == local.did
+
     def test_read_unknown_id(self, packets_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """read with an unknown ID exits nonzero."""
         monkeypatch.setenv("AYA_FORMAT", "json")
@@ -4529,7 +4562,7 @@ class TestRelayPromotion:
 
         p = load_profile(profile_with_instance)
         promoted = _record_pairing(
-            p, profile_with_instance, "bob", trusted, ["wss://private.example.com"]
+            p, profile_with_instance, "bob", trusted, "wss://private.example.com"
         )
         assert promoted == "wss://private.example.com"
 
@@ -4537,6 +4570,34 @@ class TestRelayPromotion:
         assert saved.default_relays[0] == "wss://private.example.com"
         assert "wss://public.example.com" in saved.default_relays  # fallback kept
         assert saved.trusted_keys["bob"].label == "bob"
+
+    def test_pairing_promotes_the_used_relay_not_the_first_configured(
+        self, profile_with_instance: Path
+    ):
+        """The bug this guards: promoting ``relay_urls[0]`` regardless of what worked.
+
+        Two relays configured, and the exchange happened on the *second* one.
+        The old code promoted the first — a relay that may have failed outright —
+        so every later send/receive still needed ``--relay``.
+        """
+        p = load_profile(profile_with_instance)
+        p.default_relays = ["wss://broken.example.com", "wss://worked.example.com"]
+        save_profile(p, profile_with_instance)
+
+        peer = Identity.generate("bob")
+        trusted = TrustedKey(did=peer.did, label="", nostr_pubkey=peer.nostr_public_hex)
+        from aya.adapters.cli._kernel import _record_pairing
+
+        p = load_profile(profile_with_instance)
+        promoted = _record_pairing(
+            p, profile_with_instance, "bob", trusted, "wss://worked.example.com"
+        )
+
+        assert promoted == "wss://worked.example.com"
+        saved = load_profile(profile_with_instance)
+        assert saved.default_relays[0] == "wss://worked.example.com"
+        # The relay that did not carry the exchange stays as a fallback, not primary.
+        assert saved.default_relays[1] == "wss://broken.example.com"
 
     def test_pairing_over_existing_primary_reports_no_change(self, profile_with_instance: Path):
         p = load_profile(profile_with_instance)
@@ -4548,8 +4609,7 @@ class TestRelayPromotion:
 
         p = load_profile(profile_with_instance)
         assert (
-            _record_pairing(p, profile_with_instance, "bob", trusted, ["wss://a.example.com"])
-            is None
+            _record_pairing(p, profile_with_instance, "bob", trusted, "wss://a.example.com") is None
         )
 
 

@@ -80,12 +80,13 @@ def pair(
     if code:
         # ── Joiner mode ──────────────────────────────────────────────
         try:
-            trusted = asyncio.run(join_pairing(local, code, relay_urls))
+            result = asyncio.run(join_pairing(local, code, relay_urls))
         except PairingError as exc:
             err.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from exc
 
-        promoted = _record_pairing(p, profile, peer, trusted, relay_urls)
+        trusted = result.trusted
+        promoted = _record_pairing(p, profile, peer, trusted, result.relay)
 
         if format_ == OutputFormat.JSON:
             _output_json(
@@ -161,11 +162,11 @@ def pair(
             else nullcontext()
         )
         with ctx_mgr:
-            trusted_or_none = asyncio.run(
+            result_or_none = asyncio.run(
                 poll_for_pair_response(relay_urls, local.nostr_public_hex, request_event_id)
             )
 
-        if trusted_or_none is None:
+        if result_or_none is None:
             if format_ == OutputFormat.JSON:
                 _emit_error(ErrorCode.PAIR_TIMEOUT, "Pairing timed out")
             console.print(
@@ -174,8 +175,8 @@ def pair(
             )
             raise typer.Exit(1)
 
-        trusted = trusted_or_none
-        promoted = _record_pairing(p, profile, peer, trusted, relay_urls)
+        trusted = result_or_none.trusted
+        promoted = _record_pairing(p, profile, peer, trusted, result_or_none.relay)
 
         if format_ == OutputFormat.JSON:
             _output_json(

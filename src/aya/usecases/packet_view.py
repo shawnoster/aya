@@ -60,7 +60,7 @@ def read_view(packet: Packet, *, meta: bool) -> dict[str, Any]:
 
     ``body`` stays a readable string except for non-seed dict content, which is
     passed through as a dict so structured payloads survive a round trip.
-    ``meta`` adds the envelope fields; without it the caller gets identity and
+    ``meta`` adds the envelope fields; without it the caller gets id and
     body only.
     """
     body: Any

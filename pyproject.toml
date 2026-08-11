@@ -77,6 +77,7 @@ select = [
     "PLW",  # pylint warnings
     "RUF",  # Ruff-specific rules
     "ANN",  # flake8-annotations
+    "SLF",  # flake8-self — src/ must not reach into private members
 ]
 ignore = [
     "B008",    # Typer/Click intentionally uses function calls in parameter defaults
@@ -90,6 +91,7 @@ known-first-party = ["aya"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
     "ANN",      # test signatures don't need full annotations
+    "SLF001",   # tests assert on private state on purpose
     "ARG",      # pytest fixtures often look unused
     "PLR2004",  # magic values in test assertions
     "S",        # tests may use patterns flagged by security rules
@@ -173,12 +175,26 @@ addopts = "-v"
 plugins = ["pydantic.mypy"]
 python_version = "3.13"
 strict = true
+# PEP 702: fail when we call something a dependency marked @deprecated, so a
+# removal in a later release surfaces here rather than at runtime.
+enable_error_code = ["deprecated"]
 
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 build_command = "python -m pip install --quiet build && python -m build"
-commit_parser = "angular"
+# "angular" was renamed to "conventional" and is removed in v11.
+commit_parser = "conventional"
+
+[tool.semantic_release.changelog]
+# Insert each release under the flag rather than regenerating the whole file.
+mode = "update"
+insertion_flag = "<!-- version list -->"
+
+[tool.semantic_release.changelog.default_templates]
+# Only read here. At [tool.semantic_release] it is silently ignored, which is
+# why CHANGELOG.md went 88 tags without an update, and the flatter
+# [tool.semantic_release.changelog] form is deprecated.
 changelog_file = "CHANGELOG.md"
 
 [tool.semantic_release.remote]

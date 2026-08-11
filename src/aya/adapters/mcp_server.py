@@ -641,11 +641,28 @@ _HANDLERS: dict[str, Handler] = {
 }
 
 
+def _missing_required(name: str, arguments: dict[str, Any]) -> list[str]:
+    """Required fields the caller omitted, per the tool's own declared schema."""
+    tool = next((t for t in _TOOLS if t.name == name), None)
+    if tool is None:
+        return []
+    required = tool.input_schema.get("required", [])
+    return [field for field in required if field not in arguments]
+
+
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
     """Dispatch one tool call. Transport-independent, so tests can call it directly."""
     handler = _HANDLERS.get(name)
     if handler is None:
         return _error(f"Unknown tool: {name}")
+
+    # mcp 2.0 stopped validating arguments against input_schema on the way in —
+    # the schema is advisory now. Without this, a caller that omits a required
+    # field gets the repr of a KeyError ({"error": "'to'"}), which names neither
+    # the tool nor the fact that the field was required.
+    if missing := _missing_required(name, arguments):
+        return _error(f"{name} is missing required argument(s): {', '.join(missing)}")
+
     try:
         return await handler(arguments)
     except Exception as exc:

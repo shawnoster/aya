@@ -593,6 +593,39 @@ async def test_read_tool_shape_matches_the_cli(tmp_path):
         assert json.loads(result[0].text) == read_view(pkt, meta=meta)
 
 
+async def test_missing_required_argument_names_the_tool_and_the_field():
+    """mcp 2.0 stopped validating arguments, so we do it before dispatch.
+
+    Previously a caller that omitted a required field reached the handler and
+    hit a bare KeyError, which surfaced as {"error": "'to'"} — no tool name, no
+    indication the field was required. The whole suite stayed green because
+    every other test sends well-formed arguments.
+    """
+    result = await call_tool("aya_send", {})
+    payload = json.loads(result[0].text)
+    assert "aya_send" in payload["error"]
+    assert "required" in payload["error"]
+    assert "to" in payload["error"]
+
+
+async def test_missing_required_argument_lists_every_omission():
+    """Report all missing fields at once, not just the first."""
+    result = await call_tool("aya_send", {"to": "home"})
+    error = json.loads(result[0].text)["error"]
+    assert "intent" in error
+    assert "content" in error
+
+
+async def test_optional_arguments_are_not_required():
+    """Only schema-declared `required` fields are enforced."""
+    from aya.adapters.mcp_server import _missing_required
+
+    # aya_send declares to/intent/content required; instance and relay optional.
+    assert _missing_required("aya_send", {"to": "a", "intent": "b", "content": "c"}) == []
+    # A tool with no required fields accepts an empty payload.
+    assert _missing_required("aya_status", {}) == []
+
+
 async def test_read_tool_short_prefix():
     """aya_read rejects prefixes shorter than 8 chars."""
     result = await call_tool("aya_read", {"packet_id": "abc"})

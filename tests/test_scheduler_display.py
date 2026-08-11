@@ -56,65 +56,49 @@ def _isolate_scheduler(tmp_path, monkeypatch):
 # ── filter helpers ────────────────────────────────────────────────────────────
 
 
-class TestItemsOfType:
-    def test_filters_by_type(self):
-        items: list[SchedulerItem] = [
-            {"id": "a", "type": "reminder", "status": "pending", "message": "", "created_at": ""},
-            {"id": "b", "type": "watch", "status": "active", "message": "", "created_at": ""},
+class TestFilterHelpers:
+    """One test per helper. Each is a one-line comprehension, so the only thing
+    worth asserting is that it selects *and* excludes — plus the variadic form
+    of ``_items_of_type``, which is the one non-obvious signature here.
+    """
+
+    def _item(self, id_: str, type_: str, status: str) -> SchedulerItem:
+        return {"id": id_, "type": type_, "status": status, "message": "", "created_at": ""}
+
+    def test_items_of_type_selects_the_named_types_only(self):
+        items = [
+            self._item("a", "reminder", "pending"),
+            self._item("b", "watch", "active"),
+            self._item("c", "recurring", "active"),
         ]
-        result = _items_of_type(items, "reminder")
-        assert len(result) == 1
-        assert result[0]["id"] == "a"
 
-    def test_filters_multiple_types(self):
-        items: list[SchedulerItem] = [
-            {"id": "a", "type": "reminder", "status": "pending", "message": "", "created_at": ""},
-            {"id": "b", "type": "watch", "status": "active", "message": "", "created_at": ""},
-            {"id": "c", "type": "recurring", "status": "active", "message": "", "created_at": ""},
+        assert [i["id"] for i in _items_of_type(items, "reminder")] == ["a"]
+        # Variadic: several types in one call.
+        assert [i["id"] for i in _items_of_type(items, "reminder", "watch")] == ["a", "b"]
+        assert _items_of_type(items, "nonexistent") == []
+
+    def test_items_with_status_selects_the_named_statuses_only(self):
+        items = [
+            self._item("a", "reminder", "pending"),
+            self._item("b", "reminder", "dismissed"),
         ]
-        result = _items_of_type(items, "reminder", "watch")
-        assert len(result) == 2
 
-    def test_empty_list_returns_empty(self):
-        assert _items_of_type([], "reminder") == []
+        assert [i["id"] for i in _items_with_status(items, "pending")] == ["a"]
+        assert [i["id"] for i in _items_with_status(items, "pending", "dismissed")] == ["a", "b"]
 
-
-class TestItemsWithStatus:
-    def test_filters_by_status(self):
-        items: list[SchedulerItem] = [
-            {"id": "a", "type": "reminder", "status": "pending", "message": "", "created_at": ""},
-            {"id": "b", "type": "reminder", "status": "dismissed", "message": "", "created_at": ""},
-        ]
-        result = _items_with_status(items, "pending")
-        assert len(result) == 1
-        assert result[0]["id"] == "a"
-
-
-class TestUnseen:
-    def test_filters_unseen(self):
-        alerts: list[AlertItem] = [
-            {
-                "id": "a",
+    def test_unseen_drops_seen_alerts(self):
+        def alert(id_: str, *, seen: bool) -> AlertItem:
+            return {
+                "id": id_,
                 "source_item_id": "x",
                 "created_at": "2026-01-01T00:00:00",
-                "message": "one",
+                "message": id_,
                 "details": {},
-                "seen": False,
+                "seen": seen,
                 "severity": SEVERITY_ACTIONABLE,
-            },
-            {
-                "id": "b",
-                "source_item_id": "y",
-                "created_at": "2026-01-01T00:00:00",
-                "message": "two",
-                "details": {},
-                "seen": True,
-                "severity": SEVERITY_ACTIONABLE,
-            },
-        ]
-        result = _unseen(alerts)
-        assert len(result) == 1
-        assert result[0]["id"] == "a"
+            }
+
+        assert [a["id"] for a in _unseen([alert("a", seen=False), alert("b", seen=True)])] == ["a"]
 
 
 # ── _create_alert ─────────────────────────────────────────────────────────────

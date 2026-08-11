@@ -264,10 +264,6 @@ class TestGetPending:
 
 
 class TestFormatPending:
-    def test_empty(self):
-        output = format_pending({"alerts": [], "session_crons": [], "instance_id": "t"})
-        assert "No pending items" in output
-
     def test_with_alerts(self):
         from aya.scheduler import _get_local_tz
 

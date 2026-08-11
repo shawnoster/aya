@@ -25,8 +25,8 @@ branches.
   path that leaves either world-readable, or that lets one instance overwrite
   another's keys, is in scope.
 - **Relay trust** — packets from unpaired senders must not be ingested without
-  `--yes`, and a failed signature must be discarded rather than surfaced as
-  trusted content.
+  explicit confirmation (interactive prompt or `--yes`), and a failed signature
+  must be discarded rather than surfaced as trusted content.
 - **The gateway** (`gateway/`) — bearer-token authentication on its endpoints.
   An unauthenticated path to an effect is in scope.
 - **Workflow triggers** — `.github/workflows/opencode.yml` runs on an issue or

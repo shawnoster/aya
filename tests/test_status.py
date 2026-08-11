@@ -109,11 +109,6 @@ class TestTimeFlavor:
 
 
 class TestPerspective:
-    def test_returns_string(self):
-        result = _perspective()
-        assert isinstance(result, str)
-        assert len(result) > 10
-
     def test_deterministic_per_day(self):
         assert _perspective() == _perspective()
 

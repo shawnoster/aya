@@ -29,6 +29,34 @@ jobs:
     if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
 
     steps:
+      # Checkout uses RELEASE_TOKEN, and git reports a rejected token as
+      # "could not read Username for 'https://github.com'" — which names
+      # neither the secret nor the expiry. That message is what three weeks
+      # of failed releases actually looked like. Fail here instead, with the
+      # cause and the fix in the error.
+      #
+      # Catches missing, expired and revoked tokens (401). It does NOT prove
+      # the token can write: this repo is public, so a valid token with no
+      # Contents permission still reads 200 here and only fails later, when
+      # semantic-release pushes the tag.
+      - name: Check RELEASE_TOKEN
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error title=RELEASE_TOKEN missing::The secret is unset or empty. Create a fine-grained PAT with Contents: read/write, then: gh secret set RELEASE_TOKEN --repo $GITHUB_REPOSITORY"
+            exit 1
+          fi
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $RELEASE_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY")
+          if [ "$code" != "200" ]; then
+            echo "::error title=RELEASE_TOKEN invalid::GitHub rejected the token (HTTP $code) — expired or revoked. PATs expire silently; rotate it: gh secret set RELEASE_TOKEN --repo $GITHUB_REPOSITORY (needs Contents: read/write)"
+            exit 1
+          fi
+          echo "RELEASE_TOKEN accepted for $GITHUB_REPOSITORY."
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history required for version determination
@@ -60,3 +88,67 @@ jobs:
         # Configure trusted publisher on PyPI:
         #   Settings → Publishing → Add publisher
         #   repo: shawnoster/aya, workflow: release.yml, environment: pypi
+
+  # A release that fails on `schedule` has no audience: nobody is watching the
+  # Actions tab, and GitHub's own notification is one email among many. This
+  # job files the failure where it cannot be scrolled past, and keeps a single
+  # open issue rather than one per run.
+  notify:
+    name: Report the failure loudly
+    needs: release
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write   # file/update the failure issue; overrides the job-level default
+
+    steps:
+      - name: File or update the release-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIGGER: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          gh label create release-failure --color B60205 \
+            --description "The release pipeline failed and no version shipped" --force
+
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "\`release.yml\` failed on **$TRIGGER** at \`${SHA:0:7}\`. No version was published."
+            echo
+            echo "**Run:** $RUN_URL"
+            echo
+            echo "This does not self-heal. Every later push fails the same way until it is fixed,"
+            echo "and \`pip\`/\`uv\` keep serving the last good release in the meantime."
+            echo
+            echo "Check the **Check RELEASE_TOKEN** step first — a fine-grained PAT expires"
+            echo "silently, which is the failure this notification was added for. To rotate:"
+            echo
+            echo '```'
+            echo "gh secret set RELEASE_TOKEN --repo $GH_REPO   # Contents: read/write"
+            echo '```'
+            echo
+            echo "Close this issue once a release succeeds; the next failure reopens the loop."
+          } > "$body"
+
+          # One rolling issue: comment on the open one if it exists, else file it.
+          num=$(gh issue list --label release-failure --state open \
+            --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$num" ]; then
+            echo "Commenting on existing issue #$num"
+            gh issue comment "$num" --body-file "$body"
+          else
+            echo "Filing a new release-failure issue"
+            gh issue create --title "Release failed on $TRIGGER (${SHA:0:7})" \
+              --label release-failure --body-file "$body"
+          fi
+
+          # Also surface it on the run page itself, so the Actions view is not silent.
+          {
+            echo "## Release failed"
+            echo
+            cat "$body"
+          } >> "$GITHUB_STEP_SUMMARY"

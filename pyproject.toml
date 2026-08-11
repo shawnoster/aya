@@ -78,6 +78,7 @@ select = [
     "RUF",  # Ruff-specific rules
     "ANN",  # flake8-annotations
     "SLF",  # flake8-self — src/ must not reach into private members
+    "BLE",  # flake8-blind-except — a bare `except Exception` needs a stated reason
 ]
 ignore = [
     "B008",    # Typer/Click intentionally uses function calls in parameter defaults

@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aya.adapters import clock
 
@@ -45,8 +45,8 @@ def _get_local_tz() -> ZoneInfo:
             iana = p.read_text().strip()
             if iana:
                 return ZoneInfo(iana)
-    except Exception:
-        logger.debug("Failed to read /etc/timezone")
+    except (OSError, ValueError, ZoneInfoNotFoundError) as exc:
+        logger.debug("Could not use /etc/timezone: %s", exc)
 
     # Try /etc/localtime symlink (most Linux distros)
     try:
@@ -55,8 +55,8 @@ def _get_local_tz() -> ZoneInfo:
         if "zoneinfo/" in resolved:
             iana = resolved.split("zoneinfo/", 1)[1]
             return ZoneInfo(iana)
-    except Exception:
-        logger.debug("Failed to resolve /etc/localtime")
+    except (OSError, ValueError, ZoneInfoNotFoundError) as exc:
+        logger.debug("Could not use /etc/localtime: %s", exc)
 
     logger.warning("Could not detect system timezone; falling back to UTC")
     return ZoneInfo("UTC")

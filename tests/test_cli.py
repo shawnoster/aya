@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -2641,6 +2642,31 @@ class TestPacketPersistence:
         # The From column is what distinguishes them.
         by_intent = {p["intent"]: p for p in data["packets"]}
         assert by_intent["outbound"]["from"] == local.did
+
+    def test_unreadable_packet_file_is_reported_not_silently_skipped(
+        self, packets_dir: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A corrupt file used to vanish from the listing with no trace at all.
+
+        The handler was `except Exception: continue`, so the listing came back
+        shorter than the directory and nothing said why. Machine output must
+        stay clean, so the warning belongs on stderr via logging, not stdout.
+        """
+        local = Identity.generate("default")
+        peer = Identity.generate("home")
+        good = Packet(from_did=peer.did, to_did=local.did, intent="fine", content="ok")
+        (packets_dir / f"{good.id}.json").write_text(good.to_json())
+        (packets_dir / "01JUNREADABLE0000000000000.json").write_text("not json at all")
+
+        with caplog.at_level(logging.WARNING):
+            result = runner.invoke(app, ["packets", "--format", "json"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        # stdout stays parseable — the warning must not leak into it.
+        assert [p["intent"] for p in data["packets"]] == ["fine"]
+        assert "01JUNREADABLE0000000000000.json" in caplog.text
+        assert "Skipping unreadable packet file" in caplog.text
 
     def test_read_unknown_id(self, packets_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """read with an unknown ID exits nonzero."""

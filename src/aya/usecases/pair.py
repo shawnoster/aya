@@ -362,7 +362,7 @@ async def publish_pair_request(
                         continue
                     logger.warning("Relay %s rejected pair request: %s", url, resp)
                     break
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — retried per relay, then reported
                 if attempt < 2:
                     delay = _backoff_delay(attempt)
                     logger.warning(
@@ -472,7 +472,7 @@ async def _poll_single_relay(
     except TimeoutError:
         logger.debug("Pair polling timed out on %s", relay_url)
         return None, True
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — one relay failing must not end the poll
         logger.warning("Pair polling connection error on %s: %s", relay_url, exc)
         return None, True
     return None, False
@@ -538,7 +538,7 @@ async def join_pairing(
                     published = True
                 else:
                     logger.warning("Relay %s rejected pair response: %s", url, resp)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — tried per relay; raises below if all fail
             logger.warning("Failed to publish pair response to %s: %s", url, exc)
     if not published:
         raise PairingError("All relays rejected the pair response")
@@ -656,7 +656,7 @@ async def _find_pair_request(
                     await ws.send(json.dumps(["CLOSE", sub_id]))
                     return event, url
                 await ws.send(json.dumps(["CLOSE", sub_id]))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — tried per relay; returns None if none answer
             logger.warning("Failed to query %s for pair request: %s", url, exc)
     return None
 

@@ -201,7 +201,7 @@ class RelayClient:
                     logger.warning("Relay %s rejected event: %s", relay_url, response)
                     reason = str(response[3]) if len(response) > 3 and response[3] else "rejected"
                     return None, reason
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — _is_transient_error triages it below
                 if _is_transient_error(exc) and attempt < _MAX_RETRIES_PUBLISH - 1:
                     delay = _backoff_delay(attempt)
                     logger.warning(
@@ -324,7 +324,7 @@ class RelayClient:
                         await ws.send(json.dumps(["CLOSE", sub_id]))
                     fetch_ok = True
                     break  # page fetched successfully
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — _is_transient_error triages it below
                     if _is_transient_error(exc) and attempt < _MAX_RETRIES_FETCH - 1:
                         delay = _backoff_delay(attempt)
                         logger.warning(
@@ -403,7 +403,7 @@ class RelayClient:
                         packet = Packet.from_json(plaintext)
                     if not packet.is_expired():
                         yield packet
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — one bad event must not end the poll
                     logger.warning("Skipping malformed event: %s", exc)
 
             # Stop paginating if the relay is exhausted (partial page), if we
@@ -438,7 +438,7 @@ class RelayClient:
                 async with websockets.connect(relay_url) as ws:
                     await ws.send(json.dumps(["EVENT", event]))
                     await asyncio.wait_for(ws.recv(), timeout=10)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — receipts are best-effort, per relay
                 logger.warning("Failed to send receipt to %s: %s", relay_url, exc)
 
     def _build_event(

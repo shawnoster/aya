@@ -190,8 +190,11 @@ def _check_jira_query(config: JiraQueryConfig) -> JiraQueryState | None:
                 for i in data.get("issues", [])
             ],
         }
-    except Exception as e:
-        logging.debug("Jira query failed: %s", e)
+    except Exception as e:  # noqa: BLE001 — network, auth and payload-shape all land here
+        # Warning, not debug: a failed check returns None, which the caller
+        # cannot tell apart from "no change", so the log is the only signal
+        # that a watch has silently stopped working.
+        logger.warning("Jira query watch failed for %s: %s", config.get("jql", "?"), e)
         return None
 
 
@@ -222,8 +225,8 @@ def _check_jira_ticket(config: JiraTicketConfig) -> JiraTicketState | None:
             "status": fields.get("status", {}).get("name", ""),
             "assignee": (fields.get("assignee") or {}).get("displayName", "Unassigned"),
         }
-    except Exception as e:
-        logging.debug("Jira ticket check failed: %s", e)
+    except Exception as e:  # noqa: BLE001 — network, auth and payload-shape all land here
+        logger.warning("Jira ticket watch failed for %s: %s", ticket, e)
         return None
 
 

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from aya.scheduler.providers import (
     _check_ci_checks,
@@ -896,3 +899,41 @@ class TestEvaluateAutoRemove:
     def test_unknown_remove_when_returns_false(self):
         item = self._item(provider="github-pr", remove_when="some_unknown_condition")
         assert _evaluate_auto_remove(item, self._pr_state()) is False
+
+
+# ── watch failures must be visible ───────────────────────────────────────────
+
+
+class TestWatchFailureIsReported:
+    """A failed check returns None, which the caller cannot tell apart from
+    "nothing changed". These logged at debug, so a watch that had silently
+    stopped working looked identical to a quiet one.
+    """
+
+    def test_jira_query_failure_logs_at_warning(self, caplog: pytest.LogCaptureFixture):
+        with (
+            patch(
+                "aya.scheduler.providers._get_jira_credentials",
+                return_value=("a@b.c", "tok", "https://x"),
+            ),
+            patch("httpx.post", side_effect=OSError("boom")),
+            caplog.at_level(logging.WARNING),
+        ):
+            assert _check_jira_query({"jql": "project = TEST"}) is None
+
+        assert "Jira query watch failed" in caplog.text
+        assert "project = TEST" in caplog.text
+
+    def test_jira_ticket_failure_logs_at_warning(self, caplog: pytest.LogCaptureFixture):
+        with (
+            patch(
+                "aya.scheduler.providers._get_jira_credentials",
+                return_value=("a@b.c", "tok", "https://x"),
+            ),
+            patch("httpx.get", side_effect=OSError("boom")),
+            caplog.at_level(logging.WARNING),
+        ):
+            assert _check_jira_ticket({"ticket": "TEST-1"}) is None
+
+        assert "Jira ticket watch failed" in caplog.text
+        assert "TEST-1" in caplog.text

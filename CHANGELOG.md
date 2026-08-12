@@ -2,6 +2,49 @@
 
 <!-- version list -->
 
+## v2.0.1 (2026-08-12)
+
+### Bug Fixes
+
+- **aya**: Stop five handlers swallowing failures, and enable BLE001
+  ([#319](https://github.com/shawnoster/aya/pull/319),
+  [`ed6df02`](https://github.com/shawnoster/aya/commit/ed6df02418afd3522558e93ad73797b45e07609c))
+
+- **aya**: Validate MCP tool arguments, which mcp 2.0 stopped doing
+  ([#318](https://github.com/shawnoster/aya/pull/318),
+  [`eb829a9`](https://github.com/shawnoster/aya/commit/eb829a9b0ec4b3b952082bd76870bca7aa67fab8))
+
+### Chores
+
+- **lint**: Add the two guards that cost nothing, decline the four that do not
+  ([#318](https://github.com/shawnoster/aya/pull/318),
+  [`eb829a9`](https://github.com/shawnoster/aya/commit/eb829a9b0ec4b3b952082bd76870bca7aa67fab8))
+
+- **release**: Hand the changelog to semantic-release, fix the parser deprecation, and upgrade the
+  gateway ([#318](https://github.com/shawnoster/aya/pull/318),
+  [`eb829a9`](https://github.com/shawnoster/aya/commit/eb829a9b0ec4b3b952082bd76870bca7aa67fab8))
+
+- **release**: Let semantic-release own the changelog, and drop the angular parser
+  ([#318](https://github.com/shawnoster/aya/pull/318),
+  [`eb829a9`](https://github.com/shawnoster/aya/commit/eb829a9b0ec4b3b952082bd76870bca7aa67fab8))
+
+### Documentation
+
+- **aya**: Fix stale claims, split by audience, and add CONTRIBUTING
+  ([#317](https://github.com/shawnoster/aya/pull/317),
+  [`0899ba7`](https://github.com/shawnoster/aya/commit/0899ba7e8def3845f36224efe7dee0999791d85c))
+
+- **security**: Fix relay trust description to include interactive confirmation
+  ([#317](https://github.com/shawnoster/aya/pull/317),
+  [`0899ba7`](https://github.com/shawnoster/aya/commit/0899ba7e8def3845f36224efe7dee0999791d85c))
+
+### Testing
+
+- **aya**: Trim six tests that duplicated or asserted nothing
+  ([#316](https://github.com/shawnoster/aya/pull/316),
+  [`c944f0f`](https://github.com/shawnoster/aya/commit/c944f0ff38f6d5325034c69ba34667d8ec2f2fa5))
+
+
 ## v2.0.0 (2026-08-11)
 
 ### Bug Fixes

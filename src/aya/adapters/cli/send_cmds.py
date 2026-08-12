@@ -371,8 +371,8 @@ def ack(
                 if alert.get("source_item_id", "").startswith(packet_id):
                     dismiss_alert(alert["id"])
                     break
-        except Exception:  # noqa: S110
-            pass
+        except Exception as exc:  # noqa: BLE001 — the ack already succeeded; never fail on cleanup
+            logger.warning("Could not clear the seed alert for %s: %s", packet_id, exc)
 
         _render_ack(result, message or "acknowledged", as_json=format_ == OutputFormat.JSON)
 

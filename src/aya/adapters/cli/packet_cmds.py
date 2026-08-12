@@ -373,7 +373,10 @@ def packets(
                     "content_type": pkt.content_type,
                 }
             )
-        except Exception:  # noqa: S112
+        except Exception as exc:  # noqa: BLE001 — any unreadable file must not abort the listing
+            # Logged, not swallowed: a skipped file makes the listing shorter
+            # than the directory, and without this the difference is invisible.
+            logger.warning("Skipping unreadable packet file %s: %s", f.name, exc)
             continue
 
     if format_ == OutputFormat.JSON:

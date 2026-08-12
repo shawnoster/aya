@@ -591,8 +591,8 @@ async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
                     "sent_at": pkt.sent_at,
                 }
             )
-        except Exception:
-            logger.debug("Skipping unparseable packet file %s", f.name)
+        except Exception as exc:  # noqa: BLE001 — any unreadable file must not abort the listing
+            logger.warning("Skipping unreadable packet file %s: %s", f.name, exc)
     return _text(summaries)
 
 

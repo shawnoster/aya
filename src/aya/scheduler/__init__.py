@@ -140,6 +140,8 @@ from .providers import (
     _get_jira_credentials,
     _run_gh,
     poll_watch,
+    record_poll_attempt,
+    should_warn_for_failures,
 )
 
 # ── display ──────────────────────────────────────────────────────────────────
@@ -362,5 +364,7 @@ __all__ = [
     "_check_schema_version",
     "WATCH_PROVIDERS",
     "poll_watch",
+    "record_poll_attempt",
+    "should_warn_for_failures",
     "parse_work_hours",
 ]

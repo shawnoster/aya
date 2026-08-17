@@ -395,6 +395,44 @@ def poll_watch(item: SchedulerItem) -> tuple[WatchState | None, bool]:
     return new_state, detect_watch_change(item, new_state)
 
 
+# Consecutive-failure counts at which a failing watch warrants a WARNING rather
+# than a DEBUG log. A watch polls as often as every minute, so warning on every
+# failure buries the signal; warning on a widening set of milestones — and then
+# every _FAILURE_LOG_EVERY after the last one — keeps a persistent failure
+# visible in the log forever without repeating it on every tick.
+_FAILURE_LOG_STEPS = frozenset({1, 3, 10, 50, 100, 500})
+_FAILURE_LOG_EVERY = 500
+
+
+def record_poll_attempt(item: SchedulerItem, now_iso: str, new_state: WatchState | None) -> int:
+    """Record that a watch was polled, and return its consecutive-failure count.
+
+    Every poll site must call this, because ``last_checked_at`` is both the
+    "when did we last look" record and the poll-interval gate. Advancing it only
+    on success leaves a watch that can never succeed re-polling on every tick,
+    producing no alert and never satisfying its ``remove_when``.
+
+    ``consecutive_failures`` is what stops the stamp from making a broken watch
+    look healthy: the status views render ``last_checked_at`` as "checked
+    HH:MM", so without a counter a permanent failure is indistinguishable from a
+    recent success. Returns 0 when the poll succeeded.
+    """
+    item["last_checked_at"] = now_iso
+    if new_state is None:
+        failures = item.get("consecutive_failures", 0) + 1
+        item["consecutive_failures"] = failures
+        return failures
+    item["consecutive_failures"] = 0
+    return 0
+
+
+def should_warn_for_failures(failures: int) -> bool:
+    """Whether this consecutive-failure count should be logged at WARNING."""
+    return failures in _FAILURE_LOG_STEPS or (
+        failures > max(_FAILURE_LOG_STEPS) and failures % _FAILURE_LOG_EVERY == 0
+    )
+
+
 def detect_watch_change(item: SchedulerItem, new_state: WatchState) -> bool:
     """Detect whether a watch's state transition should fire an alert."""
     provider = item.get("provider", "")

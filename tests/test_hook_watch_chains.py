@@ -211,3 +211,91 @@ class TestHookWatchChains:
         assert alerts[0]["severity"] == "heartbeat"
         assert "heartbeat" in alerts[0]["message"]
         assert "heartbeat" in rewake_messages[0]
+
+
+class TestChainPollFailures:
+    """A chain stage whose poll fails must record the attempt, not retry every tick."""
+
+    @staticmethod
+    def _chain(now):
+        return {
+            "id": "chain-failing",
+            "type": "watch",
+            "status": "active",
+            "created_at": now.isoformat(),
+            "message": "ship-pr",
+            "chain": "ship-pr",
+            "tags": [],
+            "session_required": False,
+            "stages": [
+                {
+                    "name": "wait-for-checks",
+                    "watch": "ci-checks owner/repo#42",
+                    "condition": "checks_complete",
+                    "action": "notify",
+                }
+            ],
+            "current_stage_index": 0,
+            "current_stage_started_at": now.isoformat(),
+            "heartbeat_interval_minutes": 120,
+            "last_heartbeat_at": now.isoformat(),
+        }
+
+    def test_failed_stage_poll_records_attempt(self, isolated_scheduler, monkeypatch):
+        now = datetime(2026, 4, 5, 12, 0, tzinfo=UTC)
+        _write_items(isolated_scheduler["scheduler_file"], [self._chain(now)])
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
+        monkeypatch.setattr("aya.usecases.watch_chains.poll_watch", lambda item: (None, False))
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", lambda *a, **kw: None)
+
+        _hook_watch_impl({})
+
+        item = _read_items(isolated_scheduler["scheduler_file"])[0]
+        # Without the stamp the interval gate never advances and the stage
+        # re-polls on every tick for as long as the chain lives.
+        assert item["last_checked_at"] is not None
+        assert item["consecutive_failures"] == 1
+        assert item["current_stage_index"] == 0
+
+    def test_failing_stage_respects_interval(self, isolated_scheduler, monkeypatch):
+        now = datetime(2026, 4, 5, 12, 0, tzinfo=UTC)
+        _write_items(isolated_scheduler["scheduler_file"], [self._chain(now)])
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", lambda *a, **kw: None)
+
+        calls: list[int] = []
+
+        def failing_poll(_item):
+            calls.append(1)
+            return None, False
+
+        monkeypatch.setattr("aya.usecases.watch_chains.poll_watch", failing_poll)
+
+        _hook_watch_impl({})
+        _hook_watch_impl({})
+        _hook_watch_impl({})
+
+        # ci-checks polls at 1-minute intervals and the clock is frozen, so
+        # three runs inside that minute must cost one poll.
+        assert len(calls) == 1
+        assert _read_items(isolated_scheduler["scheduler_file"])[0]["consecutive_failures"] == 1
+
+    def test_recovery_resets_the_counter(self, isolated_scheduler, monkeypatch):
+        now = datetime(2026, 4, 5, 12, 0, tzinfo=UTC)
+        chain = self._chain(now)
+        chain["consecutive_failures"] = 4
+        chain["last_checked_at"] = (now - timedelta(minutes=30)).isoformat()
+        _write_items(isolated_scheduler["scheduler_file"], [chain])
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "aya.usecases.watch_chains.poll_watch",
+            lambda item: (
+                {"all_complete": True, "passed": ["lint"], "failed": [], "pending": []},
+                True,
+            ),
+        )
+
+        _hook_watch_impl({})
+
+        assert _read_items(isolated_scheduler["scheduler_file"])[0]["consecutive_failures"] == 0

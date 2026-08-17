@@ -30,6 +30,8 @@ from aya.scheduler import (
     add_watch,
     get_active_watches,
     poll_watch,
+    record_poll_attempt,
+    should_warn_for_failures,
 )
 from aya.scheduler.storage import _file_lock, _load_items_unlocked
 
@@ -377,12 +379,22 @@ def _process_watch_chain(
                     break
 
             new_state, changed = poll_watch(watch_item)
+            # Record the attempt before bailing out. A stage whose poll keeps
+            # failing would otherwise never advance last_checked_at, so it would
+            # re-poll on every tick and stall the chain with nothing logged.
+            failures = record_poll_attempt(item, now.isoformat(), new_state)
+            items_modified = True
             if new_state is None:
+                log = logger.warning if should_warn_for_failures(failures) else logger.debug
+                log(
+                    "chain %s stage %d failed to return state — %d consecutive failure(s)",
+                    item["id"][:8],
+                    index,
+                    failures,
+                )
                 break
 
-            item["last_checked_at"] = now.isoformat()
             item["last_state"] = new_state
-            items_modified = True
 
             if not changed:
                 break
@@ -478,7 +490,11 @@ def _process_hook_watch_state(
     from aya.scheduler.providers import _evaluate_auto_remove, detect_watch_change
 
     changed = detect_watch_change(item, new_state)
-    item["last_checked_at"] = now.isoformat()
+    # Reached both from a poll and from a pushed hook update. Going through
+    # record_poll_attempt keeps one owner of the stamp-and-counter bookkeeping,
+    # so a push that supplies state also clears any accumulated failures. It is
+    # idempotent, so the poll path calling it first is harmless.
+    record_poll_attempt(item, now.isoformat(), new_state)
     item["last_state"] = new_state
 
     alerts_modified = False
@@ -586,7 +602,16 @@ def _hook_watch_impl(payload: dict[str, Any]) -> int:
                     continue
 
             new_state, _changed = poll_watch(item)
+            failures = record_poll_attempt(item, now.isoformat(), new_state)
+            items_modified = True
             if new_state is None:
+                log = logger.warning if should_warn_for_failures(failures) else logger.debug
+                log(
+                    "hook watch %s (%s) failed to return state — %d consecutive failure(s)",
+                    item["id"][:8],
+                    item.get("provider", "unknown"),
+                    failures,
+                )
                 continue
 
             item_changed, alerts_changed = _process_hook_watch_state(

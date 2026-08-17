@@ -41,17 +41,15 @@ _gh_missing_warned: bool = False
 
 
 def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list[Any] | None:
-    """Run gh CLI and parse JSON output.
+    """Run the gh CLI and parse its JSON output.
 
-    A non-zero exit is not on its own a failure: ``gh pr checks`` reports check
-    state through its exit code (1 when a check failed, 8 when checks are still
-    pending) while still writing the requested JSON to stdout. Treating those as
-    errors discarded exactly the two states a ci-checks watch exists to detect,
-    so the watch never fired and never auto-removed.
+    Parseable JSON on stdout is the success signal, not the exit code. ``gh pr
+    checks`` reports check state *through* its exit code — 1 when a check has
+    failed, 8 while checks are still pending — and writes the requested JSON
+    either way, so a non-zero exit there carries a result rather than an error.
 
-    Parseable JSON on stdout is therefore the success signal. Genuine failures
-    (bad field, auth, no such PR) write to stderr and leave stdout empty or
-    non-JSON, so they still resolve to ``None``.
+    Genuine failures (an invalid field, auth, no such pull request) write to
+    stderr and leave stdout empty or non-JSON, and resolve to ``None``.
     """
     try:
         result = subprocess.run(
@@ -275,11 +273,11 @@ def _check_ci_checks(config: CiChecksConfig) -> CiChecksState | None:
 
     for check in data:
         name = check.get("name", "unknown")
-        # `bucket` is gh's own rollup of a check's outcome: pass, fail, pending,
-        # skipping, or cancel. It replaces the `conclusion` field this used to
-        # request, which gh does not expose on `pr checks` — every poll failed
-        # with `Unknown JSON field: "conclusion"`. `state` is kept as a fallback
-        # for the pending case because it is the raw upstream status.
+        # `bucket` is gh's rollup of a check's outcome: pass, fail, pending,
+        # skipping, or cancel. `gh pr checks` exposes no `conclusion` field —
+        # asking for one makes gh exit non-zero having emitted no JSON at all,
+        # so keep the requested fields to what `gh pr checks --json` accepts.
+        # `state` is the raw upstream status, kept as a fallback for pending.
         bucket = check.get("bucket") or ""
         status = check.get("state", "")
 

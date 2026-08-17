@@ -205,6 +205,21 @@ class TestCheckGithubPr:
             result = _check_github_pr(self._pr_config())
         assert result is None
 
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"message": "Bad credentials", "documentation_url": "https://docs.github.com"},
+            {"data": None, "errors": [{"message": "Could not resolve to a Repository"}]},
+        ],
+        ids=["http-error-body", "graphql-errors"],
+    )
+    def test_returns_none_on_json_error_payload(self, payload):
+        # _run_gh hands back any parseable JSON, including gh's error bodies, so
+        # this parsing is what keeps an error from being read as PR state.
+        with patch("aya.scheduler.providers._run_gh", return_value=payload):
+            result = _check_github_pr(self._pr_config())
+        assert result is None
+
     def test_returns_none_when_pull_request_null(self):
         response = {"data": {"repository": {"pullRequest": None}}}
         with patch("aya.scheduler.providers._run_gh", return_value=response):
@@ -458,10 +473,10 @@ class TestCheckCiChecks:
             result = _check_ci_checks(self._config())
         assert result is None
 
-    # Payloads below mirror real `gh pr checks --json name,state,bucket` output.
-    # The previous fixtures supplied a `conclusion` key that gh does not expose
-    # on `pr checks`, so they passed while every real poll failed with
-    # `Unknown JSON field: "conclusion"`.
+    # Payloads below mirror real `gh pr checks --json name,state,bucket` output:
+    # uppercase `state`, plus gh's `bucket` rollup. Keep fixtures in that shape —
+    # one carrying a field gh does not return (e.g. `conclusion`) passes here
+    # while every real poll fails.
 
     def test_all_passed(self):
         checks = [

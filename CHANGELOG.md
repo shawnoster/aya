@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.0.2 (2026-08-17)
+
+### Bug Fixes
+
+- **scheduler**: Make ci-checks watches actually poll
+  ([#322](https://github.com/shawnoster/aya/pull/322),
+  [`d124ea1`](https://github.com/shawnoster/aya/commit/d124ea173580027c74bc34c9b9c61dccb77db2d3))
+
+- **scheduler**: State the gh contract without narrating the bug
+  ([#322](https://github.com/shawnoster/aya/pull/322),
+  [`d124ea1`](https://github.com/shawnoster/aya/commit/d124ea173580027c74bc34c9b9c61dccb77db2d3))
+
+
 ## v2.0.1 (2026-08-12)
 
 ### Bug Fixes

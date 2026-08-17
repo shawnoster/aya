@@ -65,6 +65,12 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
+# Consecutive-failure counts at which a failing watch is logged at WARNING
+# rather than DEBUG. A watch polls as often as every minute, so warning on every
+# failure would bury the signal; warning on a widening set of milestones keeps a
+# persistent failure visible in the log without repeating it hundreds of times.
+_FAILURE_LOG_STEPS = frozenset({1, 3, 10, 50, 100, 500, 1000})
+
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
@@ -412,10 +418,17 @@ def run_poll(quiet: bool = False) -> None:
                     provider,
                     changed,
                 )
+                # Stamp the attempt whatever the outcome, so the poll interval
+                # applies to a failing watch too. Recording it only on success
+                # leaves a broken watch re-polling every tick forever, and
+                # `consecutive_failures` is what keeps that from then reading as
+                # healthy in the status views.
+                item["last_checked_at"] = now.isoformat()
+                items_modified = True
+
                 if new_state is not None:
-                    item["last_checked_at"] = now.isoformat()
+                    item["consecutive_failures"] = 0
                     item["last_state"] = new_state
-                    items_modified = True
 
                     if changed:
                         alert = _create_alert(
@@ -438,8 +451,20 @@ def run_poll(quiet: bool = False) -> None:
                         if not quiet:
                             pass
 
-                elif not quiet:
-                    pass
+                else:
+                    # A provider returning None is a failed poll, not "nothing
+                    # changed". Count it and say so: a watch that can never
+                    # succeed produces no alert and can never satisfy its
+                    # remove_when, so without a counter it accumulates silently.
+                    failures = item.get("consecutive_failures", 0) + 1
+                    item["consecutive_failures"] = failures
+                    log = logger.warning if failures in _FAILURE_LOG_STEPS else logger.debug
+                    log(
+                        "poll: watch %s (%s) failed to return state — %d consecutive failure(s)",
+                        item["id"][:8],
+                        provider,
+                        failures,
+                    )
 
             elif item["type"] == "reminder" and item["status"] == "pending":
                 due = datetime.fromisoformat(item["due_at"])

@@ -78,7 +78,10 @@ class SchedulerItem(TypedDict):
     condition: NotRequired[str]
     poll_interval_minutes: NotRequired[int]
     last_checked_at: NotRequired[str | None]
+    """When this watch was last *attempted*, successfully or not."""
     last_state: NotRequired[WatchState | None]
+    consecutive_failures: NotRequired[int]
+    """Polls since the last success. Non-zero means the watch is not working."""
     remove_when: NotRequired[str]
     # Recurring-specific
     cron: NotRequired[str]

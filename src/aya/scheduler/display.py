@@ -225,6 +225,9 @@ def format_scheduler_status(status: SchedulerStatus) -> str:
                 timing = f"last: {last_str}, next: ~{next_str}"
             else:
                 timing = "never polled"
+            failures = w.get("consecutive_failures", 0)
+            if failures:
+                timing += f", {failures} failed poll(s)"
             lines.append(f"  \u2022 [{provider}] {w.get('message', '?')[:50]} ({timing})")
     else:
         lines.append("\U0001f441  No active watches")

@@ -801,3 +801,160 @@ class TestRunPollNewCommentsIntegration:
 
         alerts_data = json.loads(_alerts_file().read_text())
         assert len(alerts_data["alerts"]) == 0
+
+
+class TestFailingWatchVisibility:
+    """A watch whose provider never returns state must not spin, and must not read as healthy."""
+
+    @staticmethod
+    def _seed_watch(now, **overrides):
+        from aya.scheduler import _alerts_file, _scheduler_file
+
+        item = {
+            "id": "watch-failing-1",
+            "type": "watch",
+            "status": "active",
+            "message": "CI checks on PR #1",
+            "provider": "ci-checks",
+            "watch_config": {"owner": "acme", "repo": "widget", "pr": 1},
+            "condition": "checks_failed",
+            "poll_interval_minutes": 5,
+            "last_checked_at": None,
+            "last_state": None,
+            "remove_when": "checks_complete",
+            "created_at": now.isoformat(),
+            "session_required": False,
+            "tags": [],
+        }
+        item.update(overrides)
+        _scheduler_file().write_text(json.dumps({"items": [item]}))
+        _alerts_file().write_text(json.dumps({"alerts": []}))
+
+    @staticmethod
+    def _read_watch():
+        from aya.scheduler import _scheduler_file
+
+        return json.loads(_scheduler_file().read_text())["items"][0]
+
+    def test_failed_poll_stamps_attempt_and_counts_failure(self):
+        from unittest.mock import patch
+
+        from aya.scheduler import _get_local_tz, run_poll
+
+        now = datetime.now(_get_local_tz())
+        self._seed_watch(now)
+
+        with patch("aya.scheduler.core.poll_watch", return_value=(None, False)):
+            run_poll(quiet=True)
+
+        item = self._read_watch()
+        # Stamped, so the poll interval now applies to the failing watch.
+        assert item["last_checked_at"] is not None
+        assert item["consecutive_failures"] == 1
+        assert item["status"] == "active"
+
+    def test_failing_watch_respects_interval_instead_of_polling_every_tick(self):
+        from unittest.mock import patch
+
+        from aya.scheduler import _get_local_tz, run_poll
+
+        now = datetime.now(_get_local_tz())
+        self._seed_watch(now)
+
+        with patch("aya.scheduler.core.poll_watch", return_value=(None, False)) as mock_poll:
+            run_poll(quiet=True)
+            run_poll(quiet=True)
+            run_poll(quiet=True)
+
+        # Three ticks inside one 5-minute interval must cost one poll, not three.
+        assert mock_poll.call_count == 1
+        assert self._read_watch()["consecutive_failures"] == 1
+
+    def test_failures_accumulate_across_intervals(self):
+        from unittest.mock import patch
+
+        from aya.scheduler import _get_local_tz, run_poll
+
+        now = datetime.now(_get_local_tz())
+        # Seed as already-due by backdating the last attempt past the interval.
+        stale = (now - timedelta(minutes=30)).isoformat()
+        self._seed_watch(now, last_checked_at=stale, consecutive_failures=2)
+
+        with patch("aya.scheduler.core.poll_watch", return_value=(None, False)):
+            run_poll(quiet=True)
+
+        assert self._read_watch()["consecutive_failures"] == 3
+
+    def test_success_resets_the_failure_count(self):
+        from unittest.mock import patch
+
+        from aya.scheduler import _get_local_tz, run_poll
+        from aya.scheduler.providers import CiChecksState
+
+        now = datetime.now(_get_local_tz())
+        stale = (now - timedelta(minutes=30)).isoformat()
+        self._seed_watch(now, last_checked_at=stale, consecutive_failures=7)
+
+        state = CiChecksState(all_complete=False, passed=["lint"], failed=[], pending=["test"])
+        with patch("aya.scheduler.core.poll_watch", return_value=(state, False)):
+            run_poll(quiet=True)
+
+        item = self._read_watch()
+        assert item["consecutive_failures"] == 0
+        assert item["last_state"] == state
+
+    def test_persistent_failure_warns_at_milestones_only(self, caplog):
+        import logging
+        from unittest.mock import patch
+
+        from aya.scheduler import _get_local_tz, run_poll
+
+        now = datetime.now(_get_local_tz())
+
+        def poll_again(prior_failures):
+            stale = (now - timedelta(minutes=30)).isoformat()
+            self._seed_watch(now, last_checked_at=stale, consecutive_failures=prior_failures)
+            with (
+                caplog.at_level(logging.WARNING, logger="aya.scheduler.core"),
+                patch("aya.scheduler.core.poll_watch", return_value=(None, False)),
+            ):
+                run_poll(quiet=True)
+
+        # 1st and 3rd failures are milestones; the 2nd is not, so it stays at DEBUG.
+        caplog.clear()
+        poll_again(0)
+        assert any("consecutive failure" in r.message for r in caplog.records)
+
+        caplog.clear()
+        poll_again(1)
+        assert not [r for r in caplog.records if "consecutive failure" in r.message]
+
+        caplog.clear()
+        poll_again(2)
+        assert any("consecutive failure" in r.message for r in caplog.records)
+
+    def test_json_status_exposes_watch_health(self, monkeypatch):
+        from aya.adapters.status_view import _render_json
+        from aya.usecases.status import _gather_status
+
+        failing = [
+            {
+                "id": "watch-failing-1",
+                "message": "CI checks on PR #1",
+                "provider": "ci-checks",
+                "last_checked_at": "2026-03-29T14:00:00-07:00",
+                "consecutive_failures": 12,
+            }
+        ]
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", lambda *a, **kw: failing)
+
+        payload = json.loads(_render_json(_gather_status()))
+        watch = payload["watches"][0]
+        # A JSON/MCP consumer must be able to tell a broken watch from a healthy
+        # one; emitting only id and message cannot express "failing every poll".
+        assert watch["consecutive_failures"] == 12
+        assert watch["provider"] == "ci-checks"
+        assert watch["last_checked_at"] is not None

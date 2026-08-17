@@ -135,8 +135,18 @@ def _render_json(data: dict[str, Any]) -> str:
             for r in data["due"]
         ],
         "upcoming": [{"due_at": r["due_at"], "message": r["message"]} for r in data["upcoming"]],
+        # provider/last_checked_at/consecutive_failures are carried here because
+        # this payload is what non-interactive consumers (the MCP status tool,
+        # scripts) see. Emitting only id and message hides a watch that is
+        # failing every poll, which the Rich view below does show.
         "watches": [
-            {"id": w["id"][:ID_PREVIEW_LENGTH], "message": w["message"]}
+            {
+                "id": w["id"][:ID_PREVIEW_LENGTH],
+                "message": w["message"],
+                "provider": w.get("provider"),
+                "last_checked_at": w.get("last_checked_at"),
+                "consecutive_failures": w.get("consecutive_failures", 0),
+            }
             for w in data["active_watches"]
         ],
         "next_eval": data["next_eval"],
@@ -234,8 +244,10 @@ def _render_rich(data: dict[str, Any], console: Console) -> None:
             last = w.get("last_checked_at")
             last_str = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
             msg = w["message"][:50]
+            failures = w.get("consecutive_failures", 0)
+            health = f"  [yellow]⚠ {failures} failed poll(s)[/yellow]" if failures else ""
             console.print(
-                f"  👁  {w['id'][:ID_PREVIEW_LENGTH]}  {msg}  [dim]checked {last_str}[/dim]"
+                f"  👁  {w['id'][:ID_PREVIEW_LENGTH]}  {msg}  [dim]checked {last_str}[/dim]{health}"
             )
         console.print()
 

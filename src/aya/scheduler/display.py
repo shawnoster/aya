@@ -37,6 +37,7 @@ from .types import (
     JiraQueryState,
     JiraTicketState,
     PendingResult,
+    RelayInboxState,
     SchedulerItem,
     SchedulerStatus,
     WatchState,
@@ -119,6 +120,18 @@ def _format_watch_alert(item: SchedulerItem, state: WatchState) -> str:
             names = ", ".join(ci_state["failed"])
             return f"{base} — FAILED: {names}"
         return f"{base} — all checks passed"
+
+    if provider == "relay-inbox":
+        ri_state = cast(RelayInboxState, state)
+        ids = ri_state["ingested_ids"]
+        # Name the intents, not just a count: this message is what the
+        # asyncRewake injects, so it is the whole of what the agent learns
+        # before deciding whether the mail is worth reading now.
+        intents = [i for i in ri_state.get("intents", []) if i]
+        summary = "; ".join(intents[:3]) if intents else f"{len(ids)} packet(s)"
+        held = ri_state.get("held", 0)
+        held_note = f" ({held} held, sender not paired)" if held else ""
+        return f"{base} — {len(ids)} new: {summary}{held_note}"
 
     return base
 

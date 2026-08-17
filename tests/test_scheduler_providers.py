@@ -85,13 +85,28 @@ class TestRunGh:
         assert isinstance(result, list)
         assert len(result) == 2
 
-    def test_returns_none_on_nonzero_exit(self):
+    def test_returns_none_on_nonzero_exit_with_no_stdout(self):
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stdout = ""
+        mock_result.stderr = 'Unknown JSON field: "conclusion"'
         with patch("subprocess.run", return_value=mock_result):
             result = _run_gh(["api", "/repos/owner/repo"])
         assert result is None
+
+    @pytest.mark.parametrize("code", [1, 8])
+    def test_returns_json_on_nonzero_exit_when_stdout_parses(self, code):
+        # `gh pr checks` reports check state through its exit code — 1 when a
+        # check failed, 8 while checks are pending — and still writes the
+        # requested JSON. Those are results, not errors.
+        mock_result = MagicMock()
+        mock_result.returncode = code
+        mock_result.stdout = '[{"name": "test", "state": "FAILURE", "bucket": "fail"}]'
+        mock_result.stderr = ""
+        with patch("subprocess.run", return_value=mock_result):
+            result = _run_gh(["pr", "checks", "42", "--json", "name,state,bucket"])
+        assert isinstance(result, list)
+        assert result[0]["bucket"] == "fail"
 
     def test_returns_none_on_empty_stdout(self):
         mock_result = MagicMock()
@@ -187,6 +202,21 @@ class TestCheckGithubPr:
 
     def test_returns_none_when_pr_data_not_dict(self):
         with patch("aya.scheduler.providers._run_gh", return_value=[{"id": 1}]):
+            result = _check_github_pr(self._pr_config())
+        assert result is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"message": "Bad credentials", "documentation_url": "https://docs.github.com"},
+            {"data": None, "errors": [{"message": "Could not resolve to a Repository"}]},
+        ],
+        ids=["http-error-body", "graphql-errors"],
+    )
+    def test_returns_none_on_json_error_payload(self, payload):
+        # _run_gh hands back any parseable JSON, including gh's error bodies, so
+        # this parsing is what keeps an error from being read as PR state.
+        with patch("aya.scheduler.providers._run_gh", return_value=payload):
             result = _check_github_pr(self._pr_config())
         assert result is None
 
@@ -443,10 +473,15 @@ class TestCheckCiChecks:
             result = _check_ci_checks(self._config())
         assert result is None
 
+    # Payloads below mirror real `gh pr checks --json name,state,bucket` output:
+    # uppercase `state`, plus gh's `bucket` rollup. Keep fixtures in that shape —
+    # one carrying a field gh does not return (e.g. `conclusion`) passes here
+    # while every real poll fails.
+
     def test_all_passed(self):
         checks = [
-            {"name": "lint", "state": "completed", "conclusion": "success"},
-            {"name": "test", "state": "completed", "conclusion": "success"},
+            {"name": "lint", "state": "SUCCESS", "bucket": "pass"},
+            {"name": "test", "state": "SUCCESS", "bucket": "pass"},
         ]
         with patch("aya.scheduler.providers._run_gh", return_value=checks):
             result = _check_ci_checks(self._config())
@@ -458,8 +493,8 @@ class TestCheckCiChecks:
 
     def test_some_failed(self):
         checks = [
-            {"name": "lint", "state": "completed", "conclusion": "success"},
-            {"name": "test", "state": "completed", "conclusion": "failure"},
+            {"name": "lint", "state": "SUCCESS", "bucket": "pass"},
+            {"name": "test", "state": "FAILURE", "bucket": "fail"},
         ]
         with patch("aya.scheduler.providers._run_gh", return_value=checks):
             result = _check_ci_checks(self._config())
@@ -470,8 +505,8 @@ class TestCheckCiChecks:
 
     def test_some_pending(self):
         checks = [
-            {"name": "build", "state": "in_progress", "conclusion": None},
-            {"name": "test", "state": "completed", "conclusion": "success"},
+            {"name": "build", "state": "IN_PROGRESS", "bucket": "pending"},
+            {"name": "test", "state": "SUCCESS", "bucket": "pass"},
         ]
         with patch("aya.scheduler.providers._run_gh", return_value=checks):
             result = _check_ci_checks(self._config())
@@ -479,15 +514,44 @@ class TestCheckCiChecks:
         assert result["all_complete"] is False
         assert "build" in result["pending"]
 
+    def test_cancelled_counts_as_failed(self):
+        checks = [{"name": "deploy", "state": "CANCELLED", "bucket": "cancel"}]
+        with patch("aya.scheduler.providers._run_gh", return_value=checks):
+            result = _check_ci_checks(self._config())
+        assert result is not None
+        assert result["failed"] == ["deploy"]
+
+    def test_skipped_counts_as_passed(self):
+        # A skipped check is done and not blocking, so it must not hold
+        # all_complete open or read as a failure.
+        checks = [{"name": "optional-e2e", "state": "SKIPPED", "bucket": "skipping"}]
+        with patch("aya.scheduler.providers._run_gh", return_value=checks):
+            result = _check_ci_checks(self._config())
+        assert result is not None
+        assert result["passed"] == ["optional-e2e"]
+        assert result["all_complete"] is True
+
+    def test_requests_bucket_and_never_conclusion(self):
+        # Regression guard: `conclusion` is not a valid `gh pr checks` field, and
+        # asking for it makes gh exit non-zero with no JSON at all.
+        with patch("aya.scheduler.providers._run_gh", return_value=[]) as mock_gh:
+            _check_ci_checks(self._config())
+        requested = mock_gh.call_args[0][0]
+        assert "--json" in requested
+        fields = requested[requested.index("--json") + 1]
+        assert "bucket" in fields
+        assert "conclusion" not in fields
+
     def test_timed_out_check_goes_to_failed(self):
-        checks = [{"name": "slow-test", "state": "completed", "conclusion": "timed_out"}]
+        # gh has no distinct timed-out bucket; a timeout rolls up as `fail`.
+        checks = [{"name": "slow-test", "state": "TIMED_OUT", "bucket": "fail"}]
         with patch("aya.scheduler.providers._run_gh", return_value=checks):
             result = _check_ci_checks(self._config())
         assert result is not None
         assert "slow-test" in result["failed"]
 
     def test_cancelled_check_goes_to_failed(self):
-        checks = [{"name": "deploy", "state": "completed", "conclusion": "cancelled"}]
+        checks = [{"name": "deploy", "state": "CANCELLED", "bucket": "cancel"}]
         with patch("aya.scheduler.providers._run_gh", return_value=checks):
             result = _check_ci_checks(self._config())
         assert result is not None

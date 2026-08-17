@@ -41,7 +41,18 @@ _gh_missing_warned: bool = False
 
 
 def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list[Any] | None:
-    """Run gh CLI and parse JSON output."""
+    """Run gh CLI and parse JSON output.
+
+    A non-zero exit is not on its own a failure: ``gh pr checks`` reports check
+    state through its exit code (1 when a check failed, 8 when checks are still
+    pending) while still writing the requested JSON to stdout. Treating those as
+    errors discarded exactly the two states a ci-checks watch exists to detect,
+    so the watch never fired and never auto-removed.
+
+    Parseable JSON on stdout is therefore the success signal. Genuine failures
+    (bad field, auth, no such PR) write to stderr and leave stdout empty or
+    non-JSON, so they still resolve to ``None``.
+    """
     try:
         result = subprocess.run(
             ["gh", *args],
@@ -50,9 +61,17 @@ def _run_gh(args: list[str], timeout: int = 15) -> dict[str, Any] | list[Any] | 
             timeout=timeout,
             check=False,
         )
-        if result.returncode != 0:
+        if not result.stdout.strip():
+            if result.returncode != 0:
+                logger.debug(
+                    "gh %s exited %d with no stdout: %s",
+                    " ".join(args[:2]),
+                    result.returncode,
+                    result.stderr.strip()[:200],
+                )
             return None
-        return json.loads(result.stdout) if result.stdout.strip() else None
+        parsed: dict[str, Any] | list[Any] | None = json.loads(result.stdout)
+        return parsed
     except FileNotFoundError:
         global _gh_missing_warned  # noqa: PLW0603
         if not _gh_missing_warned:
@@ -244,7 +263,7 @@ def _check_ci_checks(config: CiChecksConfig) -> CiChecksState | None:
             "--repo",
             f"{owner}/{repo}",
             "--json",
-            "name,state,conclusion",
+            "name,state,bucket",
         ]
     )
     if not isinstance(data, list):
@@ -256,14 +275,20 @@ def _check_ci_checks(config: CiChecksConfig) -> CiChecksState | None:
 
     for check in data:
         name = check.get("name", "unknown")
+        # `bucket` is gh's own rollup of a check's outcome: pass, fail, pending,
+        # skipping, or cancel. It replaces the `conclusion` field this used to
+        # request, which gh does not expose on `pr checks` — every poll failed
+        # with `Unknown JSON field: "conclusion"`. `state` is kept as a fallback
+        # for the pending case because it is the raw upstream status.
+        bucket = check.get("bucket") or ""
         status = check.get("state", "")
-        conclusion = check.get("conclusion") or ""
 
-        if status in ("pending", "in_progress", "queued"):
+        if bucket == "pending" or status in ("PENDING", "IN_PROGRESS", "QUEUED"):
             pending.append(name)
-        elif conclusion in ("failure", "timed_out", "cancelled"):
+        elif bucket in ("fail", "cancel"):
             failed.append(name)
         else:
+            # pass and skipping both count as done-and-not-blocking.
             passed.append(name)
 
     return CiChecksState(

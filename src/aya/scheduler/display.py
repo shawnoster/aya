@@ -225,6 +225,9 @@ def format_scheduler_status(status: SchedulerStatus) -> str:
                 timing = f"last: {last_str}, next: ~{next_str}"
             else:
                 timing = "never polled"
+            failures = w.get("consecutive_failures", 0)
+            if failures:
+                timing += f", {failures} failed poll(s)"
             lines.append(f"  \u2022 [{provider}] {w.get('message', '?')[:50]} ({timing})")
     else:
         lines.append("\U0001f441  No active watches")
@@ -303,9 +306,13 @@ def _display_items(items: list[SchedulerItem]) -> None:
                 interval = i.get("poll_interval_minutes", "?")
                 last = i.get("last_checked_at")
                 last_checked = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
+                # `checked HH:MM` is a poll *attempt*, so a watch failing every
+                # poll would read as healthy here without the failure count.
+                failures = i.get("consecutive_failures", 0)
+                health = f", {failures} failed" if failures else ""
                 print(  # noqa: T201
                     f"  {icon} {message}{tags_str} \u2014 {provider} (every {interval}m, "
-                    f"checked {last_checked})"
+                    f"checked {last_checked}{health})"
                 )
             elif item_type == TYPE_RECURRING:
                 cron = i.get("cron", "?")

@@ -10,7 +10,12 @@ from typing import Any, cast
 from aya.adapters import clock
 
 from .display import _create_alert, _format_watch_alert
-from .providers import _evaluate_auto_remove, poll_watch
+from .providers import (
+    _evaluate_auto_remove,
+    poll_watch,
+    record_poll_attempt,
+    should_warn_for_failures,
+)
 from .storage import (
     _alerts_file,
     _atomic_write,
@@ -412,10 +417,11 @@ def run_poll(quiet: bool = False) -> None:
                     provider,
                     changed,
                 )
+                failures = record_poll_attempt(item, now.isoformat(), new_state)
+                items_modified = True
+
                 if new_state is not None:
-                    item["last_checked_at"] = now.isoformat()
                     item["last_state"] = new_state
-                    items_modified = True
 
                     if changed:
                         alert = _create_alert(
@@ -438,8 +444,17 @@ def run_poll(quiet: bool = False) -> None:
                         if not quiet:
                             pass
 
-                elif not quiet:
-                    pass
+                else:
+                    # A provider returning None is a failed poll, not "nothing
+                    # changed" — say so, or it is indistinguishable from a watch
+                    # that simply had no news.
+                    log = logger.warning if should_warn_for_failures(failures) else logger.debug
+                    log(
+                        "poll: watch %s (%s) failed to return state — %d consecutive failure(s)",
+                        item["id"][:8],
+                        provider,
+                        failures,
+                    )
 
             elif item["type"] == "reminder" and item["status"] == "pending":
                 due = datetime.fromisoformat(item["due_at"])

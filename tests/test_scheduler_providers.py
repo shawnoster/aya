@@ -1001,3 +1001,51 @@ class TestWatchFailureIsReported:
 
         assert "Jira ticket watch failed" in caplog.text
         assert "TEST-1" in caplog.text
+
+
+# ── poll bookkeeping ─────────────────────────────────────────────────────────
+
+
+class TestRecordPollAttempt:
+    def test_failure_stamps_and_increments(self):
+        from aya.scheduler.providers import record_poll_attempt
+
+        item = {"id": "w1"}
+        assert record_poll_attempt(item, "2026-04-01T10:00:00-07:00", None) == 1
+        assert item["last_checked_at"] == "2026-04-01T10:00:00-07:00"
+        assert record_poll_attempt(item, "2026-04-01T10:01:00-07:00", None) == 2
+        assert item["consecutive_failures"] == 2
+
+    def test_success_stamps_and_resets(self):
+        from aya.scheduler.providers import record_poll_attempt
+
+        item = {"id": "w1", "consecutive_failures": 9}
+        state = {"all_complete": True, "passed": [], "failed": [], "pending": []}
+        assert record_poll_attempt(item, "2026-04-01T10:02:00-07:00", state) == 0
+        assert item["consecutive_failures"] == 0
+        assert item["last_checked_at"] == "2026-04-01T10:02:00-07:00"
+
+
+class TestShouldWarnForFailures:
+    def test_warns_on_early_milestones(self):
+        from aya.scheduler.providers import should_warn_for_failures
+
+        assert should_warn_for_failures(1)
+        assert should_warn_for_failures(3)
+        assert should_warn_for_failures(10)
+
+    def test_quiet_between_milestones(self):
+        from aya.scheduler.providers import should_warn_for_failures
+
+        assert not should_warn_for_failures(2)
+        assert not should_warn_for_failures(4)
+        assert not should_warn_for_failures(99)
+
+    def test_never_goes_permanently_silent(self):
+        from aya.scheduler.providers import should_warn_for_failures
+
+        # Past the last milestone the warning must keep recurring, or a watch
+        # broken for a week stops reporting itself entirely.
+        assert should_warn_for_failures(1000)
+        assert should_warn_for_failures(5000)
+        assert not should_warn_for_failures(5001)

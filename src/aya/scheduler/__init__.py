@@ -8,6 +8,7 @@ Usage (via CLI):
     aya schedule watch   github-pr owner/repo#123 -m "PR approved"
     aya schedule watch   jira-query "project=CSD AND created>=-1d" -m "New CSD tickets"
     aya schedule watch   jira-ticket CSD-225 -m "Ticket status changed"
+    aya schedule watch   relay-inbox default -m "relay inbox"
     aya schedule list    [--all] [--type TYPE]
     aya schedule dismiss <id>
     aya schedule snooze  <id> --until "in 1 hour"
@@ -26,6 +27,7 @@ from .types import (
     CONDITION_CHECKS_COMPLETE,
     CONDITION_CHECKS_FAILED,
     CONDITION_MERGED,
+    CONDITION_NEW_PACKETS,
     CONDITION_NEW_RESULTS,
     CONDITION_STATUS_CHANGED,
     CiChecksConfig,
@@ -235,6 +237,7 @@ __all__ = [
     "CONDITION_CHECKS_COMPLETE",
     "CONDITION_CHECKS_FAILED",
     "CONDITION_MERGED",
+    "CONDITION_NEW_PACKETS",
     "CONDITION_NEW_RESULTS",
     "CONDITION_STATUS_CHANGED",
     "SEVERITY_ACTIONABLE",

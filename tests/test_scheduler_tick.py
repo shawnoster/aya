@@ -958,3 +958,153 @@ class TestFailingWatchVisibility:
         assert watch["consecutive_failures"] == 12
         assert watch["provider"] == "ci-checks"
         assert watch["last_checked_at"] is not None
+
+
+class TestRelayInboxWatch:
+    """The relay inbox as a watch: validation, alert text, and the poll path."""
+
+    def test_validation_defaults(self):
+        from aya.scheduler.core import validate_watch
+
+        # "default"/"-"/"" all mean the primary instance, matching `aya receive`.
+        for target in ("default", "-", ""):
+            config, condition, interval = validate_watch("relay-inbox", target, "")
+            assert config == {}
+            assert condition == "new_packets"
+            assert interval == 2
+
+        config, _, _ = validate_watch("relay-inbox", "guild-shawnoster", "")
+        assert config == {"instance": "guild-shawnoster"}
+
+    def test_validation_rejects_unknown_condition(self):
+        from aya.scheduler.core import validate_watch
+
+        with pytest.raises(ValueError, match="new_packets"):
+            validate_watch("relay-inbox", "default", "merged")
+
+    def test_alert_names_the_intents(self):
+        from aya.scheduler import _format_watch_alert
+
+        item = {"provider": "relay-inbox", "message": "relay inbox"}
+        state = {
+            "ingested_ids": ["01AAA", "01BBB"],
+            "intents": ["re: theme diff", "dinner party count"],
+            "held": 0,
+        }
+        msg = _format_watch_alert(item, state)
+        # The alert text is what asyncRewake injects, so it has to carry enough
+        # to decide whether to read the mail now.
+        assert "2 new" in msg
+        assert "re: theme diff" in msg
+        assert "dinner party count" in msg
+
+    def test_alert_without_intents_does_not_repeat_the_count(self):
+        from aya.scheduler import _format_watch_alert
+
+        item = {"provider": "relay-inbox", "message": "relay inbox"}
+        # A packet can carry an empty intent, leaving nothing to quote.
+        state = {"ingested_ids": ["01AAA", "01BBB"], "intents": ["", ""], "held": 0}
+        msg = _format_watch_alert(item, state)
+        assert msg.endswith("2 new packet(s)")
+        assert "2 new: 2" not in msg
+
+    def test_alert_marks_elided_intents(self):
+        from aya.scheduler import _format_watch_alert
+
+        item = {"provider": "relay-inbox", "message": "relay inbox"}
+        state = {
+            "ingested_ids": ["a", "b", "c", "d"],
+            "intents": ["one", "two", "three", "four"],
+            "held": 0,
+        }
+        msg = _format_watch_alert(item, state)
+        # Count stays truthful while only three intents are listed.
+        assert "4 new:" in msg
+        assert "four" not in msg
+        assert msg.endswith(", \u2026")
+
+    def test_alert_notes_held_packets(self):
+        from aya.scheduler import _format_watch_alert
+
+        item = {"provider": "relay-inbox", "message": "relay inbox"}
+        state = {"ingested_ids": ["01AAA"], "intents": ["mine"], "held": 2}
+        assert "2 held" in _format_watch_alert(item, state)
+
+    def test_poll_generates_an_alert_for_new_mail(self):
+        from unittest.mock import patch
+
+        from aya.scheduler import _alerts_file, _get_local_tz, _scheduler_file, run_poll
+
+        now = datetime.now(_get_local_tz())
+        _scheduler_file().write_text(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "watch-relay-1",
+                            "type": "watch",
+                            "status": "active",
+                            "message": "relay inbox",
+                            "provider": "relay-inbox",
+                            "watch_config": {},
+                            "condition": "new_packets",
+                            "poll_interval_minutes": 2,
+                            "last_checked_at": None,
+                            "last_state": None,
+                            "remove_when": "",
+                            "created_at": now.isoformat(),
+                            "session_required": False,
+                            "tags": [],
+                        }
+                    ]
+                }
+            )
+        )
+        _alerts_file().write_text(json.dumps({"alerts": []}))
+
+        state = {"ingested_ids": ["01AAA"], "intents": ["re: theme diff"], "held": 0}
+        with patch("aya.scheduler.core.poll_watch", return_value=(state, True)):
+            run_poll(quiet=True)
+
+        alerts = json.loads(_alerts_file().read_text())["alerts"]
+        assert len(alerts) == 1
+        assert alerts[0]["source_item_id"] == "watch-relay-1"
+        assert "re: theme diff" in alerts[0]["message"]
+
+    def test_poll_is_quiet_when_no_mail(self):
+        from unittest.mock import patch
+
+        from aya.scheduler import _alerts_file, _get_local_tz, _scheduler_file, run_poll
+
+        now = datetime.now(_get_local_tz())
+        _scheduler_file().write_text(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "watch-relay-2",
+                            "type": "watch",
+                            "status": "active",
+                            "message": "relay inbox",
+                            "provider": "relay-inbox",
+                            "watch_config": {},
+                            "condition": "new_packets",
+                            "poll_interval_minutes": 2,
+                            "last_checked_at": None,
+                            "last_state": None,
+                            "remove_when": "",
+                            "created_at": now.isoformat(),
+                            "session_required": False,
+                            "tags": [],
+                        }
+                    ]
+                }
+            )
+        )
+        _alerts_file().write_text(json.dumps({"alerts": []}))
+
+        empty = {"ingested_ids": [], "intents": [], "held": 0}
+        with patch("aya.scheduler.core.poll_watch", return_value=(empty, False)):
+            run_poll(quiet=True)
+
+        assert json.loads(_alerts_file().read_text())["alerts"] == []

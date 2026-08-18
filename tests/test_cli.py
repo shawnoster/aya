@@ -2236,7 +2236,9 @@ class TestDryRun:
         assert output_data["condition"] == "approved_or_merged"
         assert output_data["message"] == "PR ready"
         assert output_data["status"] == "active"
-        assert output_data["poll_interval_minutes"] == 30
+        # 5, not the raw --interval default of 30: github-pr tightens the
+        # interval, and the preview reports what add_watch would really store.
+        assert output_data["poll_interval_minutes"] == 5
         data = json.loads(scheduler_file.read_text())
         assert len(data["items"]) == 0
 
@@ -4753,3 +4755,53 @@ class TestSendRawRequiresPubkey:
 
         assert result.exit_code != 0
         assert "Nostr pubkey" in result.output
+
+
+# ── schedule watch --dry-run defaults ────────────────────────────────────────
+
+
+class TestScheduleWatchDryRunDefaults:
+    """--dry-run must preview what add_watch would really create."""
+
+    @pytest.mark.parametrize(
+        ("provider", "target", "condition", "interval"),
+        [
+            ("relay-inbox", "default", "new_packets", 2),
+            ("ci-checks", "owner/repo#42", "checks_failed", 1),
+            ("github-pr", "owner/repo#42", "approved_or_merged", 5),
+            ("jira-ticket", "CSD-225", "status_changed", 30),
+        ],
+    )
+    def test_preview_reports_resolved_defaults(self, provider, target, condition, interval):
+        # The preview is built from validate_watch, so every provider gets its
+        # real default condition and its provider-specific interval tightening.
+        # A separate table here silently previewed a blank condition for any
+        # provider it had not been taught about.
+        result = runner.invoke(
+            app,
+            ["schedule", "watch", provider, target, "-m", "x", "--dry-run", "--format", "json"],
+        )
+        assert result.exit_code == 0, result.output
+        item = json.loads(result.output)["item"]
+        assert item["condition"] == condition
+        assert item["poll_interval_minutes"] == interval
+
+    def test_explicit_condition_is_preserved(self):
+        result = runner.invoke(
+            app,
+            [
+                "schedule",
+                "watch",
+                "github-pr",
+                "owner/repo#42",
+                "-m",
+                "x",
+                "-c",
+                "merged",
+                "--dry-run",
+                "--format",
+                "json",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["item"]["condition"] == "merged"

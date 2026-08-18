@@ -1049,3 +1049,117 @@ class TestShouldWarnForFailures:
         assert should_warn_for_failures(1000)
         assert should_warn_for_failures(5000)
         assert not should_warn_for_failures(5001)
+
+
+# ── relay-inbox provider ─────────────────────────────────────────────────────
+
+
+class TestCheckRelayInbox:
+    @staticmethod
+    def _poll_result(packets, *, reachable=True, relays=("wss://r",)):
+        from aya.usecases.relay_ops import PollResult
+
+        return PollResult(
+            packets=list(packets),
+            instance="guild-shawnoster",
+            relays=list(relays),
+            relay_reachable=reachable,
+        )
+
+    def _patch_receive(self, monkeypatch, result):
+        async def fake_receive(*_a, **_kw):
+            return result
+
+        monkeypatch.setattr("aya.usecases.relay_ops.receive", fake_receive)
+        monkeypatch.setattr("aya.adapters.profile_store.load_profile", lambda _p: object())
+
+    def test_returns_ingested_ids_and_intents(self, monkeypatch):
+        from aya.scheduler.providers import _check_relay_inbox
+
+        self._patch_receive(
+            monkeypatch,
+            self._poll_result(
+                [
+                    {"id": "01AAA", "intent": "re: theme diff", "ingested": True},
+                    {"id": "01BBB", "intent": "second", "ingested": True},
+                ]
+            ),
+        )
+        state = _check_relay_inbox({})
+        assert state == {
+            "ingested_ids": ["01AAA", "01BBB"],
+            "intents": ["re: theme diff", "second"],
+            "held": 0,
+        }
+
+    def test_counts_held_packets_separately(self, monkeypatch):
+        from aya.scheduler.providers import _check_relay_inbox
+
+        self._patch_receive(
+            monkeypatch,
+            self._poll_result(
+                [
+                    {"id": "01AAA", "intent": "mine", "ingested": True},
+                    {"id": "01CCC", "intent": "stranger", "ingested": False},
+                ]
+            ),
+        )
+        state = _check_relay_inbox({})
+        assert state is not None
+        assert state["ingested_ids"] == ["01AAA"]
+        assert state["held"] == 1
+
+    def test_unreachable_relay_is_a_failed_poll_not_an_empty_inbox(self, monkeypatch):
+        from aya.scheduler.providers import _check_relay_inbox
+
+        self._patch_receive(monkeypatch, self._poll_result([], reachable=False))
+        # None marks the poll failed so the failure counter advances. Returning
+        # an empty state would assert "no new mail" on every poll forever.
+        assert _check_relay_inbox({}) is None
+
+    def test_exception_is_a_failed_poll(self, monkeypatch):
+        from aya.scheduler.providers import _check_relay_inbox
+
+        async def boom(*_a, **_kw):
+            raise OSError("relay refused the connection")
+
+        monkeypatch.setattr("aya.usecases.relay_ops.receive", boom)
+        monkeypatch.setattr("aya.adapters.profile_store.load_profile", lambda _p: object())
+        assert _check_relay_inbox({}) is None
+
+    def test_passes_instance_and_relay_from_config(self, monkeypatch):
+        from aya.scheduler.providers import _check_relay_inbox
+
+        seen: dict[str, object] = {}
+
+        async def fake_receive(_profile, _path, **kw):
+            seen.update(kw)
+            return self._poll_result([])
+
+        monkeypatch.setattr("aya.usecases.relay_ops.receive", fake_receive)
+        monkeypatch.setattr("aya.adapters.profile_store.load_profile", lambda _p: object())
+
+        _check_relay_inbox({"instance": "home", "relay": "wss://private"})
+        assert seen["instance"] == "home"
+        assert seen["relay"] == "wss://private"
+        # A background poll must not tell a peer a human read their packet.
+        assert seen["send_receipts"] is False
+
+
+class TestDetectRelayNewPackets:
+    def test_fires_when_a_packet_was_ingested(self):
+        from aya.scheduler.providers import _detect_relay_new_packets
+
+        state = {"ingested_ids": ["01AAA"], "intents": ["x"], "held": 0}
+        assert _detect_relay_new_packets(state, None)
+        # Independent of the previous poll: the relay hands a packet back once.
+        assert _detect_relay_new_packets(state, state)
+
+    def test_quiet_when_nothing_arrived(self):
+        from aya.scheduler.providers import _detect_relay_new_packets
+
+        empty = {"ingested_ids": [], "intents": [], "held": 0}
+        assert not _detect_relay_new_packets(empty, None)
+        assert not _detect_relay_new_packets(
+            empty, {"ingested_ids": ["01AAA"], "intents": [], "held": 0}
+        )

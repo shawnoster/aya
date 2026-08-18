@@ -53,6 +53,7 @@ CONDITION_NEW_RESULTS = "new_results"
 CONDITION_STATUS_CHANGED = "status_changed"
 CONDITION_CHECKS_FAILED = "checks_failed"
 CONDITION_CHECKS_COMPLETE = "checks_complete"
+CONDITION_NEW_PACKETS = "new_packets"
 
 
 # ── TypedDict schemas ────────────────────────────────────────────────────────
@@ -74,7 +75,9 @@ class SchedulerItem(TypedDict):
     snoozed_until: NotRequired[str | None]
     # Watch-specific
     provider: NotRequired[str]
-    watch_config: NotRequired[GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig]
+    watch_config: NotRequired[
+        GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig | RelayInboxConfig
+    ]
     condition: NotRequired[str]
     poll_interval_minutes: NotRequired[int]
     last_checked_at: NotRequired[str | None]
@@ -216,6 +219,17 @@ class JiraTicketState(TypedDict):
     assignee: str
 
 
+class RelayInboxConfig(TypedDict):
+    """watch_config for a relay-inbox watch.
+
+    Both fields are optional and mirror `aya receive`: omit them to poll as the
+    primary instance across the profile's relays.
+    """
+
+    instance: NotRequired[str]
+    relay: NotRequired[str]
+
+
 class CiChecksState(TypedDict):
     """State snapshot returned by _check_ci_checks."""
 
@@ -226,7 +240,21 @@ class CiChecksState(TypedDict):
 
 
 # Union of all possible watch-state shapes
-WatchState = GithubPrState | JiraQueryState | JiraTicketState | CiChecksState
+class RelayInboxState(TypedDict):
+    """State snapshot returned by the relay-inbox provider.
+
+    ``ingested_ids`` holds only what *this* poll took in, because the relay
+    hands back pending packets once — an already-ingested packet is not
+    returned again. So a non-empty list means new mail arrived on this poll,
+    and the list does not grow without bound.
+    """
+
+    ingested_ids: list[str]
+    intents: list[str]
+    held: int
+
+
+WatchState = GithubPrState | JiraQueryState | JiraTicketState | CiChecksState | RelayInboxState
 
 
 class SuppressedCron(TypedDict):

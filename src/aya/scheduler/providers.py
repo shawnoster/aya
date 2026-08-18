@@ -18,6 +18,8 @@ from .types import (
     JiraQueryState,
     JiraTicketConfig,
     JiraTicketState,
+    RelayInboxConfig,
+    RelayInboxState,
     SchedulerItem,
     WatchState,
 )
@@ -297,11 +299,86 @@ def _check_ci_checks(config: CiChecksConfig) -> CiChecksState | None:
     )
 
 
+def _check_relay_inbox(config: RelayInboxConfig) -> RelayInboxState | None:
+    """Poll the relay and ingest trusted packets. Returns what this poll took in.
+
+    **This provider has a side effect by design**: polling a mailbox ingests it.
+    It is the same `relay_ops.receive` the `aya receive` command drives, with the
+    non-interactive `ingest_if_trusted` policy, so untrusted senders are held
+    rather than blocking. Read receipts are suppressed — a background poll should
+    not tell a peer their packet was read by a human.
+
+    Modelling the inbox as a watch is what buys the behaviour for free: the
+    scheduler already gates polls on ``poll_interval_minutes``, counts
+    consecutive failures, and — via ``aya hook watch`` on PostToolUse — emits an
+    asyncRewake so arriving mail lands in the agent's next turn without anyone
+    asking for it.
+
+    ``relay_ops`` is imported inside the function: ``usecases.watch_chains``
+    already imports ``aya.scheduler``, so a module-level import here would close
+    that loop. This mirrors how ``watch_chains`` imports ``scheduler.display``.
+    """
+    import asyncio
+
+    from aya.adapters import paths
+    from aya.adapters.profile_store import load_profile
+    from aya.usecases import relay_ops
+
+    # paths.PROFILE_PATH is read per call, not bound at import: AYA_HOME can
+    # change after import (and tests redirect it), which a module-level constant
+    # would snapshot. See the note at the top of aya.adapters.paths.
+    profile_path = paths.PROFILE_PATH
+
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is not None:
+        # asyncio.run() inside a live loop raises. No poll site does this today,
+        # but failing loudly here would take the whole tick down with it.
+        logger.warning("relay-inbox poll skipped: already inside an event loop")
+        return None
+
+    try:
+        profile = load_profile(profile_path)
+        result = asyncio.run(
+            relay_ops.receive(
+                profile,
+                profile_path,
+                instance=config.get("instance"),
+                relay=config.get("relay"),
+                decide=relay_ops.ingest_if_trusted,
+                on_fresh=None,
+                send_receipts=False,
+            )
+        )
+    except Exception as e:  # noqa: BLE001 — relay, signature and profile all land here
+        # Warning, not debug: a None return is indistinguishable from "no mail",
+        # so the log is the only account of a relay watch that stopped working.
+        logger.warning("relay-inbox poll failed: %s", e)
+        return None
+
+    if not result.relay_reachable:
+        # An unreachable relay is not an empty inbox. Returning None marks the
+        # poll failed so the failure counter advances instead of quietly
+        # reporting "no new mail" forever.
+        logger.warning("relay-inbox poll: relay unreachable (%s)", ", ".join(result.relays))
+        return None
+
+    ingested = [p for p in result.packets if p.get("ingested")]
+    return RelayInboxState(
+        ingested_ids=[str(p.get("id", "")) for p in ingested],
+        intents=[str(p.get("intent", "")) for p in ingested],
+        held=sum(1 for p in result.packets if not p.get("ingested")),
+    )
+
+
 WATCH_PROVIDERS: dict[str, Callable[..., WatchState | None]] = {
     "github-pr": _check_github_pr,
     "jira-query": _check_jira_query,
     "jira-ticket": _check_jira_ticket,
     "ci-checks": _check_ci_checks,
+    "relay-inbox": _check_relay_inbox,
 }
 
 
@@ -363,6 +440,17 @@ def _detect_ci_checks_complete(new: CiChecksState, _last: CiChecksState | None) 
     return new["all_complete"]
 
 
+def _detect_relay_new_packets(new: RelayInboxState, _last: RelayInboxState | None) -> bool:
+    """Fire when this poll ingested at least one packet.
+
+    No comparison against the previous state is needed: the relay returns a
+    pending packet once, so a non-empty ``ingested_ids`` *is* the new-mail
+    signal. Diffing against the last poll would instead re-fire whenever two
+    consecutive polls happened to differ.
+    """
+    return bool(new["ingested_ids"])
+
+
 _CHANGE_DETECTORS: dict[tuple[str, str], Callable[[Any, Any], bool]] = {
     ("github-pr", "approved_or_merged"): _detect_github_approved_or_merged,
     ("github-pr", "merged"): _detect_github_merged,
@@ -375,6 +463,8 @@ _CHANGE_DETECTORS: dict[tuple[str, str], Callable[[Any, Any], bool]] = {
     ("ci-checks", "checks_failed"): _detect_ci_checks_failed,
     ("ci-checks", "checks_complete"): _detect_ci_checks_complete,
     ("ci-checks", ""): _detect_ci_checks_complete,
+    ("relay-inbox", "new_packets"): _detect_relay_new_packets,
+    ("relay-inbox", ""): _detect_relay_new_packets,
 }
 
 

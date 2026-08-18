@@ -49,6 +49,7 @@ from .types import (
     CONDITION_CHECKS_FAILED,
     CONDITION_MERGED,
     CONDITION_NEW_COMMENTS,
+    CONDITION_NEW_PACKETS,
     CONDITION_NEW_RESULTS,
     CONDITION_STATUS_CHANGED,
     SEVERITY_ACTIONABLE,
@@ -61,6 +62,7 @@ from .types import (
     JiraQueryConfig,
     JiraTicketConfig,
     PendingResult,
+    RelayInboxConfig,
     SchedulerItem,
     SchedulerStatus,
     SuppressedCron,
@@ -102,7 +104,11 @@ def validate_watch(
     target: str,
     condition: str = "",
     interval: int = 30,
-) -> tuple[GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig, str, int]:
+) -> tuple[
+    GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig | RelayInboxConfig,
+    str,
+    int,
+]:
     """Validate a watch spec and normalise it to ``(config, condition, interval)``.
 
     Separate from :func:`add_watch` so a caller can check a spec without
@@ -113,7 +119,9 @@ def validate_watch(
 
     Raises ``ValueError`` describing the problem.
     """
-    watch_config: GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig
+    watch_config: (
+        GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig | RelayInboxConfig
+    )
 
     if provider == "github-pr":
         m = re.match(r"([^/]+)/([^#]+)#(\d+)", target)
@@ -161,6 +169,19 @@ def validate_watch(
             raise ValueError(
                 f"Unknown condition '{condition}' for jira-ticket. Valid: status_changed"
             )
+    elif provider == "relay-inbox":
+        # The target names the local identity to poll as; "default" or "-" means
+        # the primary instance, matching `aya receive` with no --as.
+        watch_config = {} if target in {"", "default", "-"} else {"instance": target}
+        condition = condition or CONDITION_NEW_PACKETS
+        _valid_ri = {CONDITION_NEW_PACKETS, ""}
+        if condition not in _valid_ri:
+            raise ValueError(f"Unknown condition '{condition}' for relay-inbox. Valid: new_packets")
+        if interval == 30:
+            # The relay is cheap to poll and the point is conversational
+            # latency, but every poll is a network round trip on a hook that
+            # fires after each tool call, so two minutes rather than one.
+            interval = 2
     else:
         raise ValueError(f"Unknown provider: {provider}")
 

@@ -299,3 +299,127 @@ class TestChainPollFailures:
         _hook_watch_impl({})
 
         assert _read_items(isolated_scheduler["scheduler_file"])[0]["consecutive_failures"] == 0
+
+
+class TestCronHookRace:
+    """A tick-ingested alert must still reach the session via the hook.
+
+    The crontab tick polls on a shorter cadence than the watch interval, so it
+    usually consumes the change first. It cannot speak into a session, so
+    without this the alert sits unseen and the agent is never told.
+    """
+
+    @staticmethod
+    def _seed_alert(alerts_file, **overrides):
+        alert = {
+            "id": "alert-from-tick",
+            "source_item_id": "watch-relay",
+            "created_at": datetime(2026, 4, 5, 12, 0, tzinfo=UTC).isoformat(),
+            "message": "relay inbox — 1 new: re: theme diff",
+            "details": {},
+            "seen": False,
+        }
+        alert.update(overrides)
+        alerts_file.write_text(json.dumps({"alerts": [alert]}))
+        return alert
+
+    def test_tick_ingested_alert_is_announced(self, isolated_scheduler, monkeypatch):
+        now = datetime(2026, 4, 5, 12, 5, tzinfo=UTC)
+        _write_items(isolated_scheduler["scheduler_file"], [])
+        self._seed_alert(isolated_scheduler["alerts_file"])
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
+
+        emitted: list[str] = []
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", emitted.append)
+
+        # No watches at all: the hook finds nothing to poll, which is exactly
+        # the state that used to produce silence.
+        code = _hook_watch_impl({})
+
+        assert code == 2
+        assert len(emitted) == 1
+        assert "re: theme diff" in emitted[0]
+
+    def test_announced_only_once(self, isolated_scheduler, monkeypatch):
+        now = datetime(2026, 4, 5, 12, 5, tzinfo=UTC)
+        _write_items(isolated_scheduler["scheduler_file"], [])
+        self._seed_alert(isolated_scheduler["alerts_file"])
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
+
+        emitted: list[str] = []
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", emitted.append)
+
+        _hook_watch_impl({})
+        _hook_watch_impl({})
+        _hook_watch_impl({})
+
+        # The delivery receipt, not the claim, is the durable gate — claims
+        # expire after 300s, so gating on them would re-announce every 5 min.
+        assert len(emitted) == 1
+
+    def test_delivered_alert_is_not_re_announced(self, isolated_scheduler, monkeypatch):
+        now = datetime(2026, 4, 5, 12, 5, tzinfo=UTC)
+        _write_items(isolated_scheduler["scheduler_file"], [])
+        self._seed_alert(
+            isolated_scheduler["alerts_file"],
+            delivered_at=datetime(2026, 4, 5, 11, 0, tzinfo=UTC).isoformat(),
+            delivered_by="claude-1",
+        )
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
+
+        emitted: list[str] = []
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", emitted.append)
+
+        assert _hook_watch_impl({}) == 0
+        assert emitted == []
+
+    def test_seen_alert_is_not_announced(self, isolated_scheduler, monkeypatch):
+        now = datetime(2026, 4, 5, 12, 5, tzinfo=UTC)
+        _write_items(isolated_scheduler["scheduler_file"], [])
+        self._seed_alert(isolated_scheduler["alerts_file"], seen=True)
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
+
+        emitted: list[str] = []
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", emitted.append)
+
+        assert _hook_watch_impl({}) == 0
+        assert emitted == []
+
+    def test_own_alert_is_not_double_announced(self, isolated_scheduler, monkeypatch):
+        """A watch the hook itself polls reports once, not twice."""
+        now = datetime(2026, 4, 5, 12, 0, tzinfo=UTC)
+        watch = {
+            "id": "watch-relay",
+            "type": "watch",
+            "status": "active",
+            "created_at": now.isoformat(),
+            "message": "relay inbox",
+            "tags": [],
+            "session_required": False,
+            "provider": "relay-inbox",
+            "watch_config": {},
+            "condition": "new_packets",
+            "poll_interval_minutes": 2,
+            "last_checked_at": None,
+            "last_state": None,
+            "remove_when": "",
+        }
+        _write_items(isolated_scheduler["scheduler_file"], [watch])
+        isolated_scheduler["alerts_file"].write_text(json.dumps({"alerts": []}))
+        monkeypatch.setattr("aya.usecases.watch_chains._hook_watch_now", lambda: now)
+
+        emitted: list[str] = []
+        monkeypatch.setattr("aya.usecases.watch_chains.rewake_emit", emitted.append)
+        state = {"ingested_ids": ["01AAA"], "intents": ["fresh mail"], "held": 0}
+        monkeypatch.setattr("aya.usecases.watch_chains.poll_watch", lambda item: (state, True))
+
+        _hook_watch_impl({})
+
+        assert len(emitted) == 1
+        assert emitted[0].count("fresh mail") == 1
+
+        # And the receipt was stamped, so the next call stays quiet.
+        emitted.clear()
+        monkeypatch.setattr("aya.usecases.watch_chains.poll_watch", lambda item: (state, False))
+        _hook_watch_impl({})
+        assert emitted == []

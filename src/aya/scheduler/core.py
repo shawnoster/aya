@@ -586,6 +586,66 @@ def _passes_severity_filter(
     return alert_idx <= min_idx
 
 
+def claim_alerts_for_delivery(
+    instance_id: str | None = None,
+    *,
+    min_severity: AlertSeverity = SEVERITY_ACTIONABLE,
+    skip_delivered: bool = False,
+) -> list[AlertItem]:
+    """Claim unseen alerts for this instance and stamp a delivery receipt.
+
+    One owner of the claim-and-stamp bookkeeping, shared by the SessionStart
+    path (:func:`get_pending`) and the PostToolUse hook. Claiming is what stops
+    two concurrent sessions announcing the same alert; the receipt is what stops
+    the same session announcing it twice.
+
+    Args:
+        instance_id: Delivering instance (default: auto-detect).
+        min_severity: Lowest severity to deliver.
+        skip_delivered: When true, ignore alerts that already carry a receipt.
+            A new session wants everything it has not personally seen, so the
+            SessionStart path leaves this false. A hook that fires after every
+            tool call must not re-announce, and claims expire after
+            ``_CLAIM_TTL_SECONDS``, so the receipt — not the claim — is the only
+            durable gate available to it.
+
+    Returns:
+        The alerts claimed by this call, in the order they were found.
+    """
+    instance_id = instance_id or get_instance_id()
+    unseen = get_unseen_alerts()
+
+    deliverable: list[AlertItem] = []
+    claimed_ids: set[str] = set()
+    for alert in unseen:
+        if not _passes_severity_filter(alert, min_severity):
+            continue
+        if skip_delivered and alert.get("delivered_at"):
+            continue
+        if claim_alert(alert["id"], instance_id):
+            deliverable.append(alert)
+            claimed_ids.add(alert["id"])
+
+    logger.info(
+        "deliver: %d unseen alerts, %d claimed by %s",
+        len(unseen),
+        len(deliverable),
+        instance_id,
+    )
+
+    if claimed_ids:
+        now = clock.now(_get_local_tz())
+        with _file_lock():
+            alerts = _load_alerts_unlocked()
+            for a in alerts:
+                if a["id"] in claimed_ids:
+                    a["delivered_at"] = now.isoformat()
+                    a["delivered_by"] = instance_id
+            _atomic_write(_alerts_file(), _alerts_data(alerts))
+
+    return deliverable
+
+
 def get_pending(
     instance_id: str | None = None,
     min_severity: AlertSeverity = SEVERITY_ACTIONABLE,
@@ -613,34 +673,7 @@ def get_pending(
     """
     instance_id = instance_id or get_instance_id()
     logger.debug("pending: checking for instance=%s, min_severity=%s", instance_id, min_severity)
-    unseen = get_unseen_alerts()
-
-    # Claim and collect deliverable alerts (filtered by severity)
-    deliverable = []
-    claimed_ids: set[str] = set()
-    for alert in unseen:
-        if not _passes_severity_filter(alert, min_severity):
-            continue
-        if claim_alert(alert["id"], instance_id):
-            deliverable.append(alert)
-            claimed_ids.add(alert["id"])
-
-    logger.info(
-        "pending: %d unseen alerts, %d claimed for delivery",
-        len(unseen),
-        len(deliverable),
-    )
-
-    # Stamp delivery receipts on claimed alerts
-    if claimed_ids:
-        now = clock.now(_get_local_tz())
-        with _file_lock():
-            alerts = _load_alerts_unlocked()
-            for a in alerts:
-                if a["id"] in claimed_ids:
-                    a["delivered_at"] = now.isoformat()
-                    a["delivered_by"] = instance_id
-            _atomic_write(_alerts_file(), _alerts_data(alerts))
+    deliverable = claim_alerts_for_delivery(instance_id, min_severity=min_severity)
 
     session_crons, suppressed_crons = get_session_crons()
     logger.debug(

@@ -250,7 +250,7 @@ src/aya/
 └── scheduler/          bounded subsystem, layered internally
     ├── core.py         CRUD, poll, tick, pending, watch validation
     ├── storage.py      persistence, locking, atomic writes
-    ├── providers.py    github-pr, jira, ci-checks pollers
+    ├── providers.py    github-pr, jira, ci-checks, relay-inbox pollers
     ├── display.py      alert rendering
     ├── time_utils.py   due-date parsing, timezones
     └── types.py        SchedulerItem, AlertItem, SuppressedCron

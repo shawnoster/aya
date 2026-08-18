@@ -87,8 +87,15 @@ def schedule_remind(
 
 @schedule_app.command("watch")
 def schedule_watch(
-    provider: str = typer.Argument(help="Provider: github-pr, jira-query, jira-ticket"),
-    target: str = typer.Argument(help="Target: owner/repo#123, JQL, or TICKET-123"),
+    provider: str = typer.Argument(
+        help="Provider: github-pr, ci-checks, jira-query, jira-ticket, relay-inbox"
+    ),
+    target: str = typer.Argument(
+        help=(
+            "Target: owner/repo#123, JQL, TICKET-123, or an instance label "
+            "('default' for the primary) for relay-inbox"
+        )
+    ),
     message: str = typer.Option(..., "--message", "-m", help="Watch description"),
     tag: str = typer.Option("", "--tags", "-t", help="Comma-separated tags"),
     condition: str = typer.Option(
@@ -99,7 +106,8 @@ def schedule_watch(
             "Condition that triggers the alert. "
             "github-pr: approved_or_merged (default), merged, new_comments. "
             "jira-query: new_results. jira-ticket: status_changed. "
-            "ci-checks: checks_failed, checks_complete."
+            "ci-checks: checks_failed, checks_complete. "
+            "relay-inbox: new_packets."
         ),
     ),
     interval: int = typer.Option(30, "--interval", "-i", help="Poll interval minutes"),
@@ -115,7 +123,9 @@ def schedule_watch(
     # copy — the local gate never learned about ci-checks, so the CLI rejected
     # specs the MCP surface accepted.
     try:
-        validate_watch(provider, target, condition, interval)
+        _, resolved_condition, resolved_interval = validate_watch(
+            provider, target, condition, interval
+        )
     except ValueError as exc:
         _emit_error(ErrorCode.INVALID_ARGUMENT, str(exc), {"provider": provider}, exit_code=2)
 
@@ -127,13 +137,12 @@ def schedule_watch(
             "tags": [t.strip() for t in tag.split(",") if t.strip()] if tag else [],
             "provider": provider,
             "target": target,
-            "condition": condition
-            or {
-                "github-pr": "approved_or_merged",
-                "jira-query": "new_results",
-                "jira-ticket": "status_changed",
-            }.get(provider, ""),
-            "poll_interval_minutes": interval,
+            # Both fields come from validate_watch rather than a second table:
+            # a local copy of the per-provider defaults is what made --dry-run
+            # print a blank condition for any provider it had not learned about,
+            # and the same for the provider-specific interval tightening.
+            "condition": resolved_condition,
+            "poll_interval_minutes": resolved_interval,
             "remove_when": remove_when,
         }
         _output_json({"item": preview})

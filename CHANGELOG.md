@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v2.1.2 (2026-08-18)
+
+### Bug Fixes
+
+- **scheduler**: Report crontab state truthfully, and check it
+  ([#326](https://github.com/shawnoster/aya/pull/326),
+  [`9456dfd`](https://github.com/shawnoster/aya/commit/9456dfd57e51f8dab900eadc9687fd2b52a29927))
+
+- **scheduler**: Stop the suite deleting the crontab, and report its state truthfully
+  ([#326](https://github.com/shawnoster/aya/pull/326),
+  [`9456dfd`](https://github.com/shawnoster/aya/commit/9456dfd57e51f8dab900eadc9687fd2b52a29927))
+
+- **tests**: Address PR review — loud fixture, real assertions, doc gap
+  ([#326](https://github.com/shawnoster/aya/pull/326),
+  [`9456dfd`](https://github.com/shawnoster/aya/commit/9456dfd57e51f8dab900eadc9687fd2b52a29927))
+
+- **tests**: Stop the suite deleting the developer's crontab
+  ([#326](https://github.com/shawnoster/aya/pull/326),
+  [`9456dfd`](https://github.com/shawnoster/aya/commit/9456dfd57e51f8dab900eadc9687fd2b52a29927))
+
+### Refactoring
+
+- **install**: Expose aya_cron_installed, and test the test guard
+  ([#326](https://github.com/shawnoster/aya/pull/326),
+  [`9456dfd`](https://github.com/shawnoster/aya/commit/9456dfd57e51f8dab900eadc9687fd2b52a29927))
+
+
 ## v2.1.1 (2026-08-18)
 
 ### Bug Fixes

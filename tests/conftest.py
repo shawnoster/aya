@@ -54,3 +54,44 @@ def _drop_pinned_paths(paths, scheduler) -> None:
         paths.__dict__.pop(name, None)
     for name in scheduler._LAZY_ATTRS:
         scheduler.__dict__.pop(name, None)
+
+
+@pytest.fixture(autouse=True)
+def isolate_crontab(monkeypatch):
+    """Keep the suite off the real crontab of whoever runs it.
+
+    ``install_scheduler`` and ``uninstall_scheduler`` shell out to ``crontab -l``
+    and ``crontab -``. A test that exercises either without patching subprocess
+    edits the developer's own crontab — which is how ``make check`` came to
+    silently delete the ``aya-scheduler-tick`` entry, taking out-of-session
+    polling with it, with nothing reporting the loss.
+
+    Only ``crontab`` invocations are intercepted, against a per-test in-memory
+    crontab; every other subprocess call passes through untouched, so this does
+    not blunt tests that shell out for other reasons. A test that wants to drive
+    the crontab explicitly can still patch ``subprocess.run`` itself — an inner
+    patch wins and unwinds back to this one.
+    """
+    import subprocess as _sp
+
+    from aya.adapters import install as _install
+
+    state = {"text": ""}
+    real_run = _sp.run
+
+    def fake_run(cmd, **kwargs):
+        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "crontab":
+            head = list(cmd[:2])
+            if head == ["crontab", "-l"]:
+                return _sp.CompletedProcess(cmd, 0, stdout=state["text"], stderr="")
+            if head == ["crontab", "-"]:
+                state["text"] = kwargs.get("input") or ""
+                return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+            if head == ["crontab", "-r"]:
+                state["text"] = ""
+                return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+            return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(_install.subprocess, "run", fake_run)
+    return state

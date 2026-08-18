@@ -128,10 +128,16 @@ def _format_watch_alert(item: SchedulerItem, state: WatchState) -> str:
         # asyncRewake injects, so it is the whole of what the agent learns
         # before deciding whether the mail is worth reading now.
         intents = [i for i in ri_state.get("intents", []) if i]
-        summary = "; ".join(intents[:3]) if intents else f"{len(ids)} packet(s)"
         held = ri_state.get("held", 0)
         held_note = f" ({held} held, sender not paired)" if held else ""
-        return f"{base} — {len(ids)} new: {summary}{held_note}"
+        if not intents:
+            # No intent to quote — naming the count twice ("2 new: 2 packet(s)")
+            # says nothing the first half didn't.
+            return f"{base} — {len(ids)} new packet(s){held_note}"
+        shown = "; ".join(intents[:3])
+        # Mark the elision so a listed sample cannot be misread as the whole.
+        more = ", …" if len(intents) > 3 else ""
+        return f"{base} — {len(ids)} new: {shown}{more}{held_note}"
 
     return base
 

@@ -1049,6 +1049,8 @@ class TestShouldWarnForFailures:
         assert should_warn_for_failures(1000)
         assert should_warn_for_failures(5000)
         assert not should_warn_for_failures(5001)
+
+
 # ── relay-inbox provider ─────────────────────────────────────────────────────
 
 

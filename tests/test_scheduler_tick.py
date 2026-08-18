@@ -958,6 +958,8 @@ class TestFailingWatchVisibility:
         assert watch["consecutive_failures"] == 12
         assert watch["provider"] == "ci-checks"
         assert watch["last_checked_at"] is not None
+
+
 class TestRelayInboxWatch:
     """The relay inbox as a watch: validation, alert text, and the poll path."""
 
@@ -995,6 +997,31 @@ class TestRelayInboxWatch:
         assert "2 new" in msg
         assert "re: theme diff" in msg
         assert "dinner party count" in msg
+
+    def test_alert_without_intents_does_not_repeat_the_count(self):
+        from aya.scheduler import _format_watch_alert
+
+        item = {"provider": "relay-inbox", "message": "relay inbox"}
+        # A packet can carry an empty intent, leaving nothing to quote.
+        state = {"ingested_ids": ["01AAA", "01BBB"], "intents": ["", ""], "held": 0}
+        msg = _format_watch_alert(item, state)
+        assert msg.endswith("2 new packet(s)")
+        assert "2 new: 2" not in msg
+
+    def test_alert_marks_elided_intents(self):
+        from aya.scheduler import _format_watch_alert
+
+        item = {"provider": "relay-inbox", "message": "relay inbox"}
+        state = {
+            "ingested_ids": ["a", "b", "c", "d"],
+            "intents": ["one", "two", "three", "four"],
+            "held": 0,
+        }
+        msg = _format_watch_alert(item, state)
+        # Count stays truthful while only three intents are listed.
+        assert "4 new:" in msg
+        assert "four" not in msg
+        assert msg.endswith(", \u2026")
 
     def test_alert_notes_held_packets(self):
         from aya.scheduler import _format_watch_alert

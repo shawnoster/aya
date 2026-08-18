@@ -320,15 +320,15 @@ class TestCrontabCheck:
     def _patch(monkeypatch, *, crontab: str | None, tick_interval: str | None):
         from aya.usecases import status as status_mod
 
-        def fake_crontab():
+        def fake_installed():
             if crontab is None:
                 raise FileNotFoundError("crontab")
-            return crontab
+            return "aya-scheduler-tick" in crontab
 
-        # Patch where status.py *binds* these rather than where they are defined:
-        # a from-import holds its own reference, so patching the source module
-        # would not intercept the call.
-        monkeypatch.setattr("aya.usecases.status._get_current_crontab", fake_crontab)
+        # Patch where status.py *binds* these rather than where they are
+        # defined: a from-import holds its own reference, so patching the source
+        # module would not intercept the call.
+        monkeypatch.setattr("aya.usecases.status.aya_cron_installed", fake_installed)
         monkeypatch.setattr(
             "aya.usecases.status.load_config",
             lambda *a, **kw: {"tick_interval": tick_interval} if tick_interval else {},

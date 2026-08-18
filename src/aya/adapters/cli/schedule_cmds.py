@@ -446,9 +446,9 @@ def schedule_install(
 
     prefix = "[dim](dry run)[/dim] " if dry_run else ""
     # A dry run reports what *would* change, so it has to say so. "installed"
-    # sat one word away from "already installed" in the same block, the second
-    # being a statement of current state — so a dry run against a machine with
-    # no crontab read as confirmation that one was there.
+    # is one word from "already installed" in this same block, and that line is
+    # a statement of current state — so the two must not share a verb, or a dry
+    # run against a machine with nothing installed reads as confirmation.
     did = "would install" if dry_run else "installed"
     did_update = "would update" if dry_run else "updated"
 

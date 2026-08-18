@@ -62,9 +62,9 @@ def isolate_crontab(monkeypatch):
 
     ``install_scheduler`` and ``uninstall_scheduler`` shell out to ``crontab -l``
     and ``crontab -``. A test that exercises either without patching subprocess
-    edits the developer's own crontab — which is how ``make check`` came to
-    silently delete the ``aya-scheduler-tick`` entry, taking out-of-session
-    polling with it, with nothing reporting the loss.
+    edits the crontab of whoever runs the suite, deleting their
+    ``aya-scheduler-tick`` entry and with it out-of-session polling. Nothing in
+    a test run reports that, so the damage is silent and survives the run.
 
     Only ``crontab`` invocations are intercepted, against a per-test in-memory
     crontab; every other subprocess call passes through untouched, so this does

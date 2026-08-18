@@ -13,7 +13,7 @@ from aya.adapters import clock
 from aya.adapters import paths as _paths
 from aya.adapters.config import load_config
 from aya.adapters.credentials import check_credentials
-from aya.adapters.install import _get_current_crontab, _has_aya_cron
+from aya.adapters.install import aya_cron_installed
 from aya.scheduler import (
     LOCAL_TZ,
     AlertItem,
@@ -152,7 +152,7 @@ def _check_crontab() -> CheckResult:
     """
     wanted = load_config().get("tick_interval")
     try:
-        present = _has_aya_cron(_get_current_crontab())
+        present = aya_cron_installed()
     except FileNotFoundError:
         # No crontab binary at all — common on WSL without cron. Not a fault in
         # aya, and not something `aya schedule install` can fix.

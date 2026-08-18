@@ -284,6 +284,20 @@ def _has_aya_cron(crontab_text: str) -> bool:
     return any(_is_aya_cron_line(line) for line in crontab_text.splitlines())
 
 
+def aya_cron_installed() -> bool:
+    """True when the aya scheduler-tick entry is present in the crontab.
+
+    The public form of the two-step read, so callers outside this module do not
+    have to reach for the private helpers or know that "no crontab" and "crontab
+    unreadable" both surface as empty text.
+
+    Raises:
+        FileNotFoundError: no ``crontab`` command on this machine — common on
+            WSL without cron, and not a state ``aya schedule install`` can fix.
+    """
+    return _has_aya_cron(_get_current_crontab())
+
+
 def _add_cron_entry(
     aya_path: str,
     interval_seconds: int,

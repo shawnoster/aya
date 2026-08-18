@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.1.1 (2026-08-18)
+
+### Bug Fixes
+
+- **scheduler**: Deliver tick-ingested alerts through the hook
+  ([#325](https://github.com/shawnoster/aya/pull/325),
+  [`1a048ef`](https://github.com/shawnoster/aya/commit/1a048ef86d1d24ed01c403a94f5cb0e0249f09f5))
+
+
 ## v2.1.0 (2026-08-18)
 
 ### Bug Fixes

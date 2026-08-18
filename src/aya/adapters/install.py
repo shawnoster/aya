@@ -287,9 +287,11 @@ def _has_aya_cron(crontab_text: str) -> bool:
 def aya_cron_installed() -> bool:
     """True when the aya scheduler-tick entry is present in the crontab.
 
-    The public form of the two-step read, so callers outside this module do not
-    have to reach for the private helpers or know that "no crontab" and "crontab
-    unreadable" both surface as empty text.
+    The public form of the two-step read, so callers outside this module need
+    neither the private helpers nor the detail that an *empty* crontab and an
+    *unreadable* one both arrive as empty text. A missing ``crontab`` command is
+    the one case that is not flattened into a False — it raises, so a caller can
+    tell "no tick installed" from "cannot tell".
 
     Raises:
         FileNotFoundError: no ``crontab`` command on this machine — common on

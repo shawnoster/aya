@@ -154,6 +154,12 @@ into the final message — editing it out silently downgrades the release.
   `tests/conftest.py` points all data paths at a per-test temporary directory,
   because the suite used to write into a developer's real `~/.aya`, where
   ingest deletes packets older than seven days.
+- **The crontab is faked too.** A second autouse fixture intercepts `crontab`
+  invocations against a per-test in-memory crontab, because `install_scheduler`
+  and `uninstall_scheduler` shell out to `crontab -l` and `crontab -` — a test
+  exercising either without it deletes the `aya-scheduler-tick` entry belonging
+  to whoever ran the suite. A crontab call the fixture does not model raises
+  rather than faking success.
 - **Freeze time at one seam.** `adapters/clock.py`'s `now()` is the only place
   that reads the wall clock. Patch that rather than `datetime`.
 - **`RelayClient` takes an injectable `sleep`**, so retry-path tests do not

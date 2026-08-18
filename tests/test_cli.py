@@ -4820,11 +4820,13 @@ class TestScheduleInstallDryRunTense:
         )
         monkeypatch.setattr("aya.adapters.cli.schedule_cmds.install_scheduler", lambda **kw: result)
         out = runner.invoke(app, ["schedule", "install", "--dry-run"]).output
-        # "installed" beside "already installed" is what made a dry run against
-        # a machine with no crontab read as confirmation one was present.
-        assert "would install" in out
-        assert "Crontab:[/dim] installed" not in out
-        assert ": installed" not in out.replace("already installed", "")
+        # Assert against the rendered text. Rich markup is consumed on print,
+        # so an assertion mentioning it can never match and only looks like a
+        # guard. Tying the verb to the Crontab line is what makes this a guard:
+        # the defect was that line claiming a state it had not reached.
+        assert "Crontab: would install" in out
+        assert "Crontab: installed" not in out
+        assert "SessionStart: would install" in out
 
     def test_real_install_says_installed(self, monkeypatch):
         from aya.adapters.install import InstallResult

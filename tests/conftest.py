@@ -90,7 +90,13 @@ def isolate_crontab(monkeypatch):
             if head == ["crontab", "-r"]:
                 state["text"] = ""
                 return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
-            return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+            # Anything else is a crontab call this fake does not model. Faking
+            # success would let a test pass against behaviour that does not
+            # exist on a real system, so it fails and names itself instead.
+            raise AssertionError(
+                f"isolate_crontab does not model {cmd!r}. Teach the fixture the "
+                f"new crontab usage rather than letting the suite fake success."
+            )
         return real_run(cmd, **kwargs)
 
     monkeypatch.setattr(_install.subprocess, "run", fake_run)

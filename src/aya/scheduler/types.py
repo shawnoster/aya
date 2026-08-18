@@ -78,7 +78,8 @@ class SchedulerItem(TypedDict):
     condition: NotRequired[str]
     poll_interval_minutes: NotRequired[int]
     last_checked_at: NotRequired[str | None]
-    """When this watch was last *attempted*, successfully or not."""
+    """When state was last sought for this watch — a poll attempt, successful or
+    not, or a pushed hook update that supplied state without polling."""
     last_state: NotRequired[WatchState | None]
     consecutive_failures: NotRequired[int]
     """Polls since the last success. Non-zero means the watch is not working."""

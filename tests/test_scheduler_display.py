@@ -756,3 +756,45 @@ class TestDisplayItems:
         _display_items([item])
         captured = capsys.readouterr()
         assert "health" in captured.out
+
+
+class TestDisplayItemsWatchHealth:
+    """`aya schedule list` must not render a permanently failing watch as healthy."""
+
+    @staticmethod
+    def _watch(**overrides):
+        item = {
+            "id": "w1",
+            "type": "watch",
+            "status": "active",
+            "message": "relay inbox",
+            "tags": [],
+            "provider": "ci-checks",
+            "poll_interval_minutes": 2,
+            "last_checked_at": "2026-04-01T10:00:00-07:00",
+        }
+        item.update(overrides)
+        return item
+
+    def test_failing_watch_shows_the_count(self, capsys):
+        from aya.scheduler.display import _display_items
+
+        _display_items([self._watch(consecutive_failures=12)])
+        out = capsys.readouterr().out
+        # "checked 10:00" alone would read as a healthy watch.
+        assert "checked 10:00" in out
+        assert "12 failed" in out
+
+    def test_healthy_watch_stays_quiet(self, capsys):
+        from aya.scheduler.display import _display_items
+
+        _display_items([self._watch(consecutive_failures=0)])
+        out = capsys.readouterr().out
+        assert "checked 10:00" in out
+        assert "failed" not in out
+
+    def test_absent_counter_is_treated_as_healthy(self, capsys):
+        from aya.scheduler.display import _display_items
+
+        _display_items([self._watch()])
+        assert "failed" not in capsys.readouterr().out

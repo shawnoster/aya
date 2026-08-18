@@ -470,3 +470,42 @@ class TestCLI:
                 ["schedule", "uninstall", "--dry-run"],
             )
         assert result.exit_code == 0, result.output
+
+
+class TestCrontabIsolation:
+    """The guard that keeps the suite off the real crontab must itself be tested.
+
+    Without this, deleting the ``isolate_crontab`` fixture leaves a green suite
+    that quietly edits the crontab of whoever runs it.
+    """
+
+    def test_reads_go_through_the_fixture(self, isolate_crontab) -> None:
+        from aya.adapters.install import _get_current_crontab
+
+        # Seeding the in-memory crontab and reading it back proves the
+        # interception is wired, on a host with a real crontab or without one.
+        isolate_crontab["text"] = "0 * * * * /usr/bin/backup.sh\n"
+        assert _get_current_crontab() == "0 * * * * /usr/bin/backup.sh\n"
+
+    def test_writes_stay_in_memory(self, isolate_crontab) -> None:
+        from aya.adapters.install import _add_cron_entry
+
+        _add_cron_entry("/usr/local/bin/aya", 60)
+        assert "aya-scheduler-tick" in isolate_crontab["text"]
+
+    def test_each_test_starts_clean(self, isolate_crontab) -> None:
+        # Per-test state: the entry written by the previous test must not leak
+        # in, or tests would order-depend on each other.
+        assert isolate_crontab["text"] == ""
+
+    def test_uninstall_cannot_reach_the_real_crontab(self, isolate_crontab) -> None:
+        from aya.adapters.install import uninstall_scheduler
+
+        isolate_crontab["text"] = (
+            "0 * * * * /usr/bin/backup.sh\n"
+            "* * * * * /usr/local/bin/aya schedule tick --quiet  # aya-scheduler-tick\n"
+        )
+        uninstall_scheduler(settings_path=Path("/nonexistent"))
+        # Removed from the fake, and the unrelated entry preserved.
+        assert "aya-scheduler-tick" not in isolate_crontab["text"]
+        assert "backup.sh" in isolate_crontab["text"]

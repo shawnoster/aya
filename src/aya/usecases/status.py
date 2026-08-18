@@ -11,7 +11,9 @@ from typing import Any
 
 from aya.adapters import clock
 from aya.adapters import paths as _paths
+from aya.adapters.config import load_config
 from aya.adapters.credentials import check_credentials
+from aya.adapters.install import aya_cron_installed
 from aya.scheduler import (
     LOCAL_TZ,
     AlertItem,
@@ -135,6 +137,41 @@ def _active_scheduler_items() -> list[SchedulerItem]:
     return [i for i in load_items() if i.get("status") == "active"]
 
 
+def _check_crontab() -> CheckResult:
+    """Report whether the out-of-session tick is still installed.
+
+    Nothing else surfaces this. The scheduler's own status covers items, not the
+    system crontab, so the tick can be absent — and out-of-session polling with
+    it — while every other signal reads healthy.
+
+    ``tick_interval`` in config.json is written only by a successful
+    ``aya schedule install``, which makes it a durable record of intent: with it
+    set, a missing entry is a regression and fails the check; without it, the
+    tick was never asked for and its absence is reported as fact rather than
+    treated as broken.
+    """
+    wanted = load_config().get("tick_interval")
+    try:
+        present = aya_cron_installed()
+    except FileNotFoundError:
+        # No crontab binary at all — common on WSL without cron. Not a fault in
+        # aya, and not something `aya schedule install` can fix.
+        return CheckResult(
+            "crontab", True, "no crontab command available (out-of-session tick off)"
+        )
+
+    if present:
+        return CheckResult("crontab", True, f"aya-scheduler-tick installed (tick={wanted or '?'})")
+    if wanted:
+        return CheckResult(
+            "crontab",
+            False,
+            f"aya-scheduler-tick MISSING though tick_interval={wanted} was configured "
+            f"— out-of-session polling is off; run `aya schedule install`",
+        )
+    return CheckResult("crontab", True, "not installed (out-of-session tick never configured)")
+
+
 def _gather_status() -> dict[str, Any]:
     """Collect all status data into a plain dict."""
     now_local = clock.now(LOCAL_TZ)
@@ -173,6 +210,7 @@ def _gather_status() -> dict[str, Any]:
     checks: list[CheckResult] = [
         CheckResult("profile", profile is not None, str(_paths.PROFILE_PATH)),
         CheckResult("scheduler", scheduler_ok, scheduler_detail),
+        _check_crontab(),
     ]
 
     # Pre-compute check totals once, reuse in all render functions

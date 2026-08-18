@@ -548,6 +548,10 @@ def _hook_watch_impl(payload: dict[str, Any]) -> int:
         alerts = _load_alerts_unlocked()
         items_modified = False
         alerts_modified = False
+        # Alerts already on disk before this run. Anything not in here was
+        # raised by this hook, which reports it directly — the sweep below must
+        # stamp those without announcing them a second time.
+        pre_existing_alert_ids = {a["id"] for a in alerts}
 
         for item in items:
             if _is_watch_chain(item) and item.get("status") == "active":
@@ -628,6 +632,25 @@ def _hook_watch_impl(payload: dict[str, Any]) -> int:
             _atomic_write(_scheduler_file(), _scheduler_data(items))
         if alerts_modified:
             _atomic_write(_alerts_file(), _alerts_data(alerts))
+
+    # ── Step 2b: announce alerts this session has not been told about ───
+    #
+    # The crontab tick polls the same watches on a shorter cadence, so it
+    # usually wins the race and consumes the change itself. It has no session to
+    # speak into, so its alert sat unseen while this hook — finding nothing new
+    # — stayed silent. Delivering here decouples "who polled" from "who tells
+    # the agent", so a packet ingested by the tick still surfaces.
+    #
+    # Called outside the lock above: claim_alerts_for_delivery takes the same
+    # file lock to stamp its receipts.
+    from aya.scheduler.core import claim_alerts_for_delivery
+
+    for alert in claim_alerts_for_delivery(skip_delivered=True):
+        # Alerts raised by this run are already in rewake_messages; the claim
+        # call still stamps them, which is what stops the next tool call from
+        # announcing them again.
+        if alert["id"] in pre_existing_alert_ids:
+            rewake_messages.append(alert["message"])
 
     # ── Step 3: emit single asyncRewake with all changes ────────────────
     if rewake_messages:

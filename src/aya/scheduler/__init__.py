@@ -168,6 +168,7 @@ from .core import (
     add_reminder,
     add_seed_alert,
     add_watch,
+    claim_alerts_for_delivery,
     validate_watch,
     check_due,
     dismiss_item,
@@ -274,6 +275,7 @@ __all__ = [
     # Core functions
     "add_reminder",
     "add_watch",
+    "claim_alerts_for_delivery",
     "validate_watch",
     "add_recurring",
     "add_seed_alert",

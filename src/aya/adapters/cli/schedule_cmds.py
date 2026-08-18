@@ -445,6 +445,12 @@ def schedule_install(
         set_config_value("tick_interval", tick_interval)
 
     prefix = "[dim](dry run)[/dim] " if dry_run else ""
+    # A dry run reports what *would* change, so it has to say so. "installed"
+    # sat one word away from "already installed" in the same block, the second
+    # being a statement of current state — so a dry run against a machine with
+    # no crontab read as confirmation that one was there.
+    did = "would install" if dry_run else "installed"
+    did_update = "would update" if dry_run else "updated"
 
     if result.cron_already_present:
         console.print(
@@ -452,21 +458,21 @@ def schedule_install(
             f"[dim](use --force to replace with --tick-interval {tick_interval})[/dim]"
         )
     elif result.cron_installed:
-        console.print(f"  {prefix}[green]Crontab:[/green] installed (tick={tick_interval})")
+        console.print(f"  {prefix}[green]Crontab:[/green] {did} (tick={tick_interval})")
         for line in result.cron_lines:
             console.print(f"    [dim]{line}[/dim]")
 
     for event in result.hooks_already_present:
         console.print(f"  {prefix}[dim]{event}:[/dim] already installed")
     for event in result.hooks_installed:
-        console.print(f"  {prefix}[green]{event}:[/green] installed")
+        console.print(f"  {prefix}[green]{event}:[/green] {did}")
     for event in result.hooks_updated:
-        console.print(f"  {prefix}[yellow]{event}:[/yellow] updated")
+        console.print(f"  {prefix}[yellow]{event}:[/yellow] {did_update}")
 
     if result.opencode_plugin_already_present:
         console.print(f"  {prefix}[dim]OpenCode plugin:[/dim] already installed")
     elif result.opencode_plugin_installed:
-        console.print(f"  {prefix}[green]OpenCode plugin:[/green] installed")
+        console.print(f"  {prefix}[green]OpenCode plugin:[/green] {did}")
 
     if not dry_run and not result.errors:
         console.print("\n[green]✓[/green] Scheduler integrations installed.")

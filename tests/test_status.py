@@ -308,3 +308,81 @@ class TestRenderJson:
         assert len(parsed["due"]) == 1
         assert len(parsed["upcoming"]) == 1
         assert len(parsed["watches"]) == 1
+
+
+# ── crontab check ────────────────────────────────────────────────────────────
+
+
+class TestCrontabCheck:
+    """The out-of-session tick has no other health signal."""
+
+    @staticmethod
+    def _patch(monkeypatch, *, crontab: str | None, tick_interval: str | None):
+        from aya.usecases import status as status_mod
+
+        def fake_crontab():
+            if crontab is None:
+                raise FileNotFoundError("crontab")
+            return crontab
+
+        # Patch where status.py *binds* these rather than where they are defined:
+        # a from-import holds its own reference, so patching the source module
+        # would not intercept the call.
+        monkeypatch.setattr("aya.usecases.status._get_current_crontab", fake_crontab)
+        monkeypatch.setattr(
+            "aya.usecases.status.load_config",
+            lambda *a, **kw: {"tick_interval": tick_interval} if tick_interval else {},
+        )
+        return status_mod
+
+    AYA_LINE = "* * * * * /home/shawn/.local/bin/aya schedule tick --quiet  # aya-scheduler-tick"
+
+    def test_present_and_configured_is_ok(self, monkeypatch):
+        m = self._patch(monkeypatch, crontab=self.AYA_LINE, tick_interval="1m")
+        r = m._check_crontab()
+        assert r.ok
+        assert "installed" in r.detail
+
+    def test_missing_but_configured_fails(self, monkeypatch):
+        # The regression this check exists to catch: the tick was installed at
+        # some point (tick_interval persisted) and the entry is now gone, so
+        # out-of-session polling is silently off.
+        m = self._patch(monkeypatch, crontab="# nothing here\n", tick_interval="1m")
+        r = m._check_crontab()
+        assert not r.ok
+        assert "MISSING" in r.detail
+        assert "aya schedule install" in r.detail
+
+    def test_missing_and_never_configured_is_not_a_failure(self, monkeypatch):
+        # Never asked for. Reported as fact, not treated as broken — otherwise
+        # every install that skips the cron reports systems.ok false.
+        m = self._patch(monkeypatch, crontab="", tick_interval=None)
+        r = m._check_crontab()
+        assert r.ok
+        assert "never configured" in r.detail
+
+    def test_no_crontab_command_is_not_a_failure(self, monkeypatch):
+        # WSL without cron installed. Not aya's fault and not installable.
+        m = self._patch(monkeypatch, crontab=None, tick_interval="1m")
+        r = m._check_crontab()
+        assert r.ok
+        assert "no crontab command" in r.detail
+
+    def test_appears_in_the_systems_payload(self, monkeypatch):
+        import json as _json
+
+        from aya.adapters.status_view import _render_json
+        from aya.usecases.status import _gather_status
+
+        self._patch(monkeypatch, crontab="", tick_interval="1m")
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", list)
+
+        payload = _json.loads(_render_json(_gather_status()))
+        names = {c["name"] for c in payload["systems"]["checks"]}
+        assert "crontab" in names
+        # A JSON/MCP consumer must be able to see the degradation, which is the
+        # surface where this went unnoticed.
+        assert payload["systems"]["ok"] is False

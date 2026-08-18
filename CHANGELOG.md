@@ -2,6 +2,32 @@
 
 <!-- version list -->
 
+## v2.0.3 (2026-08-18)
+
+### Bug Fixes
+
+- **scheduler**: Record poll attempts at all three poll sites
+  ([#323](https://github.com/shawnoster/aya/pull/323),
+  [`963ab0e`](https://github.com/shawnoster/aya/commit/963ab0e61c3d9ac8c8926001d3153a414375ff32))
+
+- **scheduler**: Show failed polls in the schedule list too
+  ([#323](https://github.com/shawnoster/aya/pull/323),
+  [`963ab0e`](https://github.com/shawnoster/aya/commit/963ab0e61c3d9ac8c8926001d3153a414375ff32))
+
+- **scheduler**: Stop a failing watch from spinning silently
+  ([#323](https://github.com/shawnoster/aya/pull/323),
+  [`963ab0e`](https://github.com/shawnoster/aya/commit/963ab0e61c3d9ac8c8926001d3153a414375ff32))
+
+### Chores
+
+- **deps**: Bump astral-sh/setup-uv from 9.0.0 to 10.0.1
+  ([#320](https://github.com/shawnoster/aya/pull/320),
+  [`1dfb7a6`](https://github.com/shawnoster/aya/commit/1dfb7a67ee58fd6ed3d0d837b621e8371721f705))
+
+- **deps-dev**: Bump ruff from 0.16.2 to 0.16.3 ([#321](https://github.com/shawnoster/aya/pull/321),
+  [`fb14072`](https://github.com/shawnoster/aya/commit/fb140729be6c603e88724e165bc38bab47b9d736))
+
+
 ## v2.0.2 (2026-08-17)
 
 ### Bug Fixes

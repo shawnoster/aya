@@ -203,11 +203,16 @@ class PacketRow(TypedDict):
     sent_at: str
     age: str
     content_type: str
+    signature_valid: bool
+    """Whether the signature over ``from_did`` verifies. False means the claimed
+    sender identity does not hold up, which is distinct from being untrusted."""
     trusted: bool
+    """A *verified* sender who is also in the profile's trusted keys."""
 
 
 def _extract_packet_data(pkt: Packet, profile: Profile) -> PacketRow:
     """Extract all packet fields and computed values for reuse across displays."""
+    signature_valid = pkt.verify_from_did()
     return {
         "id": pkt.id,
         "intent": pkt.intent,
@@ -216,7 +221,10 @@ def _extract_packet_data(pkt: Packet, profile: Profile) -> PacketRow:
         "sent_at": pkt.sent_at,
         "age": human_age(pkt.sent_at),
         "content_type": str(pkt.content_type),
-        "trusted": profile.is_trusted(pkt.from_did),
+        # Mirrors usecases.relay_ops.packet_summary: from_did is a claim until
+        # the signature over it verifies, so trust is gated on that.
+        "signature_valid": signature_valid,
+        "trusted": signature_valid and profile.is_trusted(pkt.from_did),
     }
 
 
@@ -243,7 +251,14 @@ def _show_inbox(
 
     for pkt in packets:
         data = _extract_packet_data(pkt, profile)
-        trusted_display = "[green]✓[/green]" if data["trusted"] else "[yellow]?[/yellow]"
+        # Three states, not two: a bad signature is a different thing from an
+        # unknown sender and must not render as the same cautious "?".
+        if not data["signature_valid"]:
+            trusted_display = "[red]✗ bad sig[/red]"
+        elif data["trusted"]:
+            trusted_display = "[green]✓[/green]"
+        else:
+            trusted_display = "[yellow]?[/yellow]"
         already_ingested = ingested_set is not None and pkt.id in ingested_set
         if already_ingested:
             intent: str | Text = Text.assemble((data["intent"], "dim"), (" [ingested]", "dim"))

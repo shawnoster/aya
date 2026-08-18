@@ -4837,3 +4837,71 @@ class TestScheduleInstallDryRunTense:
         out = runner.invoke(app, ["schedule", "install"]).output
         assert "installed" in out
         assert "would install" not in out
+
+
+class TestInboxTrustBadge:
+    """The Trust column must not show a forged sender as trusted."""
+
+    @staticmethod
+    def _setup():
+        from aya.entities.identity import Identity, Profile, TrustedKey
+
+        local = Identity.generate("default")
+        peer = Identity.generate("home")
+        profile = Profile()
+        profile.instances["default"] = local
+        profile.trusted_keys["home"] = TrustedKey(
+            did=peer.did, label="home", nostr_pubkey=peer.nostr_public_hex
+        )
+        return profile, peer
+
+    def test_forged_sender_renders_as_bad_signature(self):
+        from aya.adapters.cli._render import _extract_packet_data
+        from aya.entities.identity import Identity
+        from aya.entities.packet import Packet
+
+        profile, peer = self._setup()
+        attacker = Identity.generate("attacker")
+        pkt = Packet(from_did=attacker.did, to_did=attacker.did, intent="x", content="y")
+        pkt = pkt.sign(attacker)
+        pkt.from_did = peer.did  # claim the trusted peer's identity
+
+        data = _extract_packet_data(pkt, profile)
+        assert data["signature_valid"] is False
+        assert data["trusted"] is False
+
+    def test_genuine_trusted_sender_renders_as_trusted(self):
+        from aya.adapters.cli._render import _extract_packet_data
+        from aya.entities.packet import Packet
+
+        profile, peer = self._setup()
+        pkt = Packet(from_did=peer.did, to_did=peer.did, intent="x", content="y").sign(peer)
+
+        data = _extract_packet_data(pkt, profile)
+        assert data["signature_valid"] is True
+        assert data["trusted"] is True
+
+    def test_the_three_badge_states_are_distinct(self, capsys):
+        """A bad signature must not render as the same cautious '?' as a stranger."""
+        from aya.adapters.cli._render import _show_inbox
+        from aya.entities.identity import Identity
+        from aya.entities.packet import Packet
+
+        profile, peer = self._setup()
+        good = Packet(from_did=peer.did, to_did=peer.did, intent="good", content="y").sign(peer)
+        stranger_id = Identity.generate("stranger")
+        stranger = Packet(
+            from_did=stranger_id.did, to_did=stranger_id.did, intent="stranger", content="y"
+        ).sign(stranger_id)
+        attacker = Identity.generate("attacker")
+        forged = Packet(
+            from_did=attacker.did, to_did=attacker.did, intent="forged", content="y"
+        ).sign(attacker)
+        forged.from_did = peer.did
+
+        _show_inbox([good, stranger, forged], profile)
+        out = capsys.readouterr().out
+        assert "bad sig" in out, "a forged sender needs its own marker"
+        # Rich renders to plain text, so assert on what a user actually sees.
+        assert "✓" in out
+        assert "?" in out

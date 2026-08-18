@@ -595,7 +595,11 @@ def packet_summary(profile: Profile, packet: Packet, *, ingested: bool) -> dict[
 
     The CLI and MCP used to disagree here — one emitted ``from_did`` plus
     ``from_label``, the other a bare ``from`` — so a caller could not read both.
+
+    Carries ``signature_valid`` alongside ``trusted`` so a caller can tell an
+    untrusted sender from one whose claimed identity does not hold up.
     """
+    signature_valid = packet.verify_from_did()
     return {
         "id": packet.id,
         "intent": packet.intent,
@@ -604,7 +608,13 @@ def packet_summary(profile: Profile, packet: Packet, *, ingested: bool) -> dict[
         "sent_at": packet.sent_at,
         "age": human_age(packet.sent_at),
         "content_type": packet.content_type,
-        "trusted": profile.is_trusted(packet.from_did),
+        # from_did is an unauthenticated claim until the signature over it is
+        # checked, so trust is gated on that check rather than on the string.
+        # Reporting is_trusted() alone let a forged from_did borrow a real
+        # peer's standing in the listing, while the ingest path rejected the
+        # same packet — the two surfaces disagreeing about the same bytes.
+        "signature_valid": signature_valid,
+        "trusted": signature_valid and profile.is_trusted(packet.from_did),
         "ingested": ingested,
     }
 

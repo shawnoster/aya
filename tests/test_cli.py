@@ -4805,3 +4805,35 @@ class TestScheduleWatchDryRunDefaults:
         )
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["item"]["condition"] == "merged"
+
+
+class TestScheduleInstallDryRunTense:
+    """A dry run must not report its intended end state as current."""
+
+    def test_dry_run_says_would_install(self, monkeypatch):
+        from aya.adapters.install import InstallResult
+
+        result = InstallResult(
+            cron_installed=True,
+            cron_lines=["* * * * * aya schedule tick --quiet  # aya-scheduler-tick"],
+            hooks_installed=["SessionStart"],
+        )
+        monkeypatch.setattr("aya.adapters.cli.schedule_cmds.install_scheduler", lambda **kw: result)
+        out = runner.invoke(app, ["schedule", "install", "--dry-run"]).output
+        # Assert against the rendered text. Rich markup is consumed on print,
+        # so an assertion mentioning it can never match and only looks like a
+        # guard. Tying the verb to the Crontab line is what makes this a guard:
+        # the defect was that line claiming a state it had not reached.
+        assert "Crontab: would install" in out
+        assert "Crontab: installed" not in out
+        assert "SessionStart: would install" in out
+
+    def test_real_install_says_installed(self, monkeypatch):
+        from aya.adapters.install import InstallResult
+
+        result = InstallResult(cron_installed=True, cron_lines=["* * * * * x"])
+        monkeypatch.setattr("aya.adapters.cli.schedule_cmds.install_scheduler", lambda **kw: result)
+        monkeypatch.setattr("aya.adapters.cli.schedule_cmds.set_config_value", lambda *a, **kw: {})
+        out = runner.invoke(app, ["schedule", "install"]).output
+        assert "installed" in out
+        assert "would install" not in out

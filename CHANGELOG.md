@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v2.1.0 (2026-08-18)
+
+### Bug Fixes
+
+- **cli**: Derive the watch dry-run preview from validate_watch
+  ([#324](https://github.com/shawnoster/aya/pull/324),
+  [`6defc4b`](https://github.com/shawnoster/aya/commit/6defc4b3668e835c639e4e71e833ca45c7ae653c))
+
+- **scheduler**: Stop the relay-inbox alert naming the count twice
+  ([#324](https://github.com/shawnoster/aya/pull/324),
+  [`6defc4b`](https://github.com/shawnoster/aya/commit/6defc4b3668e835c639e4e71e833ca45c7ae653c))
+
+### Features
+
+- **scheduler**: Add a relay-inbox watch provider
+  ([#324](https://github.com/shawnoster/aya/pull/324),
+  [`6defc4b`](https://github.com/shawnoster/aya/commit/6defc4b3668e835c639e4e71e833ca45c7ae653c))
+
+
 ## v2.0.3 (2026-08-18)
 
 ### Bug Fixes

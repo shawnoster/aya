@@ -14,7 +14,9 @@ from aya.adapters.cli import app
 from aya.adapters.install import (
     CANONICAL_HOOKS,
     CRON_COMMENT,
+    _add_cron_entry,
     _build_cron_lines,
+    _get_current_crontab,
     _has_aya_cron,
     _is_aya_command,
     _is_aya_hook_entry,
@@ -509,3 +511,90 @@ class TestCrontabIsolation:
         # Removed from the fake, and the unrelated entry preserved.
         assert "aya-scheduler-tick" not in isolate_crontab["text"]
         assert "backup.sh" in isolate_crontab["text"]
+
+
+class TestCrontabReadFailsClosed:
+    """An unreadable crontab must never be mistaken for an empty one.
+
+    `_add_cron_entry` writes back what it reads, so treating a failed read as
+    empty replaces every entry the user had with aya's own.
+    """
+
+    REAL_CRONTAB = "0 3 * * * /usr/bin/backup.sh\n*/15 * * * * /home/user/sync-photos.sh\n"
+
+    @staticmethod
+    def _failing_read(stderr: str, returncode: int = 1):
+        """subprocess.run replacement: `crontab -l` fails, writes are recorded."""
+        writes: list[str] = []
+
+        def mock_run(cmd, **kwargs):
+            if list(cmd[:2]) == ["crontab", "-l"]:
+                return subprocess.CompletedProcess(cmd, returncode, stdout="", stderr=stderr)
+            if list(cmd[:2]) == ["crontab", "-"]:
+                writes.append(kwargs.get("input", ""))
+                return subprocess.CompletedProcess(cmd, 0)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        return mock_run, writes
+
+    def test_no_crontab_for_user_still_reads_as_empty(self) -> None:
+        # The one benign non-zero exit: the user genuinely has no crontab.
+        mock_run, _ = self._failing_read("no crontab for shawn\n")
+        with patch("aya.adapters.install.subprocess.run", side_effect=mock_run):
+            assert _get_current_crontab() == ""
+
+    def test_unreadable_crontab_raises(self) -> None:
+        mock_run, _ = self._failing_read("crontab: permission denied\n")
+        with (
+            patch("aya.adapters.install.subprocess.run", side_effect=mock_run),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            _get_current_crontab()
+
+    def test_failed_read_does_not_write(self) -> None:
+        """The data-loss guard. Nothing may be written from a read that failed."""
+        mock_run, writes = self._failing_read("crontab: permission denied\n")
+        with (
+            patch("aya.adapters.install.subprocess.run", side_effect=mock_run),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            _add_cron_entry("/usr/local/bin/aya", 60)
+        assert writes == [], "a failed read must not produce a crontab write"
+
+    def test_install_reports_the_failure_instead_of_destroying(self, tmp_path: Path) -> None:
+        mock_run, writes = self._failing_read("crontab: permission denied\n")
+        with (
+            patch("aya.adapters.install.subprocess.run", side_effect=mock_run),
+            patch("aya.adapters.install._resolve_aya_path", return_value="/usr/local/bin/aya"),
+        ):
+            result = install_scheduler(settings_path=tmp_path / "settings.json")
+        assert writes == []
+        assert any("crontab failed" in e for e in result.errors)
+        assert result.cron_installed is False
+
+    def test_uninstall_reports_the_failure(self, tmp_path: Path) -> None:
+        mock_run, writes = self._failing_read("crontab: permission denied\n")
+        with patch("aya.adapters.install.subprocess.run", side_effect=mock_run):
+            result = uninstall_scheduler(settings_path=tmp_path / "settings.json")
+        assert writes == []
+        assert any("crontab failed" in e for e in result.errors)
+
+    def test_a_readable_crontab_is_still_preserved(self) -> None:
+        # The behaviour this protects: unrelated entries survive a real install.
+        state = {"text": self.REAL_CRONTAB}
+        writes: list[str] = []
+
+        def mock_run(cmd, **kwargs):
+            if list(cmd[:2]) == ["crontab", "-l"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=state["text"], stderr="")
+            if list(cmd[:2]) == ["crontab", "-"]:
+                writes.append(kwargs.get("input", ""))
+                return subprocess.CompletedProcess(cmd, 0)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        with patch("aya.adapters.install.subprocess.run", side_effect=mock_run):
+            _add_cron_entry("/usr/local/bin/aya", 60)
+        assert len(writes) == 1
+        assert "backup.sh" in writes[0]
+        assert "sync-photos.sh" in writes[0]
+        assert "aya-scheduler-tick" in writes[0]

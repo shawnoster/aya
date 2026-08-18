@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -153,6 +154,14 @@ def _check_crontab() -> CheckResult:
     wanted = load_config().get("tick_interval")
     try:
         present = aya_cron_installed()
+    except subprocess.CalledProcessError as e:
+        # Distinct from a missing entry: presence is unknown, so claiming
+        # "MISSING" would be a false alarm and claiming installed would be worse.
+        return CheckResult(
+            "crontab",
+            False,
+            f"could not read the crontab, so the tick's state is unknown: {e}",
+        )
     except FileNotFoundError:
         # No crontab binary at all — common on WSL without cron. Not a fault in
         # aya, and not something `aya schedule install` can fix.

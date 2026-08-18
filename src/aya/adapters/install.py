@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -250,10 +251,29 @@ def _build_cron_lines(aya_path: str, interval_seconds: int) -> list[str]:
     return lines
 
 
-def _get_current_crontab() -> str:
-    """Read current crontab. Returns empty string if none exists.
+# `crontab -l` exits non-zero both when the user simply has no crontab and when
+# the read genuinely failed. The benign case is reported on stderr — "no crontab
+# for <user>" on cronie and vixie — so that phrase is the only non-zero exit
+# treated as an empty crontab. Matched without the trailing "for", since the
+# wording varies by implementation and the phrase alone cannot be confused with
+# a permission or I/O error.
+_NO_CRONTAB_STDERR = re.compile(r"no crontab", re.IGNORECASE)
 
-    Raises FileNotFoundError if crontab is not installed (e.g. WSL without cron).
+
+def _get_current_crontab() -> str:
+    """Read the current crontab, or raise rather than guess.
+
+    Returns an empty string only when the user genuinely has no crontab. Any
+    other failure raises, because the callers here *write back what they read*:
+    `_add_cron_entry` keeps the lines it does not recognise and re-writes the
+    result, so treating an unreadable crontab as an empty one replaces every
+    entry the user had with aya's own — data loss reported as a clean install.
+
+    Raises:
+        FileNotFoundError: no ``crontab`` command on this machine.
+        subprocess.CalledProcessError: the crontab could not be read. Callers
+            that write must let this propagate; both ``install_scheduler`` and
+            ``uninstall_scheduler`` already turn it into a reported error.
     """
     result = subprocess.run(
         ["crontab", "-l"],  # noqa: S607
@@ -262,7 +282,14 @@ def _get_current_crontab() -> str:
         check=False,
     )
     if result.returncode != 0:
-        return ""
+        if _NO_CRONTAB_STDERR.search(result.stderr or ""):
+            return ""
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            ["crontab", "-l"],
+            output=result.stdout,
+            stderr=result.stderr,
+        )
     return result.stdout
 
 
@@ -296,6 +323,8 @@ def aya_cron_installed() -> bool:
     Raises:
         FileNotFoundError: no ``crontab`` command on this machine — common on
             WSL without cron, and not a state ``aya schedule install`` can fix.
+        subprocess.CalledProcessError: the crontab exists but could not be read,
+            so presence is genuinely unknown rather than False.
     """
     return _has_aya_cron(_get_current_crontab())
 

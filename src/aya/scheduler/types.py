@@ -26,6 +26,7 @@ PROVIDER_GITHUB_PR = "github-pr"
 PROVIDER_JIRA_QUERY = "jira-query"
 PROVIDER_JIRA_TICKET = "jira-ticket"
 PROVIDER_CI_CHECKS = "ci-checks"
+PROVIDER_RELAY_INBOX = "relay-inbox"
 
 # ── schema versions ──────────────────────────────────────────────────────────
 SCHEDULER_SCHEMA_VERSION = 1
@@ -228,44 +229,6 @@ class RelayInboxConfig(TypedDict):
 
     instance: NotRequired[str]
     relay: NotRequired[str]
-
-
-def watch_target(item: SchedulerItem) -> str | None:
-    """The target a watch points at, rendered the way it was typed.
-
-    The inverse of ``core.validate_watch``, which parses a target string into
-    ``watch_config``: a watch stores only the parsed form, so the target the
-    user typed exists nowhere on the item and every display surface would
-    otherwise reassemble it by hand. It lives here beside the config types
-    rather than next to its inverse because ``core`` imports ``display``, so
-    only a module below both can serve them both.
-
-    Returns None when the provider is unknown or the config lacks the fields it
-    needs, so a caller falls back to the message rather than printing half a
-    target.
-    """
-    provider = item.get("provider")
-    config = item.get("watch_config") or {}
-    if not isinstance(config, dict):
-        return None
-
-    if provider in {"github-pr", "ci-checks"}:
-        owner, repo, pr = config.get("owner"), config.get("repo"), config.get("pr")
-        if owner and repo and pr:
-            return f"{owner}/{repo}#{pr}"
-        return None
-    if provider == "jira-query":
-        jql = config.get("jql")
-        return str(jql) if jql else None
-    if provider == "jira-ticket":
-        ticket = config.get("ticket")
-        return str(ticket) if ticket else None
-    if provider == "relay-inbox":
-        # An empty config is the documented "poll as the primary instance"
-        # case, so it has a target to show rather than nothing.
-        instance = config.get("instance")
-        return str(instance) if instance else "default"
-    return None
 
 
 class CiChecksState(TypedDict):

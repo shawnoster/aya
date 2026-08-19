@@ -354,8 +354,10 @@ class TestFormatPending:
             "session_crons": [cron],
             "suppressed_crons": [],
         }
-        result = format_pending(pending)
-        assert "idle-back-off=10m" in result
+        # Asserted through the CLI, not against format_pending's return value:
+        # the meta block is bracketed, so the formatter can contain it while
+        # console.print drops it. Only the rendered path proves it is visible.
+        assert_cli_pending_shows(pending, "idle-back-off=10m")
 
     def test_session_crons_with_only_during(self):
         cron = {
@@ -372,8 +374,7 @@ class TestFormatPending:
             "session_crons": [cron],
             "suppressed_crons": [],
         }
-        result = format_pending(pending)
-        assert "only-during=08:00-18:00" in result
+        assert_cli_pending_shows(pending, "only-during=08:00-18:00")
 
     def test_suppressed_crons_shown(self):
         cron = {
@@ -823,7 +824,7 @@ class TestWatchTarget:
         """The formatter is the inverse of the parser, so prove it on real input."""
         from aya.scheduler import validate_watch, watch_target
 
-        spec = "GuildEducationInc/applications-frontend#734"
+        spec = "myorg/myrepo#734"
         config, _condition, _interval = validate_watch("github-pr", spec)
         assert watch_target(self._watch("github-pr", dict(config))) == spec
 
@@ -881,3 +882,64 @@ class TestWatchTarget:
         from aya.scheduler import watch_target
 
         assert watch_target(self._watch("github-pr", "oops")) is None  # type: ignore[arg-type]
+
+
+def assert_cli_pending_shows(pending, *expected: str) -> None:
+    """Assert `aya schedule pending` actually renders each fragment.
+
+    Rich reads `[anything-lowercase-first]` as a style tag and deletes it, so a
+    bracketed field asserts fine against a formatter's return value while being
+    invisible to the user. Go through the CLI so the print site is covered too.
+    """
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
+    from aya.adapters.cli import app
+
+    with patch("aya.adapters.cli.schedule_cmds.get_pending", lambda **kw: pending):
+        out = CliRunner().invoke(app, ["schedule", "pending", "--all", "-f", "text"]).output
+    for fragment in expected:
+        assert fragment in out, f"{fragment!r} never reached the terminal. Got: {out!r}"
+
+
+class TestScheduleListShowsTarget:
+    """`aya schedule list` is where "what am I watching?" actually gets asked.
+
+    It was missed on the first pass because the search was for consumers of
+    `active_watches`, and this path consumes `list_items()` — the discovery
+    mechanism defined the blind spot. Two github-pr watches were otherwise
+    distinguishable only by message text.
+    """
+
+    @staticmethod
+    def _watch(pr: int, message: str) -> dict:
+        return {
+            "id": f"01JWATCH00000000000000000{pr}",
+            "type": "watch",
+            "status": "active",
+            "message": message,
+            "provider": "github-pr",
+            "watch_config": {"owner": "myorg", "repo": "myrepo", "pr": pr},
+            "poll_interval_minutes": 5,
+            "created_at": "2026-01-01T00:00:00",
+        }
+
+    def test_two_watches_are_distinguishable_by_target(self, capsys):
+        from aya.scheduler.display import _display_items
+
+        _display_items([self._watch(1, "same text"), self._watch(2, "same text")])
+        out = capsys.readouterr().out
+        assert "myorg/myrepo#1" in out
+        assert "myorg/myrepo#2" in out
+
+    def test_an_unbounded_jql_target_is_truncated(self, capsys):
+        """Every other field on the line is truncated; a raw JQL target must be too."""
+        from aya.scheduler.display import _display_items
+
+        jql = "project = PROJ AND status not in (Done, Closed) ORDER BY updated DESC"
+        item = dict(self._watch(1, "jql watch"), provider="jira-query", watch_config={"jql": jql})
+        _display_items([item])
+        out = capsys.readouterr().out
+        assert jql not in out, "the full JQL would push every other field off-screen"
+        assert "project = PROJ" in out, "but enough of it to identify the watch"

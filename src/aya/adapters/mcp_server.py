@@ -37,7 +37,12 @@ logger = logging.getLogger(__name__)
 _TOOLS: list[types.Tool] = [
     types.Tool(
         name="aya_status",
-        description="Return workspace readiness status (systems, alerts, reminders, watches).",
+        description=(
+            "Return workspace readiness status (systems, alerts, reminders, watches). "
+            "Each watch carries target — what it is pointed at, e.g. owner/repo#N — "
+            "which is null when the stored config cannot produce one; fall back to "
+            "message."
+        ),
         input_schema={
             "type": "object",
             "properties": {},

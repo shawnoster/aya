@@ -359,7 +359,10 @@ def schedule_pending(
         # Always fetch all severities for text output so format_pending
         # can summarize queued non-actionable alerts without --all.
         pending = get_pending(min_severity=SEVERITY_HEARTBEAT)
-        console.print(format_pending(pending, show_all=all_severities))
+        # Same reason as schedule status below: format_pending is plain text and
+        # brackets both the severity and the cron meta block, which Rich would
+        # read as style tags and drop.
+        console.print(format_pending(pending, show_all=all_severities), markup=False)
 
 
 @schedule_app.command("status")
@@ -374,9 +377,9 @@ def schedule_status(
     if format_ == OutputFormat.JSON:
         _output_json(status)
     else:
-        # format_scheduler_status is a plain-text formatter, and it labels each
-        # watch with its provider in square brackets — which Rich reads as a
-        # style tag and silently drops, so "[relay-inbox]" printed as nothing.
+        # format_scheduler_status is plain text and brackets each watch's provider
+        # label. Rich reads "[relay-inbox]" as a style tag and drops it, so markup
+        # must stay off on this line.
         console.print(format_scheduler_status(status), markup=False)
 
 

@@ -5009,3 +5009,33 @@ class TestScheduleStatusProviderLabel:
             out = runner.invoke(app, ["schedule", "status", "-f", "text"]).output
         assert "[relay-inbox]" in out, "the provider label must reach the terminal"
         assert "default" in out, "and so must the target"
+
+
+class TestPlainTextFormattersAreNotRenderedAsMarkup:
+    def test_every_format_call_printed_to_a_console_disables_markup(self):
+        """A plain-text formatter reaching console.print with markup on loses text.
+
+        Rich deletes `[anything-lowercase-first]`, and these formatters bracket
+        real content — provider labels, alert severities, cron gating metadata.
+        Three fields shipped invisible before this was noticed, and the failure is
+        silent at every layer: the formatter returns the text, the test asserting
+        on that return value passes, and only the terminal is wrong. Checked
+        structurally because the next such print site will be written by someone
+        who has not read this file.
+        """
+        import re
+        from pathlib import Path
+
+        cli_dir = Path(__file__).resolve().parent.parent / "src" / "aya" / "adapters" / "cli"
+        pattern = re.compile(
+            r"(?:console|err)\.print\(\s*format_\w+\((?:[^()]|\([^()]*\))*\)(?P<rest>[^)]*)\)"
+        )
+        offenders = []
+        for path in sorted(cli_dir.glob("*.py")):
+            for m in pattern.finditer(path.read_text()):
+                if "markup=False" not in m.group(0):
+                    offenders.append(f"{path.name}: {m.group(0)[:80]}")
+        assert not offenders, (
+            "these print a plain-text formatter with Rich markup enabled, so any "
+            f"bracketed content is silently dropped: {offenders}"
+        )

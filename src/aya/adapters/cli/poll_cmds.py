@@ -169,7 +169,6 @@ def inbox(
                 str(exc),
                 {"instance": as_, "available": exc.available},
             )
-            return
 
         context_suffix = f" (as={result.instance}, relays={', '.join(result.relays)})"
         if format_ == OutputFormat.JSON:

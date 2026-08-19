@@ -319,8 +319,9 @@ def _emit_watch_chain_heartbeat(
         return False
 
     stage = stages[index]
+    # Same reason as above: the declared element type is asserted, not checked.
     if not isinstance(stage, dict):
-        return False
+        return False  # type: ignore[unreachable]
 
     stage_name = _chain_stage_name(stage, index)
     stage_count = len(stages)
@@ -361,8 +362,12 @@ def _process_watch_chain(
 
     while item.get("status") == "active" and index < len(stages):
         stage = stages[index]
+        # SchedulerItem is a cast over json.loads, not a validated parse (see
+        # scheduler/storage.py), so "list[dict]" is an assertion about a
+        # hand-editable file rather than a guarantee. mypy calls this
+        # unreachable because it believes the annotation.
         if not isinstance(stage, dict):
-            break
+            break  # type: ignore[unreachable]
         if item.get("awaiting_confirmation"):
             break
 

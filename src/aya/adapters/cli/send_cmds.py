@@ -145,7 +145,6 @@ def send_raw(
         recipient_nostr_pub = nostr_pubkey_for(p, packet.to_did)
     except NoNostrPubkeyError as exc:
         _emit_error(ErrorCode.NO_NOSTR_PUBKEY, str(exc), {"to": packet.to_did})
-        return
     event_id = asyncio.run(client.publish(packet, recipient_nostr_pub, encrypt=packet.encrypted))
 
     if idempotency_key:
@@ -264,10 +263,8 @@ def send_cmd(
                 else ErrorCode.NO_NOSTR_PUBKEY
             )
             _emit_error(code, str(exc))
-            return
         except relay_ops.SendFailedError as exc:
             _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
-            return
 
         if dry_run and result.packet is not None:
             _output_json(json.loads(result.packet.to_json()))
@@ -343,23 +340,18 @@ def ack(
             )
         except relay_ops.PacketNotIngestedError as exc:
             _emit_error(ErrorCode.PACKET_NOT_FOUND, str(exc), {"packet_id": packet_id})
-            return
         except relay_ops.AmbiguousPrefixError as exc:
             _emit_error(ErrorCode.AMBIGUOUS_PREFIX, str(exc), {"packet_id": packet_id})
-            return
         except (relay_ops.AmbiguousAckRecipientError, relay_ops.NoTrustedPeerError) as exc:
             _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc))
-            return
         except InstanceResolutionError as exc:
             _emit_error(
                 ErrorCode.INSTANCE_NOT_FOUND,
                 str(exc),
                 {"instance": as_, "available": exc.available},
             )
-            return
         except relay_ops.SendFailedError as exc:
             _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
-            return
 
         if dry_run and result.packet is not None:
             _output_json(json.loads(result.packet.to_json()))

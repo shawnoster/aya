@@ -179,6 +179,9 @@ strict = true
 # PEP 702: fail when we call something a dependency marked @deprecated, so a
 # removal in a later release surfaces here rather than at runtime.
 enable_error_code = ["deprecated"]
+# Dead code is usually a logic bug rather than a tidiness problem: a branch that
+# can never run means a condition upstream is not what the author expected.
+warn_unreachable = true
 
 
 [tool.semantic_release]

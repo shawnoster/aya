@@ -219,7 +219,6 @@ def _collect_body(
             "or pipe markdown on stdin.",
             exit_code=2,
         )
-        content = ""
     else:
         content = sys.stdin.read()
     if not content.strip():

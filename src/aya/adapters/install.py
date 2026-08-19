@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -151,6 +152,11 @@ class InstallResult:
 @dataclass
 class UninstallResult:
     cron_removed: bool = False
+    cron_unreadable: bool = False
+    """The crontab could not be read, so its state was never observed.
+
+    Recorded where it happens rather than inferred downstream from the error
+    list: a settings.json or plugin failure says nothing about the crontab."""
     hooks_removed: list[str] = field(default_factory=list)
     opencode_plugin_removed: bool = False
     errors: list[str] = field(default_factory=list)
@@ -250,10 +256,77 @@ def _build_cron_lines(aya_path: str, interval_seconds: int) -> list[str]:
     return lines
 
 
-def _get_current_crontab() -> str:
-    """Read current crontab. Returns empty string if none exists.
+# `crontab -l` exits non-zero both when the user simply has no crontab and when
+# the read genuinely failed, and only stderr tells them apart. The wording is
+# implementation-specific, so the benign set is built from observed output
+# rather than guessed. Verified in containers:
+#
+#   cronie (AlmaLinux 9)    no crontab for root
+#   vixie  (Debian bookworm) no crontab for root
+#   busybox (Alpine)        crontab: can't open 'root': No such file or directory
+#   busybox, no spool dir   crontab: can't change directory to
+#                           '/var/spool/cron/crontabs': No such file or directory
+#
+# Real failures on the same implementations read differently and must NOT match:
+#
+#   cronie/vixie denied     You (user) are not allowed to use this program (crontab)
+#   busybox denied          crontab: can't open 'root': Permission denied
+#
+# Hence the busybox arm requires *both* the "can't open/change directory" phrase
+# and "no such file or directory": the phrase alone also covers a permission
+# denial, which must fail closed.
+_NO_CRONTAB_STDERR = re.compile(r"no crontab", re.IGNORECASE)
+_BUSYBOX_NO_CRONTAB = re.compile(
+    r"can'?t (?:open|change directory to).*no such file or directory",
+    re.IGNORECASE | re.DOTALL,
+)
 
-    Raises FileNotFoundError if crontab is not installed (e.g. WSL without cron).
+
+def _stderr_means_no_crontab(stderr: str) -> bool:
+    """True when a non-zero ``crontab -l`` merely means the user has none."""
+    return bool(_NO_CRONTAB_STDERR.search(stderr) or _BUSYBOX_NO_CRONTAB.search(stderr))
+
+
+class CrontabUnreadableError(subprocess.CalledProcessError):
+    """The crontab could not be read, so nothing was written.
+
+    A subclass rather than a bare ``CalledProcessError`` so that "the read
+    failed and no change was made" stays distinguishable from "the write
+    failed", and so a future caller cannot swallow the read failure by
+    catching the generic error on the way past.
+    """
+
+
+def _crontab_error_detail(exc: subprocess.CalledProcessError) -> str:
+    """The reportable reason a crontab command failed.
+
+    ``CalledProcessError.__str__`` gives only the exit status, so interpolating
+    the exception drops the one line that says *why* — "permission denied", an
+    I/O error, a daemon mid-restart. Prefer stderr and fall back to the exit
+    status when the command said nothing.
+    """
+    detail = (exc.stderr or "").strip() or str(exc)
+    if isinstance(exc, CrontabUnreadableError):
+        # Worth stating plainly: a failed *read* changed nothing, which is the
+        # difference between "retry me" and "check what state you are in".
+        return f"{detail} (no changes were made)"
+    return detail
+
+
+def _get_current_crontab() -> str:
+    """Read the current crontab, or raise rather than guess.
+
+    Returns an empty string only when the user genuinely has no crontab. Any
+    other failure raises, because the callers here *write back what they read*:
+    `_add_cron_entry` keeps the lines it does not recognise and re-writes the
+    result, so treating an unreadable crontab as an empty one replaces every
+    entry the user had with aya's own — data loss reported as a clean install.
+
+    Raises:
+        FileNotFoundError: no ``crontab`` command on this machine.
+        subprocess.CalledProcessError: the crontab could not be read. Callers
+            that write must let this propagate; both ``install_scheduler`` and
+            ``uninstall_scheduler`` already turn it into a reported error.
     """
     result = subprocess.run(
         ["crontab", "-l"],  # noqa: S607
@@ -262,7 +335,14 @@ def _get_current_crontab() -> str:
         check=False,
     )
     if result.returncode != 0:
-        return ""
+        if _stderr_means_no_crontab(result.stderr or ""):
+            return ""
+        raise CrontabUnreadableError(
+            result.returncode,
+            ["crontab", "-l"],
+            output=result.stdout,
+            stderr=result.stderr,
+        )
     return result.stdout
 
 
@@ -296,6 +376,8 @@ def aya_cron_installed() -> bool:
     Raises:
         FileNotFoundError: no ``crontab`` command on this machine — common on
             WSL without cron, and not a state ``aya schedule install`` can fix.
+        subprocess.CalledProcessError: the crontab exists but could not be read,
+            so presence is genuinely unknown rather than False.
     """
     return _has_aya_cron(_get_current_crontab())
 
@@ -312,6 +394,11 @@ def _add_cron_entry(
     (returns ``already_present=True``). With ``force``, any existing
     aya entries are removed first and the new lines for the requested
     interval are written.
+
+    Raises:
+        subprocess.CalledProcessError: the crontab could not be read, or the
+            write failed. Must propagate — writing a crontab computed from a
+            read that failed is what destroys unrelated entries.
     """
     current = _get_current_crontab()
     cron_lines = _build_cron_lines(aya_path, interval_seconds)
@@ -340,7 +427,13 @@ def _add_cron_entry(
 
 
 def _remove_cron_entry(dry_run: bool = False) -> bool:
-    """Remove aya cron entries. Returns True if something was removed."""
+    """Remove aya cron entries. Returns True if something was removed.
+
+    Raises:
+        subprocess.CalledProcessError: the crontab could not be read, or the
+            write failed. Must propagate, for the same reason as
+            ``_add_cron_entry``.
+    """
     current = _get_current_crontab()
     if not _has_aya_cron(current):
         return False
@@ -581,7 +674,7 @@ def install_scheduler(
                 "On WSL, you may also need to start the service: sudo service cron start"
             )
         except subprocess.CalledProcessError as exc:
-            result.errors.append(f"crontab failed: {exc}")
+            result.errors.append(f"crontab failed: {_crontab_error_detail(exc)}")
 
     # Claude Code hooks
     try:
@@ -615,7 +708,8 @@ def uninstall_scheduler(
     try:
         result.cron_removed = _remove_cron_entry(dry_run=dry_run)
     except subprocess.CalledProcessError as exc:
-        result.errors.append(f"crontab failed: {exc}")
+        result.cron_unreadable = True
+        result.errors.append(f"crontab failed: {_crontab_error_detail(exc)}")
 
     # Claude Code hooks
     try:

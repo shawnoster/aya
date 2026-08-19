@@ -180,7 +180,10 @@ strict = true
 # removal in a later release surfaces here rather than at runtime.
 enable_error_code = ["deprecated"]
 # Dead code is usually a logic bug rather than a tidiness problem: a branch that
-# can never run means a condition upstream is not what the author expected.
+# can never run means a condition upstream is not what the author expected. mypy
+# errors on any statement it proves cannot execute; where that proof rests on an
+# unvalidated annotation, widen the local to `object` so the guard survives
+# (see CONTRIBUTING.md).
 warn_unreachable = true
 
 

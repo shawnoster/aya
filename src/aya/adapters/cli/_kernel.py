@@ -205,7 +205,8 @@ def _collect_body(
     if seed:
         if not opener:
             _emit_error(ErrorCode.INVALID_ARGUMENT, "--opener required for seed packets.")
-        return relay_ops.PacketBody.seed(opener or "", context_summary=context or "")
+        # `context or ""` is a real fallback; `opener` cannot be empty here.
+        return relay_ops.PacketBody.seed(opener, context_summary=context or "")
     if files:
         return relay_ops.PacketBody.from_files([str(f) for f in files], context=context)
     if message is not None:

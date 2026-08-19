@@ -318,10 +318,13 @@ def _emit_watch_chain_heartbeat(
     if index >= len(stages):
         return False
 
-    stage = stages[index]
-    # Same reason as above: the declared element type is asserted, not checked.
+    # Annotated `object` because SchedulerItem is a cast over json.loads (see
+    # scheduler/storage.py), so "list[dict]" asserts a shape rather than
+    # guaranteeing one. Widening keeps the runtime guard reachable to the type
+    # checker instead of suppressing it.
+    stage: object = stages[index]
     if not isinstance(stage, dict):
-        return False  # type: ignore[unreachable]
+        return False
 
     stage_name = _chain_stage_name(stage, index)
     stage_count = len(stages)
@@ -361,13 +364,9 @@ def _process_watch_chain(
         items_modified = True
 
     while item.get("status") == "active" and index < len(stages):
-        stage = stages[index]
-        # SchedulerItem is a cast over json.loads, not a validated parse (see
-        # scheduler/storage.py), so "list[dict]" is an assertion about a
-        # hand-editable file rather than a guarantee. mypy calls this
-        # unreachable because it believes the annotation.
+        stage: object = stages[index]
         if not isinstance(stage, dict):
-            break  # type: ignore[unreachable]
+            break
         if item.get("awaiting_confirmation"):
             break
 

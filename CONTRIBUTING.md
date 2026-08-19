@@ -108,7 +108,18 @@ The individual steps, and their gateway equivalents:
 | Tests | `uv run pytest` | `uv run pytest` |
 
 `mypy` runs strict with no per-module exclusions, so a new module cannot quietly
-skip typing.
+skip typing. Two error codes are enabled beyond `--strict`: `deprecated` (PEP
+702) and `warn_unreachable`, which errors on any statement mypy proves cannot
+execute. Note that `mypy` covers `src` only — `tests` is linted but not
+type-checked.
+
+`warn_unreachable` is the one flag whose correct response is sometimes *not* to
+change the code. A runtime guard over data mypy only *believes* it knows the
+shape of — a `cast` over `json.loads`, say — is load-bearing even when mypy
+calls it dead. Annotate the local `object` so the guard is genuinely reachable
+rather than suppressing the error; `--strict` implies `warn_unused_ignores`, so
+a `# type: ignore[unreachable]` would also become a fresh error the day someone
+turns the flag off.
 
 ## Commit conventions
 

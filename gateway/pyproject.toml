@@ -26,6 +26,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 strict = true
+# Same rationale as the root config: a branch that cannot run means a
+# condition upstream is not what its author expected.
+warn_unreachable = true
 python_version = "3.12"
 
 [tool.pytest.ini_options]

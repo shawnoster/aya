@@ -13,6 +13,12 @@ lint:
 	uv run ruff check src tests
 	uv run ruff format --check src tests
 
+# Not folded into `lint`: this checks the project's metadata rather than its
+# source, and it is the one check whose failure is fixed by a command rather
+# than an edit.
+lock-check:
+	uv lock --check
+
 fmt format:
 	uv run ruff format src tests
 	uv run ruff check --fix src tests
@@ -23,7 +29,7 @@ type-check:
 test:
 	uv run pytest
 
-check: lint type-check test
+check: lock-check lint type-check test
 
 build:
 	uv build

@@ -798,3 +798,86 @@ class TestDisplayItemsWatchHealth:
 
         _display_items([self._watch()])
         assert "failed" not in capsys.readouterr().out
+
+
+class TestWatchTarget:
+    """A watch stores its target parsed, so every display must reassemble it.
+
+    The regression this guards: `aya status` documented a `target` field that no
+    surface emitted, so every watch line rendered "None" and answering "what is
+    this watch even watching?" meant opening scheduler.json by hand.
+    """
+
+    @staticmethod
+    def _watch(provider: str, config: dict) -> dict:
+        return {
+            "id": "01ABCDEF",
+            "type": "watch",
+            "status": "active",
+            "message": "m",
+            "provider": provider,
+            "watch_config": config,
+        }
+
+    def test_github_pr_round_trips_through_validate_watch(self):
+        """The formatter is the inverse of the parser, so prove it on real input."""
+        from aya.scheduler import validate_watch, watch_target
+
+        spec = "GuildEducationInc/applications-frontend#734"
+        config, _condition, _interval = validate_watch("github-pr", spec)
+        assert watch_target(self._watch("github-pr", dict(config))) == spec
+
+    def test_ci_checks_round_trips(self):
+        from aya.scheduler import validate_watch, watch_target
+
+        spec = "shawnoster/aya#329"
+        config, _c, _i = validate_watch("ci-checks", spec)
+        assert watch_target(self._watch("ci-checks", dict(config))) == spec
+
+    def test_jira_ticket_round_trips_and_keeps_the_upper_casing(self):
+        from aya.scheduler import validate_watch, watch_target
+
+        config, _c, _i = validate_watch("jira-ticket", "csd-532")
+        assert watch_target(self._watch("jira-ticket", dict(config))) == "CSD-532"
+
+    def test_jira_query_returns_the_jql(self):
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("jira-query", {"jql": "project = CSD"})) == "project = CSD"
+
+    def test_relay_inbox_with_no_instance_reads_as_default(self):
+        """An empty config is the documented "primary instance" case, not a gap."""
+        from aya.scheduler import validate_watch, watch_target
+
+        config, _c, _i = validate_watch("relay-inbox", "default")
+        assert config == {}
+        assert watch_target(self._watch("relay-inbox", dict(config))) == "default"
+
+    def test_relay_inbox_names_an_explicit_instance(self):
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("relay-inbox", {"instance": "work"})) == "work"
+
+    def test_a_partial_config_yields_none_rather_than_half_a_target(self):
+        """Better no target than "owner/None#5" — the caller falls back to the message."""
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("github-pr", {"owner": "o", "repo": "r"})) is None
+
+    def test_an_unknown_provider_yields_none(self):
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("not-a-provider", {"whatever": 1})) is None
+
+    def test_a_missing_config_yields_none(self):
+        from aya.scheduler import watch_target
+
+        item = self._watch("github-pr", {})
+        del item["watch_config"]
+        assert watch_target(item) is None
+
+    def test_a_non_dict_config_yields_none(self):
+        """watch_config is a cast over json.loads, so its shape is not guaranteed."""
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("github-pr", "oops")) is None  # type: ignore[arg-type]

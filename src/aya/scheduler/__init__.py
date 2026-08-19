@@ -69,6 +69,7 @@ from .types import (
     _alerts_data,
     _check_schema_version,
     _scheduler_data,
+    watch_target,
 )
 
 # ── time utilities ───────────────────────────────────────────────────────────
@@ -277,6 +278,7 @@ __all__ = [
     "add_watch",
     "claim_alerts_for_delivery",
     "validate_watch",
+    "watch_target",
     "add_recurring",
     "add_seed_alert",
     "list_items",

@@ -235,7 +235,10 @@ Run a full aya readiness check and surface anything actionable.
    - If none: skip this section.
 
    #### Watches (`watches[]`)
-   - List each active watch: `{id[:8]} — {target} ({provider})`.
+   - List each active watch: `{id[:8]} — {target} ({provider})`. `target` names
+     what the watch is pointed at (`owner/repo#N`, a Jira key, an instance
+     label). It is null when the stored config cannot produce one — say
+     "target unknown" rather than printing the word None.
    - If none: skip this section.
 
    #### Due reminders (`due[]`)

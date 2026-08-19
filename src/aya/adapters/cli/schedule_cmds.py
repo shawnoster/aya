@@ -374,7 +374,10 @@ def schedule_status(
     if format_ == OutputFormat.JSON:
         _output_json(status)
     else:
-        console.print(format_scheduler_status(status))
+        # format_scheduler_status is a plain-text formatter, and it labels each
+        # watch with its provider in square brackets — which Rich reads as a
+        # style tag and silently drops, so "[relay-inbox]" printed as nothing.
+        console.print(format_scheduler_status(status), markup=False)
 
 
 @schedule_app.command("alerts")

@@ -4975,3 +4975,37 @@ class TestUninstallUnreadableCrontab:
             out = runner.invoke(app, ["schedule", "uninstall"]).output
         assert "Crontab: not present" in out
         assert "Crontab: unknown" not in out
+
+
+class TestScheduleStatusProviderLabel:
+    def test_the_provider_label_survives_rich(self):
+        """`[relay-inbox]` is a Rich style tag, so console.print used to eat it.
+
+        The formatter is plain text and brackets its provider labels, which meant
+        every watch line on `aya schedule status` rendered without the provider.
+        """
+        status = {
+            "active_watches": [
+                {
+                    "id": "01ABCDEFGH",
+                    "type": "watch",
+                    "status": "active",
+                    "message": "relay inbox",
+                    "provider": "relay-inbox",
+                    "watch_config": {},
+                    "poll_interval_minutes": 2,
+                    "last_checked_at": None,
+                    "consecutive_failures": 0,
+                }
+            ],
+            "pending_reminders": [],
+            "session_crons": [],
+            "unseen_alerts": [],
+            "recent_deliveries": [],
+            "total_items": 1,
+            "total_alerts": 0,
+        }
+        with patch("aya.adapters.cli.schedule_cmds.get_scheduler_status", lambda: status):
+            out = runner.invoke(app, ["schedule", "status", "-f", "text"]).output
+        assert "[relay-inbox]" in out, "the provider label must reach the terminal"
+        assert "default" in out, "and so must the target"

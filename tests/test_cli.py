@@ -1907,6 +1907,7 @@ class TestAck:
         monkeypatch.setattr(relay_ops, "ack", keyless)
         result = runner.invoke(app, ["ack", packet_id, "--profile", str(profile_path)])
 
+        assert result.exit_code == 1, result.output
         payload = json.loads(result.output)
         assert payload["error"]["code"] == "NO_NOSTR_PUBKEY"
         assert payload["error"]["context"]["did"].startswith("did:key:")
@@ -1956,6 +1957,7 @@ class TestAck:
         monkeypatch.setattr(relay_ops, "ack", refuse)
         result = runner.invoke(app, ["ack", packet_id, "--profile", str(profile_path)])
 
+        assert result.exit_code == 1, result.output
         payload = json.loads(result.output)
         assert payload["error"]["code"] == "PEER_NOT_TRUSTED"
         assert payload["error"]["context"]["sender_did"] == stranger_did, (
@@ -5149,9 +5151,11 @@ class TestEmitErrorMarkupSafety:
         with (
             patch.object(kernel, "err", captured),
             patch.object(kernel, "_want_json_errors", lambda: False),
-            pytest.raises(typer.Exit),
+            pytest.raises(typer.Exit) as exc,
         ):
             kernel._emit_error("TEST", message)
+        # The code, not just the type: an error that exits 0 reads as success.
+        assert exc.value.exit_code == 1
         return captured.export_text()
 
     def test_a_closing_tag_does_not_replace_the_exit_with_a_traceback(self):
@@ -5218,6 +5222,9 @@ class TestSendUnknownRecipient:
             ],
         )
 
+        # Exit code first: a payload that says "error" while exiting 0 tells a
+        # script the send succeeded, which is the failure this test exists to catch.
+        assert result.exit_code == 1, result.output
         payload = json.loads(result.output)
         assert payload["error"]["code"] == "UNKNOWN_RECIPIENT"
         assert payload["error"]["context"]["requested"] == "hoem"

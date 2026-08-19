@@ -50,7 +50,9 @@ class NoNostrPubkeyError(ValueError):
     """
 
     def __init__(self, did: str) -> None:
-        super().__init__(f"No Nostr pubkey for recipient {did[:24]}…. Pair first: 'aya pair'.")
+        super().__init__(
+            f"No Nostr pubkey for recipient {did}. Pair first: 'aya pair --peer <label>'."
+        )
         self.did = did
 
 

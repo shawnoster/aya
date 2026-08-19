@@ -351,6 +351,11 @@ def ack(
             _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc), {"available": exc.available})
         except relay_ops.NoTrustedPeerError as exc:
             _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc))
+        # Reached when the sender is trusted but has no delivery key: the resolver
+        # raises rather than substituting a different peer, so this is the surface
+        # that has to render it. send and send-raw already map it.
+        except NoNostrPubkeyError as exc:
+            _emit_error(ErrorCode.NO_NOSTR_PUBKEY, str(exc), {"did": exc.did})
         except InstanceResolutionError as exc:
             _emit_error(
                 ErrorCode.INSTANCE_NOT_FOUND,

@@ -109,7 +109,9 @@ class AmbiguousAckRecipientError(RelayOpError):
 
 class NoTrustedPeerError(RelayOpError):
     def __init__(self) -> None:
-        super().__init__("No trusted peers with a Nostr pubkey found. Pair first: 'aya pair'.")
+        super().__init__(
+            "No trusted peers with a Nostr pubkey found. Pair first: 'aya pair --peer <label>'."
+        )
 
 
 class AckSenderNotTrustedError(RelayOpError):
@@ -121,13 +123,14 @@ class AckSenderNotTrustedError(RelayOpError):
     """
 
     def __init__(self, sender_did: str) -> None:
+        # The DID is printed in full, not truncated: the remedy below asks the
+        # reader to paste it into another command.
         super().__init__(
-            f"Cannot ACK: the packet's sender ({sender_did[:24]}…) is not a trusted "
-            "peer, so there is no key to address a reply to. Pair with them "
-            "('aya pair'), which fills in the Nostr pubkey delivery needs, or trust "
-            "them with one directly: 'aya trust <did> --peer <label> "
-            "--nostr-pubkey <hex>'. Trusting without a pubkey leaves the same "
-            "problem under a different error."
+            f"Cannot ACK: the packet's sender ({sender_did}) is not a trusted peer, "
+            "so there is no key to reach them with. Pair with them "
+            "('aya pair --peer <label>'), which fills in the Nostr pubkey that "
+            "delivery requires, or trust them with one directly: "
+            "'aya trust <did> --peer <label> --nostr-pubkey <hex>'."
         )
         self.sender_did = sender_did
 

@@ -73,7 +73,9 @@ relay_app = typer.Typer(
 
 console = Console()
 
-err = Console(stderr=True)
+# emoji=False: Rich substitutes `:key:` for 🔑, and error messages carry
+# did:key: identifiers the reader is meant to copy into another command.
+err = Console(stderr=True, emoji=False)
 
 _RELAY_FETCH_TIMEOUT_SECONDS = 30
 

@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AckResult",
+    "AckSenderNotTrustedError",
     "AmbiguousAckRecipientError",
     "Decision",
     "PacketBody",
@@ -108,7 +109,30 @@ class AmbiguousAckRecipientError(RelayOpError):
 
 class NoTrustedPeerError(RelayOpError):
     def __init__(self) -> None:
-        super().__init__("No trusted peers with a Nostr pubkey found. Pair first: 'aya pair'.")
+        super().__init__(
+            "No trusted peers with a Nostr pubkey found. Pair first: 'aya pair --peer <label>'."
+        )
+
+
+class AckSenderNotTrustedError(RelayOpError):
+    """The packet's sender is known, but is not a peer this instance can address.
+
+    Distinct from :class:`AmbiguousAckRecipientError`, where the sender is *unknown*
+    and a single trusted peer is a fair guess. Here the sender is recorded, so
+    guessing would send the reply to somebody who did not write the message.
+    """
+
+    def __init__(self, sender_did: str) -> None:
+        # The DID is printed in full, not truncated: the remedy below asks the
+        # reader to paste it into another command.
+        super().__init__(
+            f"Cannot ACK: the packet's sender ({sender_did}) is not a trusted peer, "
+            "so there is no key to reach them with. Pair with them "
+            "('aya pair --peer <label>'), which fills in the Nostr pubkey that "
+            "delivery requires, or trust them with one directly: "
+            "'aya trust <did> --peer <label> --nostr-pubkey <hex>'."
+        )
+        self.sender_did = sender_did
 
 
 # ── inputs ────────────────────────────────────────────────────────────────────
@@ -348,16 +372,19 @@ def _resolve_ack_recipient(profile: Profile, packet_id: str) -> tuple[str, str]:
     entry = next((e for e in profile.ingested_ids if e["id"] == packet_id), None)
     sender_did = entry.get("from_did") if entry else None
     if sender_did:
+        # A recorded sender is answered or refused, never substituted. Falling
+        # through to the single-peer guess would address the reply to somebody who
+        # did not write the message, and say nothing about having done so.
         label = label_for_did(profile, sender_did)
-        if label is not None:
-            try:
-                nostr_pubkey_for(profile, sender_did)
-            except NoNostrPubkeyError:
-                pass
-            else:
-                return sender_did, label
+        if label is None:
+            raise AckSenderNotTrustedError(sender_did)
+        # Propagates NoNostrPubkeyError, which names the fix (re-pair) — the peer
+        # is the right recipient even when we cannot currently address them.
+        nostr_pubkey_for(profile, sender_did)
+        return sender_did, label
 
-    # Pre-#132 entries carry no sender. One trusted peer is unambiguous.
+    # Only reached when the sender is genuinely unknown: pre-#132 entries carry
+    # no from_did. One trusted peer is then an unambiguous guess.
     candidates = [(lbl, tk) for lbl, tk in profile.trusted_keys.items() if tk.nostr_pubkey]
     if not candidates:
         raise NoTrustedPeerError

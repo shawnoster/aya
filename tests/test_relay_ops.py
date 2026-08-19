@@ -331,6 +331,71 @@ class TestInbox:
         assert (await inbox(p, include_ingested=True, client_factory=FakeClient))[0].packets == []
 
 
+class TestAckRecipientResolution:
+    """A recorded sender is answered or refused — never quietly swapped.
+
+    The single-trusted-peer fallback exists for pre-#132 entries that carry no
+    `from_did`. It was also reached when the sender *was* recorded but was not a
+    trusted peer, so the reply — user-supplied text — went to a peer who had not
+    written the message, with nothing said about the substitution.
+    """
+
+    @staticmethod
+    def _ingest(profile, packet_id: str, from_did: str | None):
+        entry = {"id": packet_id, "ingested_at": "2026-01-01T00:00:00+00:00"}
+        if from_did is not None:
+            entry["from_did"] = from_did
+        profile.ingested_ids.append(entry)
+
+    def test_a_known_untrusted_sender_is_refused_not_substituted(self, profile):
+        from aya.entities.identity import Identity
+        from aya.usecases.relay_ops import AckSenderNotTrustedError, _resolve_ack_recipient
+
+        p, _path = profile
+        stranger = Identity.generate("stranger")
+        self._ingest(p, "01PACKETSTRANGER", stranger.did)
+
+        with pytest.raises(AckSenderNotTrustedError) as excinfo:
+            _resolve_ack_recipient(p, "01PACKETSTRANGER")
+        assert excinfo.value.sender_did == stranger.did
+
+    def test_a_known_trusted_sender_is_used(self, profile):
+        from aya.usecases.relay_ops import _resolve_ack_recipient
+
+        p, _path = profile
+        peer = p.trusted_keys["beacon"]
+        self._ingest(p, "01PACKETBEACON", peer.did)
+
+        assert _resolve_ack_recipient(p, "01PACKETBEACON") == (peer.did, "beacon")
+
+    def test_an_unknown_sender_still_falls_back_to_a_single_peer(self, profile):
+        """The case the fallback was written for must keep working."""
+        from aya.usecases.relay_ops import _resolve_ack_recipient
+
+        p, _path = profile
+        for label in [lbl for lbl in p.trusted_keys if lbl != "beacon"]:
+            del p.trusted_keys[label]
+        self._ingest(p, "01PACKETNOSENDER", None)
+
+        to_did, to_label = _resolve_ack_recipient(p, "01PACKETNOSENDER")
+        assert to_label == "beacon"
+        assert to_did == p.trusted_keys["beacon"].did
+
+    def test_a_trusted_sender_without_a_pubkey_names_the_fix(self, profile):
+        """Still the right recipient — we just cannot address them yet."""
+        from aya.entities.identity import TrustedKey
+        from aya.usecases.relay_ops import _resolve_ack_recipient
+        from aya.usecases.resolve import NoNostrPubkeyError
+
+        p, _path = profile
+        keyless_did = "did:key:z6MkKeylessPeerAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        p.trusted_keys["keyless"] = TrustedKey(did=keyless_did, label="keyless", nostr_pubkey="")
+        self._ingest(p, "01PACKETKEYLESS", keyless_did)
+
+        with pytest.raises(NoNostrPubkeyError):
+            _resolve_ack_recipient(p, "01PACKETKEYLESS")
+
+
 class TestAck:
     async def _ingest_one(self, p, path, peer):
         pkt = _incoming(peer, p)

@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.1.7 (2026-08-19)
+
+### Bug Fixes
+
+- **mcp**: Flag failed tool calls so a client can tell them from success
+  ([#337](https://github.com/shawnoster/aya/pull/337),
+  [`bd383ee`](https://github.com/shawnoster/aya/commit/bd383eea8d684ffbae134dc87f2de84ade34251d))
+
+- **mcp**: Pin the success flag too, and build results in one place
+  ([#337](https://github.com/shawnoster/aya/pull/337),
+  [`bd383ee`](https://github.com/shawnoster/aya/commit/bd383eea8d684ffbae134dc87f2de84ade34251d))
+
+
 ## v2.1.6 (2026-08-19)
 
 ### Bug Fixes

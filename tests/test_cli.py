@@ -1879,6 +1879,85 @@ class TestAck:
         save_profile(profile, profile_path)
         return profile_path, pkt.id, home
 
+    def test_ack_keyless_sender_is_a_structured_error_not_a_traceback(
+        self, profile_with_ingested: tuple, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The resolver raises for a trusted-but-keyless sender; ack must render it.
+
+        `send` and `send-raw` map NoNostrPubkeyError; `ack` did not, so this path
+        exited as an unhandled traceback with no payload at all — under an explicit
+        JSON format request.
+        """
+        monkeypatch.setenv("AYA_FORMAT", "json")
+        profile_path, packet_id, _home = profile_with_ingested
+
+        from aya.usecases import relay_ops
+        from aya.usecases.resolve import NoNostrPubkeyError
+
+        async def keyless(*_args, **_kwargs):
+            raise NoNostrPubkeyError("did:key:z6MkKeylessSenderAAAAAAAAAAAAAAAAAAAAAAAA")
+
+        monkeypatch.setattr(relay_ops, "ack", keyless)
+        result = runner.invoke(app, ["ack", packet_id, "--profile", str(profile_path)])
+
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "NO_NOSTR_PUBKEY"
+        assert payload["error"]["context"]["did"].startswith("did:key:")
+
+    def test_error_messages_do_not_mangle_a_did_in_text_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Rich substitutes `:key:` for an emoji, and DIDs contain it.
+
+        These messages hand the reader a DID to paste into another command, so the
+        human surface has to reproduce it byte for byte.
+        """
+        import aya.adapters.cli._kernel as kernel
+
+        # Renders through the real `err` console — swapping only its output file —
+        # so the assertion covers that console's configuration rather than a
+        # replica built with the setting under test.
+        did = "did:key:z6MkExampleIdentifierAAAAAAAAAAAAAAAAAAAA"
+        with (
+            patch.object(kernel, "_want_json_errors", lambda: False),
+            kernel.err.capture() as captured,
+            pytest.raises(typer.Exit),
+        ):
+            kernel._emit_error("TEST", f"sender ({did}) is not trusted")
+
+        rendered = captured.get()
+        assert did in rendered, f"the DID was rewritten on the way to the terminal: {rendered!r}"
+
+    def test_ack_untrusted_sender_error_carries_the_full_did_as_context(
+        self, profile_with_ingested: tuple, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A JSON caller reads the sender DID from context, not out of the prose.
+
+        The message truncates the DID for readability, so context is the only place
+        the full value exists. Resolution itself is covered in test_relay_ops; this
+        pins the CLI's mapping of the error onto the wire.
+        """
+        monkeypatch.setenv("AYA_FORMAT", "json")
+        profile_path, packet_id, _home = profile_with_ingested
+        stranger_did = Identity.generate("stranger").did
+
+        from aya.usecases import relay_ops
+
+        async def refuse(*_args, **_kwargs):
+            raise relay_ops.AckSenderNotTrustedError(stranger_did)
+
+        monkeypatch.setattr(relay_ops, "ack", refuse)
+        result = runner.invoke(app, ["ack", packet_id, "--profile", str(profile_path)])
+
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "PEER_NOT_TRUSTED"
+        assert payload["error"]["context"]["sender_did"] == stranger_did, (
+            "the full DID must be readable as data, not parsed back out of prose"
+        )
+        assert stranger_did in payload["error"]["message"], (
+            "and in the message, since the remedy asks the reader to paste it"
+        )
+
     def test_ack_happy_path(self, profile_with_ingested: tuple) -> None:
         """ack sends an ACK packet and prints confirmation."""
         profile_path, packet_id, _home = profile_with_ingested

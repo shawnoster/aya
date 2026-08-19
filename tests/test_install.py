@@ -706,3 +706,88 @@ class TestNoCrontabWordings:
         from aya.adapters.install import CrontabUnreadableError
 
         assert issubclass(CrontabUnreadableError, subprocess.CalledProcessError)
+
+
+class TestOpencodePluginSource:
+    """The plugin source must actually resolve — it never did.
+
+    `_get_plugin_source` counted `.parent` levels from `__file__` and was one
+    directory too shallow in both branches, so it returned a path that could not
+    exist. `_install_opencode_plugin` then saw a missing file and returned
+    silently, so the plugin was reported "not present" on every machine forever
+    rather than "could not be installed".
+    """
+
+    def test_the_resolved_source_exists(self):
+        """The assertion the old code needed and nobody made."""
+        from aya.adapters.install import _get_plugin_source
+
+        source = _get_plugin_source()
+        assert source.is_file(), f"{source} does not exist"
+        assert source.read_text().strip(), "plugin source is empty"
+
+    def test_the_vendored_copy_matches_the_authored_original(self):
+        """Two tracked copies with no build step between them drift silently.
+
+        `opencode-plugin/aya-reminders.js` is the authored package (it has its own
+        package.json and AGENTS.md tells users to point OpenCode at it); the copy
+        inside `aya/` is what ships in the wheel. Nothing regenerates one from the
+        other, so only a test keeps them honest.
+        """
+        from aya.adapters.install import OPENCODE_PLUGIN_NAME, _get_plugin_source
+
+        repo_root = Path(__file__).resolve().parent.parent
+        authored = repo_root / "opencode-plugin" / OPENCODE_PLUGIN_NAME
+        assert authored.is_file(), f"{authored} is missing"
+        assert authored.read_text() == _get_plugin_source().read_text(), (
+            "the vendored plugin copy has drifted from the authored original — "
+            f"copy {authored} over the packaged copy"
+        )
+
+    def test_the_missing_source_error_names_the_destination_it_wants(self, tmp_path):
+        """The remedy must be runnable as written.
+
+        The authored file is `aya-reminders.js` and the packaged one is
+        `opencode-plugin.js`, so guidance that says to copy the former "there"
+        leaves it under the wrong name and the error unchanged. Naming the full
+        destination makes the rename explicit.
+        """
+        from aya.adapters import install as install_mod
+        from aya.adapters.install import (
+            OPENCODE_PLUGIN_PACKAGED_NAME,
+            _get_plugin_source,
+        )
+
+        empty = tmp_path / "aya-package"
+        empty.mkdir()
+        with (
+            patch.object(install_mod.resources, "files", lambda _pkg: empty),
+            pytest.raises(FileNotFoundError) as excinfo,
+        ):
+            _get_plugin_source()
+
+        message = str(excinfo.value)
+        destination = empty / OPENCODE_PLUGIN_PACKAGED_NAME
+        assert str(destination) in message, (
+            "the error must name the full destination, or the copy it suggests "
+            f"lands under the wrong filename. Got: {message}"
+        )
+
+    def test_a_missing_source_is_an_install_error_not_silence(self, tmp_path):
+        """A broken package must not read as "OpenCode plugin: not present".
+
+        Returns a nonexistent path rather than raising, because that is what the
+        broken resolver actually did — the old code checked `.exists()` and
+        returned quietly, so this is the assertion that distinguishes the two.
+        """
+        from aya.adapters.install import install_scheduler
+
+        absent = tmp_path / "nowhere" / "opencode-plugin.js"
+
+        with patch("aya.adapters.install._get_plugin_source", lambda: absent):
+            result = install_scheduler(dry_run=True, settings_path=Path("/nonexistent/s.json"))
+
+        assert result.opencode_plugin_installed is False
+        assert any("opencode plugin failed" in e for e in result.errors), (
+            f"the failure must reach result.errors, got {result.errors}"
+        )

@@ -208,7 +208,11 @@ def relay_status(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
-    """Relay health check: identity, trusted peers, relays, last poll."""
+    """Stored relay state: identity, trusted peers, relays, last successful poll.
+
+    Reads the profile and contacts nothing, so "last reached" is the newest poll
+    that answered — not a live probe.
+    """
     format_ = resolve_format(format_)
     p = _load_profile_for_relay(profile)
 
@@ -221,7 +225,9 @@ def relay_status(
     # Relay URLs
     relays = list(p.default_relays)
 
-    # Last poll per relay
+    # Last successful poll per relay. A relay with no entry has never been
+    # reached, which is not the same as never configured — hence the per-relay
+    # listing below rather than a single "(never)" for an empty map.
     last_checked: dict[str, str] = {}
     if p.last_checked:
         last_checked = {url: ts for url, ts in p.last_checked.items() if url in relays}
@@ -240,8 +246,12 @@ def relay_status(
     console.print(f"Instance:       {instance_label}")
     console.print("Trusted peers:  " + (", ".join(trusted_peers) if trusted_peers else "(none)"))
     console.print("Relays:         " + (", ".join(relays) if relays else "(none)"))
-    if last_checked:
-        for url, ts in last_checked.items():
-            console.print(f"Last poll:      {url} → {ts}")
+    # Iterates the configured relays, not the map: a relay absent from the map
+    # would otherwise print no line at all and drop out of the health check
+    # entirely — which is the state a relay that keeps refusing is now in.
+    if relays:
+        for url in relays:
+            when = last_checked.get(url, "(never reached)")
+            console.print(f"Last reached:   {url} → {when}")
     else:
-        console.print("Last poll:      (never)")
+        console.print("Last reached:   (no relays configured)")

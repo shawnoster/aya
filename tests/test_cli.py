@@ -3883,7 +3883,7 @@ class TestRelayStatus:
         assert "Trusted peers:" in result.output
         assert "home" in result.output
         assert "wss://relay.damus.io" in result.output
-        assert "Last poll:" in result.output
+        assert "Last reached:" in result.output
         assert "2026-04-16T12:00:00Z" in result.output
 
     def test_status_json_shape(self, profile_with_instance: Path) -> None:
@@ -3941,7 +3941,9 @@ class TestRelayStatus:
         )
         assert result.exit_code == 0, result.output
         assert "(none)" in result.output
-        assert "(never)" in result.output
+        # Named per relay rather than a bare "(never)": a configured relay that has
+        # never been reached must still appear, or it drops out of the health check.
+        assert "wss://relay.damus.io → (never reached)" in result.output
 
 
 # ── _maybe_create_ci_watch gh repo view parsing ─────────────────────────────

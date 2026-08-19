@@ -108,6 +108,10 @@ class RelayClient:
         self.public_key_hex = nostr_public_hex
         # Populated by publish(); one entry per relay, in polling order.
         self.last_publish_report: list[dict[str, str | bool | None]] = []
+        # Relays that refused the most recent fetch. Reported the same way as
+        # last_publish_report because fetch_pending is a generator and cannot
+        # return a value alongside what it yields.
+        self.last_fetch_unreachable: list[str] = []
         # Injectable so retry/backoff behaviour can be exercised without
         # spending the real delay — the retry matrix is otherwise too slow
         # to cover (one end-to-end rejection test cost 30s of wall clock).
@@ -247,6 +251,7 @@ class RelayClient:
         logger.debug("Fetching pending packets from %d relay(s)", len(self._relay_urls))
         seen_ids: set[str] = set()
         unreachable: list[str] = []
+        self.last_fetch_unreachable = unreachable
         for relay_url in self._relay_urls:
             try:
                 async for packet in self._fetch_from_relay(relay_url, since):

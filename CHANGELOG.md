@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v2.1.8 (2026-08-19)
+
+### Bug Fixes
+
+- **relay**: Address PR review — emit the ack recipient errors' data as context
+  ([#339](https://github.com/shawnoster/aya/pull/339),
+  [`390b320`](https://github.com/shawnoster/aya/commit/390b3202f00b550449c68ba7915bd08400e6452a))
+
+- **relay**: Address PR review — name the pubkey requirement in the ack remedy
+  ([#339](https://github.com/shawnoster/aya/pull/339),
+  [`390b320`](https://github.com/shawnoster/aya/commit/390b3202f00b550449c68ba7915bd08400e6452a))
+
+- **relay**: Never ack a peer who did not send the packet
+  ([#339](https://github.com/shawnoster/aya/pull/339),
+  [`390b320`](https://github.com/shawnoster/aya/commit/390b3202f00b550449c68ba7915bd08400e6452a))
+
+- **relay**: Render the errors this change routes users onto
+  ([#339](https://github.com/shawnoster/aya/pull/339),
+  [`390b320`](https://github.com/shawnoster/aya/commit/390b3202f00b550449c68ba7915bd08400e6452a))
+
+
 ## v2.1.7 (2026-08-19)
 
 ### Bug Fixes

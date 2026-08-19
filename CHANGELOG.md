@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.1.9 (2026-08-19)
+
+### Bug Fixes
+
+- **relay**: Record a relay check time only when the poll reached the relay
+  ([#338](https://github.com/shawnoster/aya/pull/338),
+  [`c14f88b`](https://github.com/shawnoster/aya/commit/c14f88badc3f7012ff4ec88f2eba0d932eaf2180))
+
+- **relay**: Stamp only the relays that answered, and never hide one
+  ([#338](https://github.com/shawnoster/aya/pull/338),
+  [`c14f88b`](https://github.com/shawnoster/aya/commit/c14f88badc3f7012ff4ec88f2eba0d932eaf2180))
+
+
 ## v2.1.8 (2026-08-19)
 
 ### Bug Fixes

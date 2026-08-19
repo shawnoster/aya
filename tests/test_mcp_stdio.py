@@ -159,11 +159,16 @@ async def test_unknown_tool_is_an_error_payload_not_a_transport_failure(
     async with mcp_client(isolate_aya_home) as session:
         result = await session.call_tool("aya_does_not_exist", {})
         assert "Unknown tool" in _payload(result)["error"]
+        # Asserted through the transport, because is_error is what the client
+        # actually reads — an error payload with the flag unset is still a
+        # successful call as far as the protocol is concerned.
+        assert result.is_error is True
 
         # The same session still serves a valid call — a bad name must not
         # poison the connection.
         ok = await session.call_tool("aya_status", {})
         assert "systems" in _payload(ok)
+        assert ok.is_error is False
 
 
 @pytest.mark.parametrize("tool_name", ["aya_inbox", "aya_receive"])

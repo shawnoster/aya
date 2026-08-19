@@ -17,6 +17,7 @@ from typing import NoReturn
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from aya.adapters import paths as _paths
 from aya.adapters.profile_store import load_profile, save_profile
@@ -163,7 +164,12 @@ def _emit_error(
         # Same reason as _output_json: this is parsed, not read.
         sys.stderr.write(json.dumps(payload, default=str) + "\n")
     else:
-        err.print(f"[red]{message}[/red]")
+        # escape(): the message carries user input and str(exc) text, and Rich
+        # reads brackets as markup. Unescaped, a message containing a closing tag
+        # raises MarkupError *instead of* the Exit below — a traceback where an
+        # exit code belongs — and a bracketed token is deleted, so the error
+        # echoes back something the user did not type.
+        err.print(f"[red]{escape(message)}[/red]")
     raise typer.Exit(exit_code)
 
 

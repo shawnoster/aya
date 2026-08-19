@@ -170,7 +170,6 @@ def drop(
                 f"Ambiguous prefix '{packet_id}' — matches {len(local_matches)} known packets.",
                 {"packet_id": packet_id, "matches": len(local_matches)},
             )
-            return  # unreachable, _emit_error raises
         else:
             # Fall back to the relay for packets that were never ingested
             # (bad-sig, spam, untrusted senders that aya skipped). Wrap
@@ -203,7 +202,6 @@ def drop(
                         "timeout_seconds": _RELAY_FETCH_TIMEOUT_SECONDS,
                     },
                 )
-                return  # unreachable
             except RelayUnreachableError:
                 _emit_error(
                     ErrorCode.RELAY_UNREACHABLE,
@@ -214,7 +212,6 @@ def drop(
                     ),
                     {"packet_id": packet_id},
                 )
-                return  # unreachable
 
             if not relay_matches:
                 _emit_error(
@@ -223,14 +220,12 @@ def drop(
                     "Use the full packet ID if it's already past relay retention.",
                     {"packet_id": packet_id},
                 )
-                return  # unreachable
             if len(relay_matches) > 1:
                 _emit_error(
                     ErrorCode.AMBIGUOUS_PREFIX,
                     f"Ambiguous prefix '{packet_id}' — matches {len(relay_matches)} relay packets.",
                     {"packet_id": packet_id, "matches": len(relay_matches)},
                 )
-                return  # unreachable
 
             full_id = relay_matches[0]
 

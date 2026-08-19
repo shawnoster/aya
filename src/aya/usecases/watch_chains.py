@@ -318,7 +318,11 @@ def _emit_watch_chain_heartbeat(
     if index >= len(stages):
         return False
 
-    stage = stages[index]
+    # Annotated `object` because SchedulerItem is a cast over json.loads (see
+    # scheduler/storage.py), so "list[dict]" asserts a shape rather than
+    # guaranteeing one. Widening keeps the runtime guard reachable to the type
+    # checker instead of suppressing it.
+    stage: object = stages[index]
     if not isinstance(stage, dict):
         return False
 
@@ -360,7 +364,7 @@ def _process_watch_chain(
         items_modified = True
 
     while item.get("status") == "active" and index < len(stages):
-        stage = stages[index]
+        stage: object = stages[index]
         if not isinstance(stage, dict):
             break
         if item.get("awaiting_confirmation"):

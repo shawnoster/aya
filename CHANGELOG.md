@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v2.1.3 (2026-08-19)
+
+### Bug Fixes
+
+- **install**: Fail closed when the crontab cannot be read
+  ([#328](https://github.com/shawnoster/aya/pull/328),
+  [`b30bc39`](https://github.com/shawnoster/aya/commit/b30bc393be9ac4a6cc930b504382be3f40e0a341))
+
+### Documentation
+
+- **github**: Rework the PR template around evidence and scope
+  ([#327](https://github.com/shawnoster/aya/pull/327),
+  [`32d3aaa`](https://github.com/shawnoster/aya/commit/32d3aaa932f9a082cebe75940d5a43aeb13126c9))
+
+
 ## v2.1.2 (2026-08-18)
 
 ### Bug Fixes

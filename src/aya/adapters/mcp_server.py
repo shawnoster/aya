@@ -1,4 +1,15 @@
-"""MCP server — expose aya capabilities as Claude-native tools via stdio transport."""
+"""MCP server — expose aya capabilities as Claude-native tools via stdio transport.
+
+Every tool answers with a ``types.CallToolResult``: one JSON text block plus
+``is_error`` — the protocol's failure flag, serialised as ``isError``. Build
+results through :func:`_rendered` or :func:`_error` so the flag is never left to
+its default.
+
+Unknown tool names and missing arguments are answered in-band with
+``is_error=True`` rather than as JSON-RPC protocol errors, which is what the spec
+suggests for them. Deliberate: a protocol error surfaces client-side as a raised
+``McpError``, which an agent handles worse than a readable payload it can act on.
+"""
 
 from __future__ import annotations
 
@@ -339,13 +350,36 @@ async def list_tools() -> list[types.Tool]:
 # ---------------------------------------------------------------------------
 
 
-def _text(data: object) -> list[types.TextContent]:
-    """Wrap *data* as a single JSON TextContent block."""
-    return [types.TextContent(type="text", text=json.dumps(data, indent=2, default=str))]
+def _rendered(payload: str) -> types.CallToolResult:
+    """A successful result whose single block is already-serialised JSON.
+
+    The one place a success is constructed, so a field added here (an annotation,
+    ``structured_content``) cannot reach some tools and miss others.
+    """
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=payload)],
+        is_error=False,
+    )
 
 
-def _error(message: str) -> list[types.TextContent]:
-    return [types.TextContent(type="text", text=json.dumps({"error": message}))]
+def _text(data: object) -> types.CallToolResult:
+    """Wrap *data* as a successful single-block JSON result."""
+    return _rendered(json.dumps(data, indent=2, default=str))
+
+
+def _error(message: str) -> types.CallToolResult:
+    """A failed tool call.
+
+    ``is_error`` is what tells a client this was a failure. Set here rather than
+    at the dispatch boundary because handlers construct their own errors too, and
+    the flag cannot be recovered afterwards: a successful payload may legitimately
+    carry an ``error`` key — ``relay_ops`` puts ``error: "persist_failed"`` on a
+    packet whose body would not write — so there is nothing in the content to sniff.
+    """
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=json.dumps({"error": message}))],
+        is_error=True,
+    )
 
 
 def _load_profile() -> Any:
@@ -404,7 +438,7 @@ def _record_send(
     return relays_ok, relays_failed
 
 
-async def _handle_sent(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_sent(arguments: dict[str, Any]) -> types.CallToolResult:
     """Outbound log with per-relay delivery status — counterpart to aya_inbox."""
     profile = _load_profile()
     limit = int(arguments.get("limit", 20) or 20)
@@ -423,15 +457,15 @@ def _label_for_did(profile: Any, did: str) -> str | None:
 # ── individual handlers ──────────────────────────────────────────────────────
 
 
-async def _handle_status() -> list[types.TextContent]:
+async def _handle_status() -> types.CallToolResult:
     from aya.adapters.status_view import _render_json
     from aya.usecases.status import _gather_status
 
     data = _gather_status()
-    return [types.TextContent(type="text", text=_render_json(data))]
+    return _rendered(_render_json(data))
 
 
-async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_inbox(arguments: dict[str, Any]) -> types.CallToolResult:
     profile = _load_profile()
     result, _packets = await relay_ops.inbox(
         profile,
@@ -441,7 +475,7 @@ async def _handle_inbox(arguments: dict[str, Any]) -> list[types.TextContent]:
     return _text(result.envelope())
 
 
-async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_send(arguments: dict[str, Any]) -> types.CallToolResult:
     from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
@@ -469,7 +503,7 @@ async def _handle_send(arguments: dict[str, Any]) -> list[types.TextContent]:
     )
 
 
-async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_receive(arguments: dict[str, Any]) -> types.CallToolResult:
     from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
@@ -483,14 +517,14 @@ async def _handle_receive(arguments: dict[str, Any]) -> list[types.TextContent]:
     return _text(result.envelope())
 
 
-async def _handle_schedule_remind(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_schedule_remind(arguments: dict[str, Any]) -> types.CallToolResult:
     from aya.scheduler import add_reminder
 
     item = add_reminder(arguments["message"], arguments["due"])
     return _text(item)
 
 
-async def _handle_schedule_watch(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_schedule_watch(arguments: dict[str, Any]) -> types.CallToolResult:
     from aya.scheduler import add_watch
 
     item = add_watch(
@@ -502,7 +536,7 @@ async def _handle_schedule_watch(arguments: dict[str, Any]) -> list[types.TextCo
     return _text(item)
 
 
-async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_ack(arguments: dict[str, Any]) -> types.CallToolResult:
     from aya.adapters.paths import PROFILE_PATH
 
     profile = _load_profile()
@@ -530,7 +564,7 @@ async def _handle_ack(arguments: dict[str, Any]) -> list[types.TextContent]:
     )
 
 
-async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_read(arguments: dict[str, Any]) -> types.CallToolResult:
     packet_id = arguments["packet_id"]
     meta = arguments.get("meta", False)
 
@@ -555,7 +589,7 @@ async def _handle_read(arguments: dict[str, Any]) -> list[types.TextContent]:
     return _text(read_view(pkt, meta=meta))
 
 
-async def _handle_config_set(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_config_set(arguments: dict[str, Any]) -> types.CallToolResult:
     from aya.adapters.config import set_config_value
 
     key = arguments["key"]
@@ -564,14 +598,14 @@ async def _handle_config_set(arguments: dict[str, Any]) -> list[types.TextConten
     return _text(config)
 
 
-async def _handle_config_show(_arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_config_show(_arguments: dict[str, Any]) -> types.CallToolResult:
     from aya.adapters.config import load_config
 
     config = load_config()
     return _text(config)
 
 
-async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_packets(arguments: dict[str, Any]) -> types.CallToolResult:
     from aya.adapters.paths import PACKETS_DIR
     from aya.entities.packet import Packet
 
@@ -606,7 +640,7 @@ async def _handle_packets(arguments: dict[str, Any]) -> list[types.TextContent]:
     return _text(summaries)
 
 
-async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextContent]:
+async def _handle_relay_status(arguments: dict[str, Any]) -> types.CallToolResult:
     instance = arguments.get("instance")
     profile = _load_profile()
     local, instance_label = _resolve_instance_labelled(profile, instance)
@@ -632,7 +666,7 @@ async def _handle_relay_status(arguments: dict[str, Any]) -> list[types.TextCont
 
 # ── dispatcher ───────────────────────────────────────────────────────────────
 
-Handler = Callable[[dict[str, Any]], Awaitable[list[types.TextContent]]]
+Handler = Callable[[dict[str, Any]], Awaitable[types.CallToolResult]]
 
 _HANDLERS: dict[str, Handler] = {
     "aya_status": lambda args: _handle_status(),
@@ -660,7 +694,7 @@ def _missing_required(name: str, arguments: dict[str, Any]) -> list[str]:
     return [field for field in required if field not in arguments]
 
 
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
+async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
     """Dispatch one tool call. Transport-independent, so tests can call it directly."""
     handler = _HANDLERS.get(name)
     if handler is None:
@@ -696,8 +730,7 @@ async def _on_list_tools(
 
 
 async def _on_call_tool(_ctx: object, params: types.CallToolRequestParams) -> types.CallToolResult:
-    content = await call_tool(params.name, params.arguments or {})
-    return types.CallToolResult(content=list(content))
+    return await call_tool(params.name, params.arguments or {})
 
 
 # Constructed here rather than at import top: the handlers close over _TOOLS and

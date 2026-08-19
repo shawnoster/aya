@@ -86,7 +86,7 @@ false` means the answer is "couldn't check", not "nothing there".
 ## Tool surface
 
 The `aya_*` MCP tools mirror the CLI when the server is connected. Both
-surfaces now return the **same shape**, so either is fine:
+surfaces return the **same payload shape**, so either is fine:
 
 ```json
 {"packets": [...], "instance": "...", "relays": [...], "relay_reachable": true}
@@ -94,6 +94,12 @@ surfaces now return the **same shape**, so either is fine:
 
 MCP tools take `instance=` and `relay=` where the CLI takes `--as` and
 `--relay`; both are optional on both surfaces.
+
+A failed MCP call also carries `is_error: true`. Trust that over the payload,
+because an `error` key can ride along with a call that *worked*: a packet whose
+body failed to persist comes back as `{"ingested": false, "error":
+"persist_failed"}` inside an otherwise fine envelope. So `is_error` means "this
+call did not happen"; a payload `error` is per-item detail.
 
 Use the CLI when you need something MCP doesn't expose: `--seed --opener`,
 `--files`, `aya drop`, `aya pair`, `aya init`, `aya use`, `aya whoami`,

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from aya.adapters.mcp_server import _TOOLS, call_tool
+from aya.adapters.mcp_server import _HANDLERS, _TOOLS, call_tool
 from aya.adapters.profile_store import save_profile
 
 # ---------------------------------------------------------------------------
@@ -18,8 +18,8 @@ from aya.adapters.profile_store import save_profile
 def test_every_advertised_tool_has_a_handler():
     """A tool in _TOOLS with no _HANDLERS entry fails at runtime, not in CI.
 
-    call_tool returns {"error": "Unknown tool"} as a *successful* TextContent,
-    so the caller sees a normal result and the suite stays green.
+    call_tool answers an unknown name in-band, so nothing raises and the suite
+    would stay green while the tool was unusable.
     """
     from aya.adapters.mcp_server import _HANDLERS
 
@@ -91,8 +91,8 @@ def _mock_gather_status(monkeypatch):
 async def test_status_tool():
     """aya_status returns valid JSON with expected keys."""
     result = await call_tool("aya_status", {})
-    assert len(result) == 1
-    payload = json.loads(result[0].text)
+    assert len(result.content) == 1
+    payload = json.loads(result.content[0].text)
     assert "greeting" in payload
     assert "systems" in payload
 
@@ -121,8 +121,8 @@ async def test_schedule_remind_tool(tmp_path, monkeypatch):
     result = await call_tool(
         "aya_schedule_remind", {"message": "Test reminder", "due": "in 1 hour"}
     )
-    assert len(result) == 1
-    payload = json.loads(result[0].text)
+    assert len(result.content) == 1
+    payload = json.loads(result.content[0].text)
     assert payload["type"] == "reminder"
     assert payload["message"] == "Test reminder"
     assert payload["status"] == "pending"
@@ -168,8 +168,8 @@ async def test_send_tool():
             },
         )
 
-    assert len(result) == 1
-    payload = json.loads(result[0].text)
+    assert len(result.content) == 1
+    payload = json.loads(result.content[0].text)
     assert "packet_id" in payload
     assert payload["event_id"] == "abc123eventid"
     mock_publish.assert_awaited_once()
@@ -211,7 +211,7 @@ async def test_send_tool_with_in_reply_to(tmp_path):
             },
         )
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert "packet_id" in payload
     # Verify the published packet has in_reply_to set
     published_packet = mock_publish.call_args[0][0]
@@ -248,7 +248,7 @@ async def test_inbox_tool(tmp_path):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_inbox", {"instance": "default"})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert isinstance(payload["packets"], list)
     assert payload["instance"] == "default"
     assert payload["relay_reachable"] is True
@@ -292,7 +292,7 @@ async def test_inbox_filters_dropped_packets(tmp_path):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_inbox", {"instance": "default"})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert isinstance(payload["packets"], list)
     returned_ids = [p["id"] for p in payload["packets"]]
     assert kept.id in returned_ids, "non-dropped packet must appear in inbox"
@@ -338,7 +338,7 @@ async def test_inbox_includes_trusted_flag(tmp_path):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_inbox", {"instance": "default"})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     by_id = {p["id"]: p for p in payload["packets"]}
 
     assert by_id[trusted_pkt.id]["trusted"] is True
@@ -387,7 +387,7 @@ async def test_receive_writes_packet_body_to_disk(tmp_path):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_receive", {"instance": "default"})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert len(payload["packets"]) == 1
     assert payload["packets"][0]["id"] == signed.id
     assert payload["packets"][0]["ingested"] is True
@@ -437,7 +437,7 @@ async def test_receive_skips_cursor_when_persist_fails(tmp_path):
         mock_cls.return_value.fetch_pending = mock_fetch
         result = await call_tool("aya_receive", {"instance": "default"})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert len(payload["packets"]) == 1
     assert payload["packets"][0]["ingested"] is False
     assert payload["packets"][0]["error"] == "persist_failed"
@@ -519,7 +519,7 @@ async def test_ack_tool(tmp_path):
         mock_cls.return_value.publish = mock_publish
         result = await call_tool("aya_ack", {"packet_id": pkt.id})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert payload["in_reply_to"] == pkt.id
     assert "packet_id" in payload
     mock_publish.assert_awaited_once()
@@ -543,7 +543,7 @@ async def test_read_tool_content_only(tmp_path):
     with patch("aya.adapters.paths.PACKETS_DIR", packets_dir):
         result = await call_tool("aya_read", {"packet_id": pkt.id[:8]})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     # Same keys as `aya read --format json`: id + body, not a bare content field.
     assert payload == {"id": pkt.id, "body": "Hello world"}
 
@@ -561,7 +561,7 @@ async def test_read_tool_with_meta(tmp_path):
     with patch("aya.adapters.paths.PACKETS_DIR", packets_dir):
         result = await call_tool("aya_read", {"packet_id": pkt.id[:8], "meta": True})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert payload["id"] == pkt.id
     assert payload["intent"] == "test"
     assert payload["body"] == "Hello world"
@@ -590,7 +590,7 @@ async def test_read_tool_shape_matches_the_cli(tmp_path):
     for meta in (False, True):
         with patch("aya.adapters.paths.PACKETS_DIR", packets_dir):
             result = await call_tool("aya_read", {"packet_id": pkt.id[:8], "meta": meta})
-        assert json.loads(result[0].text) == read_view(pkt, meta=meta)
+        assert json.loads(result.content[0].text) == read_view(pkt, meta=meta)
 
 
 async def test_missing_required_argument_names_the_tool_and_the_field():
@@ -602,7 +602,7 @@ async def test_missing_required_argument_names_the_tool_and_the_field():
     every other test sends well-formed arguments.
     """
     result = await call_tool("aya_send", {})
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert "aya_send" in payload["error"]
     assert "required" in payload["error"]
     assert "to" in payload["error"]
@@ -611,7 +611,7 @@ async def test_missing_required_argument_names_the_tool_and_the_field():
 async def test_missing_required_argument_lists_every_omission():
     """Report all missing fields at once, not just the first."""
     result = await call_tool("aya_send", {"to": "home"})
-    error = json.loads(result[0].text)["error"]
+    error = json.loads(result.content[0].text)["error"]
     assert "intent" in error
     assert "content" in error
 
@@ -629,7 +629,7 @@ async def test_optional_arguments_are_not_required():
 async def test_read_tool_short_prefix():
     """aya_read rejects prefixes shorter than 8 chars."""
     result = await call_tool("aya_read", {"packet_id": "abc"})
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert "error" in payload
 
 
@@ -645,7 +645,7 @@ async def test_config_show_tool():
     with patch("aya.adapters.config.load_config", return_value=fake_config):
         result = await call_tool("aya_config_show", {})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert payload["instance_label"] == "home"
 
 
@@ -661,7 +661,7 @@ async def test_config_set_tool():
     with patch("aya.adapters.config.set_config_value", return_value=fake_result):
         result = await call_tool("aya_config_set", {"key": "foo", "value": "bar"})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert payload["foo"] == "bar"
     assert payload["instance_label"] == "home"
 
@@ -689,7 +689,7 @@ async def test_packets_tool(tmp_path):
     with patch("aya.adapters.paths.PACKETS_DIR", packets_dir):
         result = await call_tool("aya_packets", {"limit": 2})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert isinstance(payload, list)
     assert len(payload) == 2
 
@@ -700,7 +700,7 @@ async def test_packets_tool_empty(tmp_path):
     with patch("aya.adapters.paths.PACKETS_DIR", missing_dir):
         result = await call_tool("aya_packets", {})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert payload == []
 
 
@@ -732,7 +732,7 @@ async def test_relay_status_tool():
     with patch("aya.adapters.mcp_server._load_profile", return_value=profile):
         result = await call_tool("aya_relay_status", {"instance": "default"})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert payload["instance"] == "default"
     assert payload["did"] == local.did
     assert payload["relays"] == ["wss://relay.example.com"]
@@ -748,8 +748,8 @@ async def test_relay_status_tool():
 async def test_unknown_tool():
     """Calling an unknown tool returns an error, not a crash."""
     result = await call_tool("nonexistent_tool", {})
-    assert len(result) == 1
-    payload = json.loads(result[0].text)
+    assert len(result.content) == 1
+    payload = json.loads(result.content[0].text)
     assert "error" in payload
 
 
@@ -775,8 +775,8 @@ async def test_schedule_watch_tool(tmp_path, monkeypatch):
             "message": "Watch my PR",
         },
     )
-    assert len(result) == 1
-    payload = json.loads(result[0].text)
+    assert len(result.content) == 1
+    payload = json.loads(result.content[0].text)
     assert payload["type"] == "watch"
     assert payload["message"] == "Watch my PR"
     assert payload["provider"] == "github-pr"
@@ -801,8 +801,8 @@ async def test_schedule_watch_tool_with_condition(tmp_path, monkeypatch):
             "condition": "new_comments",
         },
     )
-    assert len(result) == 1
-    payload = json.loads(result[0].text)
+    assert len(result.content) == 1
+    payload = json.loads(result.content[0].text)
     assert payload["condition"] == "new_comments"
 
 
@@ -826,6 +826,67 @@ async def test_tool_error_handling():
     with patch("aya.adapters.mcp_server._handle_status", side_effect=RuntimeError("boom")):
         result = await call_tool("aya_status", {})
 
-    payload = json.loads(result[0].text)
+    payload = json.loads(result.content[0].text)
     assert "error" in payload
     assert "boom" in payload["error"]
+
+
+# ---------------------------------------------------------------------------
+# is_error
+# ---------------------------------------------------------------------------
+
+
+class TestToolErrorsAreFlagged:
+    """A failed tool call must arrive flagged, not as a successful payload.
+
+    `is_error` is how a client distinguishes failure. Left at its False default,
+    an unknown tool, a missing argument and a handler exception all read as
+    success with some JSON that happens to contain an "error" key — which an agent
+    is free to ignore.
+    """
+
+    async def test_an_unknown_tool_is_flagged(self):
+        result = await call_tool("aya_does_not_exist", {})
+        assert result.is_error is True
+        assert "Unknown tool" in json.loads(result.content[0].text)["error"]
+
+    async def test_a_missing_required_argument_is_flagged(self):
+        result = await call_tool("aya_send", {})
+        assert result.is_error is True
+        assert "missing required argument" in json.loads(result.content[0].text)["error"]
+
+    async def test_a_handler_exception_is_flagged(self, monkeypatch):
+        async def boom(_arguments):
+            raise RuntimeError("handler exploded")
+
+        monkeypatch.setitem(_HANDLERS, "aya_status", boom)
+        result = await call_tool("aya_status", {})
+        assert result.is_error is True
+        assert "handler exploded" in json.loads(result.content[0].text)["error"]
+
+    async def test_a_handler_own_error_is_flagged(self):
+        """Handlers build their own errors, so the flag cannot live only at dispatch."""
+        result = await call_tool("aya_read", {"packet_id": "short"})
+        assert result.is_error is True
+        assert "at least 8 characters" in json.loads(result.content[0].text)["error"]
+
+    async def test_a_successful_call_is_not_flagged(self):
+        """aya_status is the one tool that does not go through _text().
+
+        Kept because it is the odd one out, not because it is representative — see
+        the next test for the path everything else uses.
+        """
+        result = await call_tool("aya_status", {})
+        assert result.is_error is False
+        assert "systems" in json.loads(result.content[0].text)
+
+    async def test_a_successful_call_through_text_is_not_flagged(self):
+        """The success path 12 of 13 tools share.
+
+        Asserting only against aya_status left `_text`'s is_error=False unpinned:
+        flipping it to True reported every other tool's successful call as a
+        failure with the suite still green.
+        """
+        result = await call_tool("aya_config_show", {})
+        assert result.is_error is False
+        assert isinstance(json.loads(result.content[0].text), dict)

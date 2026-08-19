@@ -602,7 +602,7 @@ def packet_summary(profile: Profile, packet: Packet, *, ingested: bool) -> dict[
     ``signature_valid`` False covers forgery and transit corruption alike: it
     says the sender cannot be authenticated, not that an attack occurred.
     """
-    signature_valid = packet.verify_from_did()
+    signature_valid = packet.verify_from_did(log_failure=False)
     return {
         "id": packet.id,
         "intent": packet.intent,

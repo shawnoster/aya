@@ -382,6 +382,49 @@ class TestPacketSummaryTrust:
         assert summary["from_label"] is None
         assert summary["from_did"] == peer.did, "the raw claim stays visible"
 
+    def test_listing_a_forged_packet_does_not_log_a_warning(self, caplog):
+        """Listing must not let a relay flood the log.
+
+        Anyone who can publish can send garbage; a warning per listed packet
+        would turn `aya inbox` into an amplifier. The badge carries the fact.
+        """
+        import logging
+
+        from aya.entities.identity import Identity
+        from aya.usecases.relay_ops import packet_summary
+
+        profile, peer = self._profile_with_trusted_peer()
+        attacker = Identity.generate("attacker")
+        pkt = self._packet(attacker.did, attacker.did).sign(attacker)
+        pkt.from_did = peer.did
+
+        with caplog.at_level(logging.WARNING):
+            summary = packet_summary(profile, pkt, ingested=False)
+
+        assert summary["signature_valid"] is False, "precondition: verification failed"
+        assert caplog.records == [], "a listed bad signature is data, not an operational event"
+
+    def test_receiving_a_forged_packet_still_logs_a_warning(self, caplog):
+        """The quiet path is opt-in — the receive flow keeps its only surface.
+
+        `receive` drops bad-signature packets out of its JSON, so the log line
+        is how the failure reaches a human at all.
+        """
+        import logging
+
+        from aya.entities.identity import Identity
+
+        _profile, peer = self._profile_with_trusted_peer()
+        attacker = Identity.generate("attacker")
+        pkt = self._packet(attacker.did, attacker.did).sign(attacker)
+        pkt.from_did = peer.did
+
+        with caplog.at_level(logging.WARNING):
+            assert pkt.verify_from_did() is False
+
+        assert any("verification failed" in r.message for r in caplog.records)
+        assert all(r.exc_info is None for r in caplog.records), "no traceback on a bad signature"
+
     def test_unsigned_packet_is_not_trusted(self):
         from aya.usecases.relay_ops import packet_summary
 

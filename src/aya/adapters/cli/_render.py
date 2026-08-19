@@ -225,7 +225,7 @@ def _did_display(did: str) -> str:
 
 def _extract_packet_data(pkt: Packet, profile: Profile) -> PacketRow:
     """Extract all packet fields and computed values for reuse across displays."""
-    signature_valid = pkt.verify_from_did()
+    signature_valid = pkt.verify_from_did(log_failure=False)
     return {
         "id": pkt.id,
         "intent": pkt.intent,

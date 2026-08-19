@@ -123,8 +123,11 @@ class AckSenderNotTrustedError(RelayOpError):
     def __init__(self, sender_did: str) -> None:
         super().__init__(
             f"Cannot ACK: the packet's sender ({sender_did[:24]}…) is not a trusted "
-            "peer, so there is no key to address a reply to. Trust them first: "
-            "'aya trust <did> --peer <label>'."
+            "peer, so there is no key to address a reply to. Pair with them "
+            "('aya pair'), which fills in the Nostr pubkey delivery needs, or trust "
+            "them with one directly: 'aya trust <did> --peer <label> "
+            "--nostr-pubkey <hex>'. Trusting without a pubkey leaves the same "
+            "problem under a different error."
         )
         self.sender_did = sender_did
 

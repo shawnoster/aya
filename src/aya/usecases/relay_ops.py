@@ -527,9 +527,14 @@ async def receive(
     local, label, relay_urls, packets, reachable = await _fetch(
         profile, instance, relay, client_factory
     )
+    # Bound unconditionally: the ingest loop below stamps ingested_at with it.
     now_iso = _now_iso()
-    for url in relay_urls:
-        profile.last_checked[url] = now_iso
+    # The check time is only recorded for a poll that actually landed.
+    # `aya relay status` renders this as when the relay was last checked, so
+    # stamping a failed fetch reports a successful check of relays never reached.
+    if reachable:
+        for url in relay_urls:
+            profile.last_checked[url] = now_iso
 
     sorted_packets = triage(
         packets,

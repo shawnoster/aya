@@ -94,6 +94,36 @@ def _incoming(peer: Identity, to: Profile, intent: str = "hello") -> Packet:
     ).sign(peer)
 
 
+class TestLastCheckedOnlyWhenReached:
+    """`last_checked` claims a relay was checked, so a failed poll must not stamp it.
+
+    `aya relay status` and MCP `aya_relay_status` both render this as when each
+    relay was last checked. Stamped unconditionally, a poll that never reached any
+    relay leaves a fresh timestamp behind — the same "looks healthy" failure the
+    scheduler's `last_checked_at` has, and equally invisible.
+    """
+
+    async def test_an_unreachable_relay_is_not_stamped(self, profile):
+        p, path = profile
+        FakeClient.fetch_raises = True
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert result.relay_reachable is False, "precondition: the fetch failed"
+        assert p.last_checked == {}, (
+            f"a poll that reached nothing must leave no check time, got {p.last_checked}"
+        )
+
+    async def test_a_reachable_relay_is_stamped(self, profile):
+        """The negative case, so the guard is not simply never stamping."""
+        p, path = profile
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert result.relay_reachable is True
+        assert sorted(p.last_checked) == ["wss://a", "wss://b"]
+
+
 class TestSend:
     async def test_publishes_and_logs(self, profile):
         p, path = profile

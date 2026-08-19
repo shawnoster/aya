@@ -354,8 +354,10 @@ class TestFormatPending:
             "session_crons": [cron],
             "suppressed_crons": [],
         }
-        result = format_pending(pending)
-        assert "idle-back-off=10m" in result
+        # Asserted through the CLI, not against format_pending's return value:
+        # the meta block is bracketed, so the formatter can contain it while
+        # console.print drops it. Only the rendered path proves it is visible.
+        assert_cli_pending_shows(pending, "idle-back-off=10m")
 
     def test_session_crons_with_only_during(self):
         cron = {
@@ -372,8 +374,7 @@ class TestFormatPending:
             "session_crons": [cron],
             "suppressed_crons": [],
         }
-        result = format_pending(pending)
-        assert "only-during=08:00-18:00" in result
+        assert_cli_pending_shows(pending, "only-during=08:00-18:00")
 
     def test_suppressed_crons_shown(self):
         cron = {
@@ -798,3 +799,161 @@ class TestDisplayItemsWatchHealth:
 
         _display_items([self._watch()])
         assert "failed" not in capsys.readouterr().out
+
+
+class TestWatchTarget:
+    """A watch stores its target parsed, so every display must reassemble it.
+
+    The regression this guards: `aya status` documented a `target` field that no
+    surface emitted, so every watch line rendered "None" and answering "what is
+    this watch even watching?" meant opening scheduler.json by hand.
+    """
+
+    @staticmethod
+    def _watch(provider: str, config: dict) -> dict:
+        return {
+            "id": "01ABCDEF",
+            "type": "watch",
+            "status": "active",
+            "message": "m",
+            "provider": provider,
+            "watch_config": config,
+        }
+
+    def test_github_pr_round_trips_through_validate_watch(self):
+        """The formatter is the inverse of the parser, so prove it on real input."""
+        from aya.scheduler import validate_watch, watch_target
+
+        spec = "myorg/myrepo#734"
+        config, _condition, _interval = validate_watch("github-pr", spec)
+        assert watch_target(self._watch("github-pr", dict(config))) == spec
+
+    def test_ci_checks_round_trips(self):
+        from aya.scheduler import validate_watch, watch_target
+
+        spec = "shawnoster/aya#329"
+        config, _c, _i = validate_watch("ci-checks", spec)
+        assert watch_target(self._watch("ci-checks", dict(config))) == spec
+
+    def test_jira_ticket_round_trips_and_keeps_the_upper_casing(self):
+        from aya.scheduler import validate_watch, watch_target
+
+        config, _c, _i = validate_watch("jira-ticket", "csd-532")
+        assert watch_target(self._watch("jira-ticket", dict(config))) == "CSD-532"
+
+    def test_jira_query_returns_the_jql(self):
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("jira-query", {"jql": "project = CSD"})) == "project = CSD"
+
+    def test_relay_inbox_with_no_instance_reads_as_default(self):
+        """An empty config is the documented "primary instance" case, not a gap."""
+        from aya.scheduler import validate_watch, watch_target
+
+        config, _c, _i = validate_watch("relay-inbox", "default")
+        assert config == {}
+        assert watch_target(self._watch("relay-inbox", dict(config))) == "default"
+
+    def test_relay_inbox_names_an_explicit_instance(self):
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("relay-inbox", {"instance": "work"})) == "work"
+
+    def test_a_partial_config_yields_none_rather_than_half_a_target(self):
+        """Better no target than "owner/None#5" — the caller falls back to the message."""
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("github-pr", {"owner": "o", "repo": "r"})) is None
+
+    def test_an_unknown_provider_yields_none(self):
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("not-a-provider", {"whatever": 1})) is None
+
+    def test_a_missing_config_yields_none(self):
+        from aya.scheduler import watch_target
+
+        item = self._watch("github-pr", {})
+        del item["watch_config"]
+        assert watch_target(item) is None
+
+    def test_a_non_dict_config_yields_none(self):
+        """watch_config is a cast over json.loads, so its shape is not guaranteed."""
+        from aya.scheduler import watch_target
+
+        assert watch_target(self._watch("github-pr", "oops")) is None  # type: ignore[arg-type]
+
+    def test_a_falsy_non_dict_config_is_not_mistaken_for_an_empty_one(self):
+        """`[]`, `""` and `0` are corrupt, not "no config".
+
+        A truthiness default would replace them with `{}` and read them as a
+        valid empty config — which for relay-inbox renders "default", inventing a
+        target out of corrupt data. The truthy case (`"oops"`) is caught by the
+        isinstance check either way, so only these prove the ordering.
+        """
+        from aya.scheduler import watch_target
+
+        for corrupt in ([], "", 0):
+            item = self._watch("relay-inbox", corrupt)  # type: ignore[arg-type]
+            assert watch_target(item) is None, f"{corrupt!r} must not read as an empty config"
+
+
+def assert_cli_pending_shows(pending, *expected: str) -> None:
+    """Assert `aya schedule pending` actually renders each fragment.
+
+    Rich reads `[anything-lowercase-first]` as a style tag and deletes it, so a
+    bracketed field asserts fine against a formatter's return value while being
+    invisible to the user. Go through the CLI so the print site is covered too.
+    """
+    from unittest.mock import patch
+
+    from typer.testing import CliRunner
+
+    from aya.adapters.cli import app
+
+    with patch("aya.adapters.cli.schedule_cmds.get_pending", lambda **kw: pending):
+        out = CliRunner().invoke(app, ["schedule", "pending", "--all", "-f", "text"]).output
+    for fragment in expected:
+        assert fragment in out, f"{fragment!r} never reached the terminal. Got: {out!r}"
+
+
+class TestScheduleListShowsTarget:
+    """`aya schedule list` is where "what am I watching?" actually gets asked.
+
+    It was missed on the first pass because the search was for consumers of
+    `active_watches`, and this path consumes `list_items()` — the discovery
+    mechanism defined the blind spot. Two github-pr watches were otherwise
+    distinguishable only by message text.
+    """
+
+    @staticmethod
+    def _watch(pr: int, message: str) -> dict:
+        return {
+            "id": f"01JWATCH00000000000000000{pr}",
+            "type": "watch",
+            "status": "active",
+            "message": message,
+            "provider": "github-pr",
+            "watch_config": {"owner": "myorg", "repo": "myrepo", "pr": pr},
+            "poll_interval_minutes": 5,
+            "created_at": "2026-01-01T00:00:00",
+        }
+
+    def test_two_watches_are_distinguishable_by_target(self, capsys):
+        from aya.scheduler.display import _display_items
+
+        _display_items([self._watch(1, "same text"), self._watch(2, "same text")])
+        out = capsys.readouterr().out
+        assert "myorg/myrepo#1" in out
+        assert "myorg/myrepo#2" in out
+
+    def test_an_unbounded_jql_target_is_truncated(self, capsys):
+        """Every other field on the line is truncated; a raw JQL target must be too."""
+        from aya.scheduler.display import _display_items
+
+        jql = "project = PROJ AND status not in (Done, Closed) ORDER BY updated DESC"
+        item = dict(self._watch(1, "jql watch"), provider="jira-query", watch_config={"jql": jql})
+        _display_items([item])
+        out = capsys.readouterr().out
+        assert jql not in out, "the full JQL would push every other field off-screen"
+        assert "project = PROJ" in out, "but enough of it to identify the watch"

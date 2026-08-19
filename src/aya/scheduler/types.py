@@ -26,6 +26,7 @@ PROVIDER_GITHUB_PR = "github-pr"
 PROVIDER_JIRA_QUERY = "jira-query"
 PROVIDER_JIRA_TICKET = "jira-ticket"
 PROVIDER_CI_CHECKS = "ci-checks"
+PROVIDER_RELAY_INBOX = "relay-inbox"
 
 # ── schema versions ──────────────────────────────────────────────────────────
 SCHEDULER_SCHEMA_VERSION = 1

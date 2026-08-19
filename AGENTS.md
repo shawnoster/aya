@@ -115,6 +115,8 @@ Filtering happens at hook-time, not at fire-time. Both filters below are evaluat
 | `github-pr` | `owner/repo#123` | `approved_or_merged` (default), `merged`, `new_comments` | Uses `gh` CLI. `new_comments` fires when the total count of general PR comments (issue comments) or inline review comments increases since the last poll — does not fire on the first poll. `--remove-when merged_or_closed` auto-cleans. |
 | `jira-query` | Jira Query Language (JQL) string | `new_results` | Requires `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`, `ATLASSIAN_SERVER_URL` env vars. |
 | `jira-ticket` | `CSD-225` | `status_changed` | Same Jira env vars. |
+| `ci-checks` | `owner/repo#123` | `checks_failed` (default), `checks_complete` | Uses `gh pr checks`, which signals state through its exit code and a `bucket` field rather than a `conclusion`. Polls every minute by default. |
+| `relay-inbox` | instance label, or `default` for the primary | `new_packets` | Polls the relay as that identity, the same as `aya receive` with no `--as`. An empty stored config means the primary instance. Polls every 2 minutes. |
 
 ## Packet Types
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timedelta
 from typing import Any, cast
 
@@ -44,31 +43,19 @@ from .time_utils import (
     parse_work_hours,
 )
 from .types import (
-    CONDITION_APPROVED_OR_MERGED,
-    CONDITION_CHECKS_COMPLETE,
-    CONDITION_CHECKS_FAILED,
-    CONDITION_MERGED,
-    CONDITION_NEW_COMMENTS,
-    CONDITION_NEW_PACKETS,
-    CONDITION_NEW_RESULTS,
-    CONDITION_STATUS_CHANGED,
     SEVERITY_ACTIONABLE,
     SEVERITY_ORDER,
     AlertDetails,
     AlertItem,
     AlertSeverity,
-    CiChecksConfig,
-    GithubPrConfig,
-    JiraQueryConfig,
-    JiraTicketConfig,
     PendingResult,
-    RelayInboxConfig,
     SchedulerItem,
     SchedulerStatus,
     SuppressedCron,
     _alerts_data,
     _scheduler_data,
 )
+from .watch_spec import validate_watch
 
 logger = logging.getLogger(__name__)
 
@@ -97,95 +84,6 @@ def add_reminder(message: str, due_text: str, tags: str = "") -> SchedulerItem:
         items.append(item)
         _atomic_write(_scheduler_file(), _scheduler_data(items))
     return item
-
-
-def validate_watch(
-    provider: str,
-    target: str,
-    condition: str = "",
-    interval: int = 30,
-) -> tuple[
-    GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig | RelayInboxConfig,
-    str,
-    int,
-]:
-    """Validate a watch spec and normalise it to ``(config, condition, interval)``.
-
-    Separate from :func:`add_watch` so a caller can check a spec without
-    creating anything — the CLI needs that for ``--dry-run``. Keeping it here
-    means there is one definition of which providers and conditions are valid;
-    the CLI previously re-implemented a narrower gate that never learned about
-    ``ci-checks`` and rejected specs the MCP surface accepted.
-
-    Raises ``ValueError`` describing the problem.
-    """
-    watch_config: (
-        GithubPrConfig | JiraQueryConfig | JiraTicketConfig | CiChecksConfig | RelayInboxConfig
-    )
-
-    if provider == "github-pr":
-        m = re.match(r"([^/]+)/([^#]+)#(\d+)", target)
-        if not m:
-            raise ValueError("Format: owner/repo#123")
-        watch_config = {"owner": m.group(1), "repo": m.group(2), "pr": int(m.group(3))}
-        condition = condition or CONDITION_APPROVED_OR_MERGED
-        _valid = {CONDITION_APPROVED_OR_MERGED, CONDITION_MERGED, CONDITION_NEW_COMMENTS, ""}
-        if condition not in _valid:
-            raise ValueError(
-                f"Unknown condition '{condition}' for github-pr. "
-                f"Valid: approved_or_merged, merged, new_comments"
-            )
-        if interval == 30:
-            interval = 5
-    elif provider == "ci-checks":
-        m = re.match(r"([^/]+)/([^#]+)#(\d+)", target)
-        if not m:
-            raise ValueError("Format: owner/repo#123")
-        watch_config = {
-            "owner": m.group(1),
-            "repo": m.group(2),
-            "pr": int(m.group(3)),
-        }
-        condition = condition or CONDITION_CHECKS_FAILED
-        _valid_ci = {CONDITION_CHECKS_FAILED, CONDITION_CHECKS_COMPLETE, ""}
-        if condition not in _valid_ci:
-            raise ValueError(
-                f"Unknown condition '{condition}' for ci-checks. "
-                f"Valid: checks_failed, checks_complete"
-            )
-        if interval == 30:
-            interval = 1
-    elif provider == "jira-query":
-        watch_config = {"jql": target}
-        condition = condition or CONDITION_NEW_RESULTS
-        _valid_jq = {CONDITION_NEW_RESULTS, ""}
-        if condition not in _valid_jq:
-            raise ValueError(f"Unknown condition '{condition}' for jira-query. Valid: new_results")
-    elif provider == "jira-ticket":
-        watch_config = {"ticket": target.upper()}
-        condition = condition or CONDITION_STATUS_CHANGED
-        _valid_jt = {CONDITION_STATUS_CHANGED, ""}
-        if condition not in _valid_jt:
-            raise ValueError(
-                f"Unknown condition '{condition}' for jira-ticket. Valid: status_changed"
-            )
-    elif provider == "relay-inbox":
-        # The target names the local identity to poll as; "default" or "-" means
-        # the primary instance, matching `aya receive` with no --as.
-        watch_config = {} if target in {"", "default", "-"} else {"instance": target}
-        condition = condition or CONDITION_NEW_PACKETS
-        _valid_ri = {CONDITION_NEW_PACKETS, ""}
-        if condition not in _valid_ri:
-            raise ValueError(f"Unknown condition '{condition}' for relay-inbox. Valid: new_packets")
-        if interval == 30:
-            # The relay is cheap to poll and the point is conversational
-            # latency, but every poll is a network round trip on a hook that
-            # fires after each tool call, so two minutes rather than one.
-            interval = 2
-    else:
-        raise ValueError(f"Unknown provider: {provider}")
-
-    return watch_config, condition, interval
 
 
 def add_watch(

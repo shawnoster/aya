@@ -70,6 +70,7 @@ from .types import (
     _check_schema_version,
     _scheduler_data,
 )
+from .watch_spec import truncate_target, validate_watch, watch_target
 
 # ── time utilities ───────────────────────────────────────────────────────────
 from .time_utils import (
@@ -169,7 +170,6 @@ from .core import (
     add_seed_alert,
     add_watch,
     claim_alerts_for_delivery,
-    validate_watch,
     check_due,
     dismiss_item,
     expire_old_alerts,
@@ -276,7 +276,9 @@ __all__ = [
     "add_reminder",
     "add_watch",
     "claim_alerts_for_delivery",
+    "truncate_target",
     "validate_watch",
+    "watch_target",
     "add_recurring",
     "add_seed_alert",
     "list_items",

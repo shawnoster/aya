@@ -4975,3 +4975,67 @@ class TestUninstallUnreadableCrontab:
             out = runner.invoke(app, ["schedule", "uninstall"]).output
         assert "Crontab: not present" in out
         assert "Crontab: unknown" not in out
+
+
+class TestScheduleStatusProviderLabel:
+    def test_the_provider_label_survives_rich(self):
+        """`[relay-inbox]` is a Rich style tag, so console.print used to eat it.
+
+        The formatter is plain text and brackets its provider labels, which meant
+        every watch line on `aya schedule status` rendered without the provider.
+        """
+        status = {
+            "active_watches": [
+                {
+                    "id": "01ABCDEFGH",
+                    "type": "watch",
+                    "status": "active",
+                    "message": "relay inbox",
+                    "provider": "relay-inbox",
+                    "watch_config": {},
+                    "poll_interval_minutes": 2,
+                    "last_checked_at": None,
+                    "consecutive_failures": 0,
+                }
+            ],
+            "pending_reminders": [],
+            "session_crons": [],
+            "unseen_alerts": [],
+            "recent_deliveries": [],
+            "total_items": 1,
+            "total_alerts": 0,
+        }
+        with patch("aya.adapters.cli.schedule_cmds.get_scheduler_status", lambda: status):
+            out = runner.invoke(app, ["schedule", "status", "-f", "text"]).output
+        assert "[relay-inbox]" in out, "the provider label must reach the terminal"
+        assert "default" in out, "and so must the target"
+
+
+class TestPlainTextFormattersAreNotRenderedAsMarkup:
+    def test_every_format_call_printed_to_a_console_disables_markup(self):
+        """A plain-text formatter reaching console.print with markup on loses text.
+
+        Rich deletes `[anything-lowercase-first]`, and these formatters bracket
+        real content — provider labels, alert severities, cron gating metadata.
+        Three fields shipped invisible before this was noticed, and the failure is
+        silent at every layer: the formatter returns the text, the test asserting
+        on that return value passes, and only the terminal is wrong. Checked
+        structurally because the next such print site will be written by someone
+        who has not read this file.
+        """
+        import re
+        from pathlib import Path
+
+        cli_dir = Path(__file__).resolve().parent.parent / "src" / "aya" / "adapters" / "cli"
+        pattern = re.compile(
+            r"(?:console|err)\.print\(\s*format_\w+\((?:[^()]|\([^()]*\))*\)(?P<rest>[^)]*)\)"
+        )
+        offenders = []
+        for path in sorted(cli_dir.glob("*.py")):
+            for m in pattern.finditer(path.read_text()):
+                if "markup=False" not in m.group(0):
+                    offenders.append(f"{path.name}: {m.group(0)[:80]}")
+        assert not offenders, (
+            "these print a plain-text formatter with Rich markup enabled, so any "
+            f"bracketed content is silently dropped: {offenders}"
+        )

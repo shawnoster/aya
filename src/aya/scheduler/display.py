@@ -43,6 +43,7 @@ from .types import (
     WatchState,
     _alerts_data,
 )
+from .watch_spec import truncate_target, watch_target
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,11 @@ def format_scheduler_status(status: SchedulerStatus) -> str:
             failures = w.get("consecutive_failures", 0)
             if failures:
                 timing += f", {failures} failed poll(s)"
-            lines.append(f"  \u2022 [{provider}] {w.get('message', '?')[:50]} ({timing})")
+            target = watch_target(w)
+            target_str = f" {truncate_target(target)}" if target else ""
+            lines.append(
+                f"  \u2022 [{provider}]{target_str} {w.get('message', '?')[:50]} ({timing})"
+            )
     else:
         lines.append("\U0001f441  No active watches")
 
@@ -329,9 +334,11 @@ def _display_items(items: list[SchedulerItem]) -> None:
                 # poll would read as healthy here without the failure count.
                 failures = i.get("consecutive_failures", 0)
                 health = f", {failures} failed" if failures else ""
+                target = watch_target(i)
+                target_str = f" {truncate_target(target)}" if target else ""
                 print(  # noqa: T201
-                    f"  {icon} {message}{tags_str} \u2014 {provider} (every {interval}m, "
-                    f"checked {last_checked}{health})"
+                    f"  {icon} {message}{tags_str}{target_str} \u2014 {provider} "
+                    f"(every {interval}m, checked {last_checked}{health})"
                 )
             elif item_type == TYPE_RECURRING:
                 cron = i.get("cron", "?")

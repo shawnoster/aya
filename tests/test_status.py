@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Any, ClassVar
 
 from rich.console import Console
 
@@ -424,3 +425,59 @@ class TestCrontabCheck:
         # A JSON/MCP consumer must be able to see the degradation, which is the
         # surface where this went unnoticed.
         assert payload["systems"]["ok"] is False
+
+
+class TestWatchTargetOnDisplaySurfaces:
+    """Every status surface must name what a watch is watching.
+
+    The `aya` skill documented rendering a watch as `{id} — {target} ({provider})`,
+    but no surface emitted a `target` field, so agents following the skill printed
+    "None" and the only way to learn a watch's subject was reading scheduler.json.
+    """
+
+    WATCH: ClassVar[dict[str, Any]] = {
+        "id": "01ABCDEFGH",
+        "type": "watch",
+        "status": "active",
+        "message": "PR #734 has new comments",
+        "provider": "github-pr",
+        "watch_config": {"owner": "myorg", "repo": "myrepo", "pr": 734},
+        "poll_interval_minutes": 5,
+        "last_checked_at": None,
+        "consecutive_failures": 0,
+    }
+
+    @staticmethod
+    def _data(monkeypatch, watch):
+        monkeypatch.setattr("aya.usecases.status.get_unseen_alerts", list)
+        monkeypatch.setattr("aya.usecases.status.get_due_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_upcoming_reminders", lambda *a, **kw: [])
+        monkeypatch.setattr("aya.usecases.status.get_active_watches", lambda: [watch])
+        return _gather_status()
+
+    def test_json_carries_the_target(self, monkeypatch):
+        """The agent-facing surface — this is the field the skill promises."""
+        payload = json.loads(_render_json(self._data(monkeypatch, dict(self.WATCH))))
+        assert payload["watches"][0]["target"] == "myorg/myrepo#734"
+
+    def test_rich_view_shows_the_target(self, monkeypatch):
+        console = Console(record=True)
+        _render_rich(self._data(monkeypatch, dict(self.WATCH)), console)
+        assert "myrepo#734" in console.export_text()
+
+    def test_compact_view_shows_the_target(self, monkeypatch):
+        out = _render_plain(self._data(monkeypatch, dict(self.WATCH)))
+        assert "myrepo#734" in out
+
+    def test_a_targetless_watch_renders_without_none(self, monkeypatch):
+        """An unformattable target must fall back, not print the string "None"."""
+        broken = dict(self.WATCH, provider="not-a-provider")
+        data = self._data(monkeypatch, broken)
+
+        payload = json.loads(_render_json(data))
+        assert payload["watches"][0]["target"] is None, "json keeps null, which is honest"
+
+        console = Console(record=True)
+        _render_rich(data, console)
+        assert "None" not in console.export_text()
+        assert "None" not in _render_plain(data)

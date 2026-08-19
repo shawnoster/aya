@@ -13,9 +13,11 @@ from datetime import datetime
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.rule import Rule
 
 from aya.adapters.credentials import CredentialsReport
+from aya.scheduler import truncate_target, watch_target
 from aya.usecases.status import (
     ALERT_DISPLAY_LIMIT,
     DUE_DISPLAY_LIMIT,
@@ -79,7 +81,9 @@ def _render_plain(data: dict[str, Any]) -> str:
         lines.append(f"  upcoming: {rd.strftime('%I:%M %p')}  {r['message'][:55]}")
 
     for w in data["active_watches"][:WATCH_DISPLAY_LIMIT]:
-        lines.append(f"  watch: {w['id'][:ID_PREVIEW_LENGTH]}  {w['message'][:50]}")
+        target = watch_target(w)
+        target_str = f"  {truncate_target(target)}" if target else ""
+        lines.append(f"  watch: {w['id'][:ID_PREVIEW_LENGTH]}{target_str}  {w['message'][:50]}")
 
     next_eval_result = _parse_next_eval(data["next_eval"], data["now_local"])
     if next_eval_result:
@@ -144,6 +148,9 @@ def _render_json(data: dict[str, Any]) -> str:
                 "id": w["id"][:ID_PREVIEW_LENGTH],
                 "message": w["message"],
                 "provider": w.get("provider"),
+                # What the watch points at. Reassembled from watch_config,
+                # which is where the parsed target actually lives.
+                "target": watch_target(w),
                 "last_checked_at": w.get("last_checked_at"),
                 "consecutive_failures": w.get("consecutive_failures", 0),
             }
@@ -244,10 +251,15 @@ def _render_rich(data: dict[str, Any], console: Console) -> None:
             last = w.get("last_checked_at")
             last_str = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
             msg = w["message"][:50]
+            target = watch_target(w)
+            # escape(): a target can contain brackets (JQL custom fields look
+            # like cf[10001]), and this string is rendered with markup on.
+            target_str = f"  [cyan]{escape(truncate_target(target))}[/cyan]" if target else ""
             failures = w.get("consecutive_failures", 0)
             health = f"  [yellow]⚠ {failures} failed poll(s)[/yellow]" if failures else ""
             console.print(
-                f"  👁  {w['id'][:ID_PREVIEW_LENGTH]}  {msg}  [dim]checked {last_str}[/dim]{health}"
+                f"  👁  {w['id'][:ID_PREVIEW_LENGTH]}{target_str}  {msg}  "
+                f"[dim]checked {last_str}[/dim]{health}"
             )
         console.print()
 

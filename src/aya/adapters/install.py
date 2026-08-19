@@ -152,6 +152,11 @@ class InstallResult:
 @dataclass
 class UninstallResult:
     cron_removed: bool = False
+    cron_unreadable: bool = False
+    """The crontab could not be read, so its state was never observed.
+
+    Recorded where it happens rather than inferred downstream from the error
+    list: a settings.json or plugin failure says nothing about the crontab."""
     hooks_removed: list[str] = field(default_factory=list)
     opencode_plugin_removed: bool = False
     errors: list[str] = field(default_factory=list)
@@ -703,6 +708,7 @@ def uninstall_scheduler(
     try:
         result.cron_removed = _remove_cron_entry(dry_run=dry_run)
     except subprocess.CalledProcessError as exc:
+        result.cron_unreadable = True
         result.errors.append(f"crontab failed: {_crontab_error_detail(exc)}")
 
     # Claude Code hooks

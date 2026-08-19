@@ -410,6 +410,29 @@ class TestInstallCron:
         assert result.cron_installed is False
 
 
+class TestUninstallCronUnreadable:
+    def test_a_failed_read_is_recorded_as_unobserved(self):
+        """The flag is set where the failure happens, so the CLI need not guess."""
+        from aya.adapters.install import uninstall_scheduler
+
+        def boom(*a, **kw):
+            raise subprocess.CalledProcessError(1, ["crontab", "-l"], stderr="permission denied")
+
+        with patch("aya.adapters.install._remove_cron_entry", boom):
+            result = uninstall_scheduler(dry_run=True, settings_path=Path("/nonexistent/s.json"))
+
+        assert result.cron_unreadable is True
+        assert any(e.startswith("crontab failed:") for e in result.errors)
+
+    def test_a_clean_read_leaves_the_flag_false(self):
+        from aya.adapters.install import uninstall_scheduler
+
+        with patch("aya.adapters.install._remove_cron_entry", lambda **kw: False):
+            result = uninstall_scheduler(dry_run=True, settings_path=Path("/nonexistent/s.json"))
+
+        assert result.cron_unreadable is False
+
+
 class TestUninstallCron:
     def test_removes_line(self) -> None:
         existing = (

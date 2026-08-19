@@ -4845,6 +4845,7 @@ class TestUninstallUnreadableCrontab:
 
         result = UninstallResult(
             cron_removed=False,
+            cron_unreadable=True,
             hooks_removed=["SessionStart"],
             errors=["crontab failed: permission denied (no changes were made)"],
         )
@@ -4855,3 +4856,21 @@ class TestUninstallUnreadableCrontab:
         # or fail for the wrong reason.
         assert "Crontab: not present" not in out
         assert "Crontab: unknown" in out
+
+    def test_an_unrelated_error_does_not_make_the_crontab_unknown(self):
+        """A hooks failure says nothing about the crontab.
+
+        `_remove_cron_entry` returned cleanly here — the entry was observed to
+        be absent — so reporting "unknown" would discard a fact we hold.
+        """
+        from aya.adapters.install import UninstallResult
+
+        result = UninstallResult(
+            cron_removed=False,
+            cron_unreadable=False,
+            errors=["settings.json failed: Expecting value: line 1 column 1"],
+        )
+        with patch("aya.adapters.cli.schedule_cmds.uninstall_scheduler", lambda **kw: result):
+            out = runner.invoke(app, ["schedule", "uninstall"]).output
+        assert "Crontab: not present" in out
+        assert "Crontab: unknown" not in out

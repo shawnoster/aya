@@ -20,7 +20,11 @@ dependencies = [
 # Only for the release job. semantic-release's build_command runs inside the
 # action's Docker image, which has pip but not uv, so uv has to be installed
 # there — and pinning it here rather than curling a script keeps it visible to
-# dependency bots. See PSR's uv integration guide.
+# dependency bots. build_command reads this pin rather than repeating it.
+#
+# Never install this extra with the project attached (`pip install '.[build]'`):
+# that builds aya's own dependencies, and the action's image runs Python 3.14,
+# where coincurve's cffi build fails (same reason as the pin on line 15).
 build = ["uv~=0.12.5"]
 
 [project.scripts]
@@ -208,10 +212,9 @@ version_toml = ["pyproject.toml:project.version"]
 # $PACKAGE_NAME is provided by semantic-release from project.name.
 build_command = """
     set -e
-    python -m pip install --quiet -e '.[build]'
+    python -m pip install --quiet "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["build"][0])')"
     uv lock --upgrade-package "$PACKAGE_NAME"
     git add uv.lock
-    uv build
 """
 # "angular" was renamed to "conventional" and is removed in v11.
 commit_parser = "conventional"

@@ -2,6 +2,61 @@
 
 <!-- version list -->
 
+## v2.1.6 (2026-08-19)
+
+### Bug Fixes
+
+- **cli**: Escape error messages so Rich cannot rewrite or crash them
+  ([#334](https://github.com/shawnoster/aya/pull/334),
+  [`a47815d`](https://github.com/shawnoster/aya/commit/a47815db07ff24b5d7645010c275bcd0d40c9e7a))
+
+- **install**: Make the missing-plugin remedy runnable as written
+  ([#333](https://github.com/shawnoster/aya/pull/333),
+  [`2cf1f75`](https://github.com/shawnoster/aya/commit/2cf1f757ce94c62dda6b4b1289ffcf558f508967))
+
+- **install**: Resolve the OpenCode plugin source so it can actually install
+  ([#333](https://github.com/shawnoster/aya/pull/333),
+  [`2cf1f75`](https://github.com/shawnoster/aya/commit/2cf1f757ce94c62dda6b4b1289ffcf558f508967))
+
+- **release**: Read pyproject in binary mode so the locale cannot break the release
+  ([#336](https://github.com/shawnoster/aya/pull/336),
+  [`ed3f81b`](https://github.com/shawnoster/aya/commit/ed3f81b1170ade64e9e110d8e13ca34f5eebbd0f))
+
+- **release**: Stop the build command installing aya itself
+  ([#336](https://github.com/shawnoster/aya/pull/336),
+  [`ed3f81b`](https://github.com/shawnoster/aya/commit/ed3f81b1170ade64e9e110d8e13ca34f5eebbd0f))
+
+### Chores
+
+- **aya**: Enable warn_unreachable and delete the dead returns it found
+  ([#330](https://github.com/shawnoster/aya/pull/330),
+  [`8b16993`](https://github.com/shawnoster/aya/commit/8b16993ca8ac8836015514728db43e7cb1d8d930))
+
+- **aya**: Express the unvalidated-shape guards in the type, not an ignore
+  ([#330](https://github.com/shawnoster/aya/pull/330),
+  [`8b16993`](https://github.com/shawnoster/aya/commit/8b16993ca8ac8836015514728db43e7cb1d8d930))
+
+- **aya**: Re-lock after the 2.1.5 bump ([#330](https://github.com/shawnoster/aya/pull/330),
+  [`8b16993`](https://github.com/shawnoster/aya/commit/8b16993ca8ac8836015514728db43e7cb1d8d930))
+
+- **aya**: Widen watch_target's config local so its guard survives the flag
+  ([#330](https://github.com/shawnoster/aya/pull/330),
+  [`8b16993`](https://github.com/shawnoster/aya/commit/8b16993ca8ac8836015514728db43e7cb1d8d930))
+
+### Continuous Integration
+
+- Keep uv.lock in sync across releases, and fail loudly when it is not
+  ([#332](https://github.com/shawnoster/aya/pull/332),
+  [`6bb473e`](https://github.com/shawnoster/aya/commit/6bb473eded6770d89a342af5dd2605b549c66da2))
+
+- Run the lock check before uv sync, and freeze the sync
+  ([#332](https://github.com/shawnoster/aya/pull/332),
+  [`6bb473e`](https://github.com/shawnoster/aya/commit/6bb473eded6770d89a342af5dd2605b549c66da2))
+
+- **gateway**: Check the lockfile there too ([#332](https://github.com/shawnoster/aya/pull/332),
+  [`6bb473e`](https://github.com/shawnoster/aya/commit/6bb473eded6770d89a342af5dd2605b549c66da2))
+
+
 ## v2.1.5 (2026-08-19)
 
 ### Bug Fixes

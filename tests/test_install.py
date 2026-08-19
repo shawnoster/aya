@@ -706,3 +706,59 @@ class TestNoCrontabWordings:
         from aya.adapters.install import CrontabUnreadableError
 
         assert issubclass(CrontabUnreadableError, subprocess.CalledProcessError)
+
+
+class TestOpencodePluginSource:
+    """The plugin source must actually resolve — it never did.
+
+    `_get_plugin_source` counted `.parent` levels from `__file__` and was one
+    directory too shallow in both branches, so it returned a path that could not
+    exist. `_install_opencode_plugin` then saw a missing file and returned
+    silently, so the plugin was reported "not present" on every machine forever
+    rather than "could not be installed".
+    """
+
+    def test_the_resolved_source_exists(self):
+        """The assertion the old code needed and nobody made."""
+        from aya.adapters.install import _get_plugin_source
+
+        source = _get_plugin_source()
+        assert source.is_file(), f"{source} does not exist"
+        assert source.read_text().strip(), "plugin source is empty"
+
+    def test_the_vendored_copy_matches_the_authored_original(self):
+        """Two tracked copies with no build step between them drift silently.
+
+        `opencode-plugin/aya-reminders.js` is the authored package (it has its own
+        package.json and AGENTS.md tells users to point OpenCode at it); the copy
+        inside `aya/` is what ships in the wheel. Nothing regenerates one from the
+        other, so only a test keeps them honest.
+        """
+        from aya.adapters.install import OPENCODE_PLUGIN_NAME, _get_plugin_source
+
+        repo_root = Path(__file__).resolve().parent.parent
+        authored = repo_root / "opencode-plugin" / OPENCODE_PLUGIN_NAME
+        assert authored.is_file(), f"{authored} is missing"
+        assert authored.read_text() == _get_plugin_source().read_text(), (
+            "the vendored plugin copy has drifted from the authored original — "
+            f"copy {authored} over the packaged copy"
+        )
+
+    def test_a_missing_source_is_an_install_error_not_silence(self, tmp_path):
+        """A broken package must not read as "OpenCode plugin: not present".
+
+        Returns a nonexistent path rather than raising, because that is what the
+        broken resolver actually did — the old code checked `.exists()` and
+        returned quietly, so this is the assertion that distinguishes the two.
+        """
+        from aya.adapters.install import install_scheduler
+
+        absent = tmp_path / "nowhere" / "opencode-plugin.js"
+
+        with patch("aya.adapters.install._get_plugin_source", lambda: absent):
+            result = install_scheduler(dry_run=True, settings_path=Path("/nonexistent/s.json"))
+
+        assert result.opencode_plugin_installed is False
+        assert any("opencode plugin failed" in e for e in result.errors), (
+            f"the failure must reach result.errors, got {result.errors}"
+        )

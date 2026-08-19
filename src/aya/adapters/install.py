@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -31,23 +32,33 @@ CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 # OpenCode global plugin directory
 OPENCODE_PLUGIN_DIR = Path.home() / ".config" / "opencode" / "plugins"
 OPENCODE_PLUGIN_NAME = "aya-reminders.js"
+# Filename of the copy vendored into the package, which is what ships in the
+# wheel. The authored original lives in opencode-plugin/ with its package.json.
+OPENCODE_PLUGIN_PACKAGED_NAME = "opencode-plugin.js"
 # Resolved at call-time so tests can patch Path.home()
 _PLUGIN_SOURCE: Path | None = None
 
 
 def _get_plugin_source() -> Path:
-    """Return the path to the bundled opencode plugin JS file.
+    """Return the path to the bundled OpenCode plugin JS file.
 
-    Checks two locations in order:
-    1. Alongside this file (installed package: src/aya/opencode-plugin.js)
-    2. The opencode-plugin/ directory at the repo root (development checkout)
+    Located through the package rather than by counting ``.parent`` levels from
+    ``__file__``. The file is vendored inside the ``aya`` package, so one lookup
+    covers an installed wheel, an editable install and a source checkout alike —
+    and it cannot drift when a module moves between directories.
+
+    Raises FileNotFoundError if the file is missing, which means the package was
+    built without it. The caller records that as an install error: an OpenCode
+    user whose plugin never appears deserves better than silence.
     """
-    # Installed package path
-    alongside = Path(__file__).parent / "opencode-plugin.js"
-    if alongside.exists():
-        return alongside
-    # Development checkout path
-    return Path(__file__).parent.parent.parent / "opencode-plugin" / OPENCODE_PLUGIN_NAME
+    packaged = Path(str(resources.files("aya"))) / OPENCODE_PLUGIN_PACKAGED_NAME
+    if packaged.is_file():
+        return packaged
+    raise FileNotFoundError(
+        f"{OPENCODE_PLUGIN_PACKAGED_NAME} is missing from the installed aya package "
+        f"(looked in {packaged.parent}). Reinstall aya, or copy "
+        f"opencode-plugin/{OPENCODE_PLUGIN_NAME} there if running from a checkout."
+    )
 
 
 CANONICAL_HOOKS: dict[str, list[dict[str, Any]]] = {
@@ -582,12 +593,14 @@ def _install_opencode_plugin(
 
     Returns (installed, already_present).
 
-    Skips silently if the plugin source file cannot be found (e.g. running
-    from a checkout without the opencode-plugin/ directory present).
+    A missing source file raises rather than skipping: the file ships inside the
+    package, so its absence is a broken install, not a layout the user chose.
+    Validated before the dry-run branch, because a dry run reads no file and would
+    otherwise report "would install" for a source that does not exist.
     """
     source = _get_plugin_source()
-    if not source.exists():
-        return False, False
+    if not source.is_file():
+        raise FileNotFoundError(f"OpenCode plugin source is missing: {source}")
 
     dest_dir = plugin_dir or OPENCODE_PLUGIN_DIR
     dest = dest_dir / OPENCODE_PLUGIN_NAME

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +14,7 @@ from aya.adapters import clock
 from aya.adapters import paths as _paths
 from aya.adapters.config import load_config
 from aya.adapters.credentials import check_credentials
-from aya.adapters.install import aya_cron_installed
+from aya.adapters.install import _crontab_error_detail, aya_cron_installed
 from aya.scheduler import (
     LOCAL_TZ,
     AlertItem,
@@ -149,10 +150,27 @@ def _check_crontab() -> CheckResult:
     set, a missing entry is a regression and fails the check; without it, the
     tick was never asked for and its absence is reported as fact rather than
     treated as broken.
+
+    A crontab that cannot be read at all is a third state, failing separately:
+    presence is genuinely unknown, so reporting it as MISSING would be a false
+    alarm and reporting it as installed would be worse.
     """
     wanted = load_config().get("tick_interval")
     try:
         present = aya_cron_installed()
+    except subprocess.CalledProcessError as e:
+        # Distinct from a missing entry: presence is unknown, so claiming
+        # "MISSING" would be a false alarm and claiming installed would be worse.
+        #
+        # Gated on `wanted` for the same reason the MISSING branch below is. A
+        # machine that never asked for the tick should not report unhealthy
+        # because the ambient system crontab happens to be unreadable — a
+        # hardened image or a policy-restricted host is not an aya fault.
+        detail = (
+            "could not read the crontab, so the tick's state is unknown: "
+            f"{_crontab_error_detail(e)}"
+        )
+        return CheckResult("crontab", not wanted, detail)
     except FileNotFoundError:
         # No crontab binary at all — common on WSL without cron. Not a fault in
         # aya, and not something `aya schedule install` can fix.

@@ -345,7 +345,11 @@ When the receipt is missing or non-editable:
 
 If the final command returns `true`, installation succeeded. If it returns `false` or errors, the installation failed — report the error to the user.
 
-`systems.ok` covers the profile and the scheduler store. A box with nothing
+`systems.ok` covers the profile, the scheduler store, and the out-of-session
+crontab tick. A false `systems.ok` is not always an installation failure: if the
+crontab cannot be *read* (a permission or I/O error), the check reports the tick's
+state as unknown rather than missing — surface that wording rather than declaring
+the install broken. A box with nothing
 scheduled yet is fine: `scheduler.json` is written by the first `aya schedule`
 command, and its absence is reported as "not created yet" rather than counted
 as a failure.

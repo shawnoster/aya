@@ -14,6 +14,7 @@ sitting below them.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from .types import (
     CONDITION_APPROVED_OR_MERGED,
@@ -142,13 +143,19 @@ def watch_target(item: SchedulerItem) -> str | None:
     half a target.
     """
     provider = item.get("provider")
-    config = item.get("watch_config")
-    # Checked before the `or {}` default: a falsy non-dict — [], "", 0 — would
-    # otherwise be replaced by an empty dict and read as a valid empty config,
-    # which for relay-inbox renders "default" off corrupt data.
-    if config is not None and not isinstance(config, dict):
+    # Annotated `object` because SchedulerItem is a cast over json.loads, so the
+    # declared type asserts a shape rather than guaranteeing one — see
+    # CONTRIBUTING.md. Branching rather than defaulting with `or {}`, which would
+    # replace a falsy non-dict ([], "", 0) with an empty dict and read corrupt
+    # data as a valid empty config; for relay-inbox that renders "default".
+    raw_config: object = item.get("watch_config")
+    config: dict[str, Any]
+    if raw_config is None:
+        config = {}
+    elif isinstance(raw_config, dict):
+        config = raw_config
+    else:
         return None
-    config = config or {}
 
     if provider in {PROVIDER_GITHUB_PR, PROVIDER_CI_CHECKS}:
         owner, repo, pr = config.get("owner"), config.get("repo"), config.get("pr")

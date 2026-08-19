@@ -9,7 +9,9 @@ visible as a failed or silently-incomplete release.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -20,7 +22,10 @@ PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 @pytest.fixture(scope="module")
 def config() -> dict:
-    return tomllib.loads(PYPROJECT.read_text())
+    # Binary mode: tomllib decodes UTF-8 itself, so this does not depend on the
+    # locale the tests happen to run under.
+    with PYPROJECT.open("rb") as handle:
+        return tomllib.load(handle)
 
 
 class TestBuildCommand:
@@ -40,6 +45,37 @@ class TestBuildCommand:
             "build_command installs the local project, which fails on the action's "
             f"Python 3.14 (coincurve/cffi): {project_targets}"
         )
+
+    def test_the_pin_lookup_survives_a_locale_without_utf8(self, config):
+        """Run the snippet the release actually runs, under an ASCII locale.
+
+        `pyproject.toml` is UTF-8 by specification and this one contains 48
+        non-ASCII bytes (the em dash in `project.description`, for one). A text-mode
+        read uses the locale encoding, so in a minimal image with no LANG the
+        release dies on `UnicodeDecodeError` before it installs anything — a
+        failure that cannot reproduce on a developer machine.
+        """
+        command = config["tool"]["semantic_release"]["build_command"]
+        snippet = re.search(r"""\$\(python -c '(.+?)'\)""", command)
+        assert snippet, f"could not find the pin-lookup snippet in: {command}"
+
+        result = subprocess.run(
+            ["python", "-c", snippet.group(1)],
+            cwd=PYPROJECT.parent,
+            capture_output=True,
+            text=True,
+            env={
+                "PATH": os.environ["PATH"],
+                "LC_ALL": "C",
+                "PYTHONCOERCECLOCALE": "0",
+                "PYTHONUTF8": "0",
+            },
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"the pin lookup fails without a UTF-8 locale: {result.stderr.strip()}"
+        )
+        assert result.stdout.strip() == config["project"]["optional-dependencies"]["build"][0]
 
     def test_it_relocks_and_stages_the_lockfile(self, config):
         """The reason build_command exists at all."""

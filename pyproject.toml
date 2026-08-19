@@ -212,7 +212,7 @@ version_toml = ["pyproject.toml:project.version"]
 # $PACKAGE_NAME is provided by semantic-release from project.name.
 build_command = """
     set -e
-    python -m pip install --quiet "$(python -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["optional-dependencies"]["build"][0])')"
+    python -m pip install --quiet "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["build"][0])')"
     uv lock --upgrade-package "$PACKAGE_NAME"
     git add uv.lock
 """

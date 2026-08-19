@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v2.1.4 (2026-08-19)
+
+### Bug Fixes
+
+- **relay**: Gate the trusted badge on a verified signature
+  ([#329](https://github.com/shawnoster/aya/pull/329),
+  [`44f4c18`](https://github.com/shawnoster/aya/commit/44f4c18ca0f5c7bf2d6304e55388f79c72b29d7b))
+
+- **relay**: Verify quietly when listing packets
+  ([#329](https://github.com/shawnoster/aya/pull/329),
+  [`44f4c18`](https://github.com/shawnoster/aya/commit/44f4c18ca0f5c7bf2d6304e55388f79c72b29d7b))
+
+- **relay**: Withhold the peer label from an unauthenticated sender
+  ([#329](https://github.com/shawnoster/aya/pull/329),
+  [`44f4c18`](https://github.com/shawnoster/aya/commit/44f4c18ca0f5c7bf2d6304e55388f79c72b29d7b))
+
+
 ## v2.1.3 (2026-08-19)
 
 ### Bug Fixes

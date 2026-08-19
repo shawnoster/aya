@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -5039,3 +5040,53 @@ class TestPlainTextFormattersAreNotRenderedAsMarkup:
             "these print a plain-text formatter with Rich markup enabled, so any "
             f"bracketed content is silently dropped: {offenders}"
         )
+
+
+class TestEmitErrorMarkupSafety:
+    """Error messages carry user input, and Rich reads brackets as markup.
+
+    Two distinct failures, both reachable via any command that echoes an argument
+    back: a closing tag raised MarkupError *instead of* the typer.Exit, replacing a
+    clean exit code with a traceback; and a bracketed token was deleted, so the
+    error reported an ID the user never typed.
+    """
+
+    @staticmethod
+    def _emit(message: str) -> str:
+        from rich.console import Console
+
+        import aya.adapters.cli._kernel as kernel
+
+        captured = Console(stderr=True, record=True, width=200)
+        with (
+            patch.object(kernel, "err", captured),
+            patch.object(kernel, "_want_json_errors", lambda: False),
+            pytest.raises(typer.Exit),
+        ):
+            kernel._emit_error("TEST", message)
+        return captured.export_text()
+
+    def test_a_closing_tag_does_not_replace_the_exit_with_a_traceback(self):
+        out = self._emit("Packet '[/bold]xyz' is not ingested.")
+        assert "[/bold]xyz" in out
+
+    def test_a_bracketed_token_is_not_deleted_from_the_message(self):
+        """The error must echo what the user typed, not a silently edited version."""
+        out = self._emit("Ambiguous prefix '[dim]abc' matches 2 packets.")
+        assert "[dim]abc" in out, "the bracketed token was swallowed by Rich"
+
+    def test_json_mode_is_unaffected(self):
+        """JSON errors are parsed, not rendered — escaping there would corrupt them."""
+        import json as json_mod
+
+        import aya.adapters.cli._kernel as kernel
+
+        buf = io.StringIO()
+        with (
+            patch.object(kernel, "_want_json_errors", lambda: True),
+            patch.object(kernel.sys, "stderr", buf),
+            pytest.raises(typer.Exit),
+        ):
+            kernel._emit_error("TEST", "Ambiguous prefix '[dim]abc' matches 2.")
+        payload = json_mod.loads(buf.getvalue())
+        assert payload["error"]["message"] == "Ambiguous prefix '[dim]abc' matches 2."

@@ -1879,6 +1879,36 @@ class TestAck:
         save_profile(profile, profile_path)
         return profile_path, pkt.id, home
 
+    def test_ack_untrusted_sender_error_carries_the_full_did_as_context(
+        self, profile_with_ingested: tuple, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A JSON caller reads the sender DID from context, not out of the prose.
+
+        The message truncates the DID for readability, so context is the only place
+        the full value exists. Resolution itself is covered in test_relay_ops; this
+        pins the CLI's mapping of the error onto the wire.
+        """
+        monkeypatch.setenv("AYA_FORMAT", "json")
+        profile_path, packet_id, _home = profile_with_ingested
+        stranger_did = Identity.generate("stranger").did
+
+        from aya.usecases import relay_ops
+
+        async def refuse(*_args, **_kwargs):
+            raise relay_ops.AckSenderNotTrustedError(stranger_did)
+
+        monkeypatch.setattr(relay_ops, "ack", refuse)
+        result = runner.invoke(app, ["ack", packet_id, "--profile", str(profile_path)])
+
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "PEER_NOT_TRUSTED"
+        assert payload["error"]["context"]["sender_did"] == stranger_did, (
+            "the full DID must be readable as data; the message truncates it"
+        )
+        assert stranger_did not in payload["error"]["message"], (
+            "precondition: the message really is truncated, so context is load-bearing"
+        )
+
     def test_ack_happy_path(self, profile_with_ingested: tuple) -> None:
         """ack sends an ACK packet and prints confirmation."""
         profile_path, packet_id, _home = profile_with_ingested

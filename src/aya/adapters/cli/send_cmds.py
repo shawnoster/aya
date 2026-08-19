@@ -342,11 +342,14 @@ def ack(
             _emit_error(ErrorCode.PACKET_NOT_FOUND, str(exc), {"packet_id": packet_id})
         except relay_ops.AmbiguousPrefixError as exc:
             _emit_error(ErrorCode.AMBIGUOUS_PREFIX, str(exc), {"packet_id": packet_id})
-        except (
-            relay_ops.AmbiguousAckRecipientError,
-            relay_ops.NoTrustedPeerError,
-            relay_ops.AckSenderNotTrustedError,
-        ) as exc:
+        # Split rather than grouped: each of these knows something a JSON caller
+        # would otherwise have to scrape back out of the prose, and the DID in the
+        # message is truncated for readability so it is not recoverable there.
+        except relay_ops.AckSenderNotTrustedError as exc:
+            _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc), {"sender_did": exc.sender_did})
+        except relay_ops.AmbiguousAckRecipientError as exc:
+            _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc), {"available": exc.available})
+        except relay_ops.NoTrustedPeerError as exc:
             _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc))
         except InstanceResolutionError as exc:
             _emit_error(

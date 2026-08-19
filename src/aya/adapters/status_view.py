@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.rule import Rule
 
 from aya.adapters.credentials import CredentialsReport
@@ -251,7 +252,7 @@ def _render_rich(data: dict[str, Any], console: Console) -> None:
             last_str = datetime.fromisoformat(last).strftime("%H:%M") if last else "never"
             msg = w["message"][:50]
             target = watch_target(w)
-            target_str = f"  [cyan]{target}[/cyan]" if target else ""
+            target_str = f"  [cyan]{escape(target)}[/cyan]" if target else ""
             failures = w.get("consecutive_failures", 0)
             health = f"  [yellow]⚠ {failures} failed poll(s)[/yellow]" if failures else ""
             console.print(

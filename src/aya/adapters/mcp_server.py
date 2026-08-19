@@ -1,4 +1,15 @@
-"""MCP server — expose aya capabilities as Claude-native tools via stdio transport."""
+"""MCP server — expose aya capabilities as Claude-native tools via stdio transport.
+
+Every tool answers with a ``types.CallToolResult``: one JSON text block plus
+``is_error`` — the protocol's failure flag, serialised as ``isError``. Build
+results through :func:`_rendered` or :func:`_error` so the flag is never left to
+its default.
+
+Unknown tool names and missing arguments are answered in-band with
+``is_error=True`` rather than as JSON-RPC protocol errors, which is what the spec
+suggests for them. Deliberate: a protocol error surfaces client-side as a raised
+``McpError``, which an agent handles worse than a readable payload it can act on.
+"""
 
 from __future__ import annotations
 
@@ -339,12 +350,21 @@ async def list_tools() -> list[types.Tool]:
 # ---------------------------------------------------------------------------
 
 
-def _text(data: object) -> types.CallToolResult:
-    """Wrap *data* as a successful single-block JSON result."""
+def _rendered(payload: str) -> types.CallToolResult:
+    """A successful result whose single block is already-serialised JSON.
+
+    The one place a success is constructed, so a field added here (an annotation,
+    ``structured_content``) cannot reach some tools and miss others.
+    """
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=json.dumps(data, indent=2, default=str))],
+        content=[types.TextContent(type="text", text=payload)],
         is_error=False,
     )
+
+
+def _text(data: object) -> types.CallToolResult:
+    """Wrap *data* as a successful single-block JSON result."""
+    return _rendered(json.dumps(data, indent=2, default=str))
 
 
 def _error(message: str) -> types.CallToolResult:
@@ -353,8 +373,8 @@ def _error(message: str) -> types.CallToolResult:
     ``is_error`` is what tells a client this was a failure. Set here rather than
     at the dispatch boundary because handlers construct their own errors too, and
     the flag cannot be recovered afterwards: a successful payload may legitimately
-    carry an ``error`` key (``relay_ops`` puts one on skipped packets), so there is
-    nothing in the content to sniff.
+    carry an ``error`` key — ``relay_ops`` puts ``error: "persist_failed"`` on a
+    packet whose body would not write — so there is nothing in the content to sniff.
     """
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=json.dumps({"error": message}))],
@@ -442,10 +462,7 @@ async def _handle_status() -> types.CallToolResult:
     from aya.usecases.status import _gather_status
 
     data = _gather_status()
-    return types.CallToolResult(
-        content=[types.TextContent(type="text", text=_render_json(data))],
-        is_error=False,
-    )
+    return _rendered(_render_json(data))
 
 
 async def _handle_inbox(arguments: dict[str, Any]) -> types.CallToolResult:

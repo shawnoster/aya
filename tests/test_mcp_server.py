@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from aya.adapters.mcp_server import _TOOLS, call_tool
+from aya.adapters.mcp_server import _HANDLERS, _TOOLS, call_tool
 from aya.adapters.profile_store import save_profile
 
 # ---------------------------------------------------------------------------
@@ -842,8 +842,7 @@ class TestToolErrorsAreFlagged:
     `is_error` is how a client distinguishes failure. Left at its False default,
     an unknown tool, a missing argument and a handler exception all read as
     success with some JSON that happens to contain an "error" key — which an agent
-    is free to ignore, and which this suite itself documented as expected
-    behaviour before now.
+    is free to ignore.
     """
 
     async def test_an_unknown_tool_is_flagged(self):
@@ -860,11 +859,7 @@ class TestToolErrorsAreFlagged:
         async def boom(_arguments):
             raise RuntimeError("handler exploded")
 
-        monkeypatch.setitem(
-            __import__("aya.adapters.mcp_server", fromlist=["_HANDLERS"])._HANDLERS,
-            "aya_status",
-            boom,
-        )
+        monkeypatch.setitem(_HANDLERS, "aya_status", boom)
         result = await call_tool("aya_status", {})
         assert result.is_error is True
         assert "handler exploded" in json.loads(result.content[0].text)["error"]
@@ -876,7 +871,22 @@ class TestToolErrorsAreFlagged:
         assert "at least 8 characters" in json.loads(result.content[0].text)["error"]
 
     async def test_a_successful_call_is_not_flagged(self):
-        """The negative case, so the flag is not simply always True."""
+        """aya_status is the one tool that does not go through _text().
+
+        Kept because it is the odd one out, not because it is representative — see
+        the next test for the path everything else uses.
+        """
         result = await call_tool("aya_status", {})
         assert result.is_error is False
         assert "systems" in json.loads(result.content[0].text)
+
+    async def test_a_successful_call_through_text_is_not_flagged(self):
+        """The success path 12 of 13 tools share.
+
+        Asserting only against aya_status left `_text`'s is_error=False unpinned:
+        flipping it to True reported every other tool's successful call as a
+        failure with the suite still green.
+        """
+        result = await call_tool("aya_config_show", {})
+        assert result.is_error is False
+        assert isinstance(json.loads(result.content[0].text), dict)

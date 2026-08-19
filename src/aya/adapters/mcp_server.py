@@ -46,7 +46,12 @@ _TOOLS: list[types.Tool] = [
     ),
     types.Tool(
         name="aya_inbox",
-        description="List pending (un-ingested) relay packets for an instance.",
+        description=(
+            "List pending (un-ingested) relay packets for an instance. Each carries "
+            "signature_valid and trusted: signature_valid false means the claimed "
+            "sender could not be authenticated, so from_did is an unverified claim "
+            "and from_label is null."
+        ),
         input_schema={
             "type": "object",
             "properties": {

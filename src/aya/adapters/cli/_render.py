@@ -26,6 +26,7 @@ from aya.entities.identity import (
 from aya.entities.packet import Packet, human_age
 from aya.usecases import relay_ops
 from aya.usecases.packet_view import extract_body
+from aya.usecases.resolve import label_for_authenticated_sender
 
 
 def _render_send(result: relay_ops.SendResult, *, as_json: bool) -> None:
@@ -200,23 +201,45 @@ class PacketRow(TypedDict):
     intent: str
     from_did: str
     from_label: str | None
+    """Peer label, or None when the sender is not authenticated — an unverified
+    ``from_did`` has no identity to name. See usecases.resolve."""
     sent_at: str
     age: str
     content_type: str
+    signature_valid: bool
+    """Whether the signature over ``from_did`` verifies. False means the claimed
+    sender identity does not hold up, which is distinct from being untrusted.
+
+    True proves only that the claimed identity is consistent with the signature,
+    not that the identity is one to trust. False covers forgery and transit
+    corruption alike — this layer cannot tell an attack from damage, only that
+    the sender cannot be authenticated."""
     trusted: bool
+    """A *verified* sender who is also in the profile's trusted keys."""
+
+
+def _did_display(did: str) -> str:
+    """Truncated DID, for a sender with no label to show."""
+    return did[:20] + "…"
 
 
 def _extract_packet_data(pkt: Packet, profile: Profile) -> PacketRow:
     """Extract all packet fields and computed values for reuse across displays."""
+    signature_valid = pkt.verify_from_did(log_failure=False)
     return {
         "id": pkt.id,
         "intent": pkt.intent,
         "from_did": pkt.from_did,
-        "from_label": _label_for_did(pkt.from_did, profile),
+        "from_label": label_for_authenticated_sender(
+            profile, pkt.from_did, signature_valid=signature_valid
+        ),
         "sent_at": pkt.sent_at,
         "age": human_age(pkt.sent_at),
         "content_type": str(pkt.content_type),
-        "trusted": profile.is_trusted(pkt.from_did),
+        # Mirrors usecases.relay_ops.packet_summary: from_did is a claim until
+        # the signature over it verifies, so trust is gated on that.
+        "signature_valid": signature_valid,
+        "trusted": signature_valid and profile.is_trusted(pkt.from_did),
     }
 
 
@@ -233,7 +256,15 @@ def _packet_to_dict(
 def _show_inbox(
     packets: list[Packet], profile: Profile, ingested_set: set[str] | None = None
 ) -> None:
-    table = Table(title=f"Inbox — {len(packets)} packet(s)", show_lines=True)
+    table = Table(
+        title=f"Inbox — {len(packets)} packet(s)",
+        # The Trust column is three-state and none of the symbols is
+        # self-explanatory, least of all to someone seeing a red one for the
+        # first time.
+        caption="Trust:  ✓ verified, trusted peer   ? verified, unknown sender   "
+        "✗ sender could not be authenticated",
+        show_lines=True,
+    )
     table.add_column("ID", style="dim", width=10)
     table.add_column("Intent")
     table.add_column("From", style="cyan")
@@ -243,7 +274,16 @@ def _show_inbox(
 
     for pkt in packets:
         data = _extract_packet_data(pkt, profile)
-        trusted_display = "[green]✓[/green]" if data["trusted"] else "[yellow]?[/yellow]"
+        # Three states, not two: an unauthenticatable sender is a different
+        # thing from an unknown one and must not render as the same cautious
+        # "?". Spelled out rather than abbreviated — this is the state a reader
+        # most needs to get right.
+        if not data["signature_valid"]:
+            trusted_display = "[red]✗ invalid signature[/red]"
+        elif data["trusted"]:
+            trusted_display = "[green]✓[/green]"
+        else:
+            trusted_display = "[yellow]?[/yellow]"
         already_ingested = ingested_set is not None and pkt.id in ingested_set
         if already_ingested:
             intent: str | Text = Text.assemble((data["intent"], "dim"), (" [ingested]", "dim"))
@@ -252,19 +292,12 @@ def _show_inbox(
         table.add_row(
             data["id"][:8],
             intent,
-            data["from_label"],
+            data["from_label"] or _did_display(pkt.from_did),
             data["age"],
             data["content_type"],
             trusted_display,
         )
     console.print(table)
-
-
-def _label_for_did(did: str, profile: Profile) -> str:
-    for key in profile.trusted_keys.values():
-        if key.did == did:
-            return key.label
-    return did[:20] + "…"
 
 
 # Re-exported so CLI call sites keep the private name; the definition is shared

@@ -4839,6 +4839,107 @@ class TestScheduleInstallDryRunTense:
         assert "would install" not in out
 
 
+class TestInboxTrustBadge:
+    """The Trust column must not show a forged sender as trusted."""
+
+    @staticmethod
+    def _setup():
+        from aya.entities.identity import Identity, Profile, TrustedKey
+
+        local = Identity.generate("default")
+        peer = Identity.generate("home")
+        profile = Profile()
+        profile.instances["default"] = local
+        profile.trusted_keys["home"] = TrustedKey(
+            did=peer.did, label="home", nostr_pubkey=peer.nostr_public_hex
+        )
+        return profile, peer
+
+    def test_forged_sender_renders_as_bad_signature(self):
+        from aya.adapters.cli._render import _extract_packet_data
+        from aya.entities.identity import Identity
+        from aya.entities.packet import Packet
+
+        profile, peer = self._setup()
+        attacker = Identity.generate("attacker")
+        pkt = Packet(from_did=attacker.did, to_did=attacker.did, intent="x", content="y")
+        pkt = pkt.sign(attacker)
+        pkt.from_did = peer.did  # claim the trusted peer's identity
+
+        data = _extract_packet_data(pkt, profile)
+        assert data["signature_valid"] is False
+        assert data["trusted"] is False
+
+    def test_genuine_trusted_sender_renders_as_trusted(self):
+        from aya.adapters.cli._render import _extract_packet_data
+        from aya.entities.packet import Packet
+
+        profile, peer = self._setup()
+        pkt = Packet(from_did=peer.did, to_did=peer.did, intent="x", content="y").sign(peer)
+
+        data = _extract_packet_data(pkt, profile)
+        assert data["signature_valid"] is True
+        assert data["trusted"] is True
+
+    def test_a_forged_sender_is_not_labelled_with_the_peer_it_claims(self, capsys):
+        """The badge is one column; the From column must not undo it.
+
+        A reader scanning From, or a script reading from_label without also
+        reading signature_valid, would otherwise be told the packet is "home".
+        """
+        from aya.adapters.cli._render import _extract_packet_data, _show_inbox
+        from aya.entities.identity import Identity
+        from aya.entities.packet import Packet
+
+        profile, peer = self._setup()
+        attacker = Identity.generate("attacker")
+        forged = Packet(
+            from_did=attacker.did, to_did=attacker.did, intent="forged", content="y"
+        ).sign(attacker)
+        forged.from_did = peer.did
+
+        assert _extract_packet_data(forged, profile)["from_label"] is None
+
+        _show_inbox([forged], profile)
+        out = capsys.readouterr().out
+        assert "home" not in out, "the forged row must not carry the claimed peer's label"
+
+    def test_the_three_badge_states_are_distinct(self, capsys):
+        """A bad signature must not render as the same cautious '?' as a stranger."""
+        from aya.adapters.cli._render import _show_inbox
+        from aya.entities.identity import Identity
+        from aya.entities.packet import Packet
+
+        profile, peer = self._setup()
+        good = Packet(from_did=peer.did, to_did=peer.did, intent="good", content="y").sign(peer)
+        stranger_id = Identity.generate("stranger")
+        stranger = Packet(
+            from_did=stranger_id.did, to_did=stranger_id.did, intent="stranger", content="y"
+        ).sign(stranger_id)
+        attacker = Identity.generate("attacker")
+        forged = Packet(
+            from_did=attacker.did, to_did=attacker.did, intent="forged", content="y"
+        ).sign(attacker)
+        forged.from_did = peer.did
+
+        _show_inbox([good, stranger, forged], profile)
+        out = capsys.readouterr().out
+        # The caption legend names all three symbols, so assert on the rows
+        # alone — otherwise every marker is "present" no matter what rendered.
+        rows = out.split("\u2514")[0]
+        good_row, stranger_row, forged_row = (
+            line
+            for line in rows.splitlines()
+            if "good" in line or "stranger" in line or "forged" in line
+        )
+        assert "\u2713" in good_row
+        assert "?" in stranger_row
+        # Rich wraps "invalid signature" across the row's two lines, so match
+        # the word that stays on the first one.
+        assert "invalid" in forged_row, "a forged sender needs its own marker"
+        assert "?" not in forged_row, "a forgery must not read as merely unknown"
+
+
 class TestUninstallUnreadableCrontab:
     def test_does_not_claim_not_present_when_the_read_failed(self):
         from aya.adapters.install import UninstallResult

@@ -38,6 +38,7 @@ from aya.entities.packet import ConflictStrategy, ContentType, Packet, human_age
 from aya.usecases.ingest import ingest as ingest_packet
 from aya.usecases.resolve import (
     NoNostrPubkeyError,
+    label_for_authenticated_sender,
     label_for_did,
     nostr_pubkey_for,
     resolve_instance,
@@ -595,16 +596,27 @@ def packet_summary(profile: Profile, packet: Packet, *, ingested: bool) -> dict[
 
     The CLI and MCP used to disagree here — one emitted ``from_did`` plus
     ``from_label``, the other a bare ``from`` — so a caller could not read both.
+
+    Carries ``signature_valid`` alongside ``trusted`` so a caller can tell an
+    untrusted sender from one whose claimed identity does not hold up.
+    ``signature_valid`` False covers forgery and transit corruption alike: it
+    says the sender cannot be authenticated, not that an attack occurred.
     """
+    signature_valid = packet.verify_from_did(log_failure=False)
     return {
         "id": packet.id,
         "intent": packet.intent,
         "from_did": packet.from_did,
-        "from_label": label_for_did(profile, packet.from_did),
+        "from_label": label_for_authenticated_sender(
+            profile, packet.from_did, signature_valid=signature_valid
+        ),
         "sent_at": packet.sent_at,
         "age": human_age(packet.sent_at),
         "content_type": packet.content_type,
-        "trusted": profile.is_trusted(packet.from_did),
+        # from_did is an unauthenticated claim until the signature over it is
+        # checked, so trust is gated on that check rather than on the string.
+        "signature_valid": signature_valid,
+        "trusted": signature_valid and profile.is_trusted(packet.from_did),
         "ingested": ingested,
     }
 

@@ -321,3 +321,129 @@ class TestAck:
         )
         with pytest.raises(AmbiguousAckRecipientError):
             await ack(p, path, packet_id=pkt.id, client_factory=FakeClient)
+
+
+class TestPacketSummaryTrust:
+    """`trusted` must mean a *verified* trusted sender, not a claimed one.
+
+    `from_did` is an unauthenticated field until the signature over it is
+    checked, so `trusted` is gated on `signature_valid` rather than on
+    `is_trusted(from_did)` alone.
+    """
+
+    @staticmethod
+    def _profile_with_trusted_peer():
+        from aya.entities.identity import Identity, Profile, TrustedKey
+
+        local = Identity.generate("default")
+        peer = Identity.generate("home")
+        profile = Profile()
+        profile.instances["default"] = local
+        profile.trusted_keys["home"] = TrustedKey(
+            did=peer.did, label="home", nostr_pubkey=peer.nostr_public_hex
+        )
+        return profile, peer
+
+    @staticmethod
+    def _packet(from_did: str, to_did: str):
+        from aya.entities.packet import Packet
+
+        return Packet(from_did=from_did, to_did=to_did, intent="hello", content="body")
+
+    def test_genuine_packet_from_a_trusted_peer_is_trusted(self):
+        from aya.usecases.relay_ops import packet_summary
+
+        profile, peer = self._profile_with_trusted_peer()
+        pkt = self._packet(peer.did, peer.did).sign(peer)
+
+        summary = packet_summary(profile, pkt, ingested=False)
+        assert summary["signature_valid"] is True
+        assert summary["trusted"] is True
+        assert summary["from_label"] == "home"
+
+    def test_forged_sender_claiming_a_trusted_did_is_not_trusted(self):
+        from aya.entities.identity import Identity
+        from aya.usecases.relay_ops import packet_summary
+
+        profile, peer = self._profile_with_trusted_peer()
+        attacker = Identity.generate("attacker")
+
+        # Validly signed by the attacker, then the sender field is overwritten
+        # with the trusted peer's DID — so is_trusted() alone answers True.
+        pkt = self._packet(attacker.did, attacker.did).sign(attacker)
+        pkt.from_did = peer.did
+
+        assert profile.is_trusted(pkt.from_did) is True, "precondition: the DID looks trusted"
+        summary = packet_summary(profile, pkt, ingested=False)
+        assert summary["signature_valid"] is False
+        assert summary["trusted"] is False
+        # A caller reading from_label without also reading signature_valid must
+        # not be handed the peer's name; there is no verified identity to name.
+        assert summary["from_label"] is None
+        assert summary["from_did"] == peer.did, "the raw claim stays visible"
+
+    def test_listing_a_forged_packet_does_not_log_a_warning(self, caplog):
+        """Listing must not let a relay flood the log.
+
+        Anyone who can publish can send garbage; a warning per listed packet
+        would turn `aya inbox` into an amplifier. The badge carries the fact.
+        """
+        import logging
+
+        from aya.entities.identity import Identity
+        from aya.usecases.relay_ops import packet_summary
+
+        profile, peer = self._profile_with_trusted_peer()
+        attacker = Identity.generate("attacker")
+        pkt = self._packet(attacker.did, attacker.did).sign(attacker)
+        pkt.from_did = peer.did
+
+        with caplog.at_level(logging.WARNING):
+            summary = packet_summary(profile, pkt, ingested=False)
+
+        assert summary["signature_valid"] is False, "precondition: verification failed"
+        assert caplog.records == [], "a listed bad signature is data, not an operational event"
+
+    def test_receiving_a_forged_packet_still_logs_a_warning(self, caplog):
+        """The quiet path is opt-in — the receive flow keeps its only surface.
+
+        `receive` drops bad-signature packets out of its JSON, so the log line
+        is how the failure reaches a human at all.
+        """
+        import logging
+
+        from aya.entities.identity import Identity
+
+        _profile, peer = self._profile_with_trusted_peer()
+        attacker = Identity.generate("attacker")
+        pkt = self._packet(attacker.did, attacker.did).sign(attacker)
+        pkt.from_did = peer.did
+
+        with caplog.at_level(logging.WARNING):
+            assert pkt.verify_from_did() is False
+
+        assert any("verification failed" in r.message for r in caplog.records)
+        assert all(r.exc_info is None for r in caplog.records), "no traceback on a bad signature"
+
+    def test_unsigned_packet_is_not_trusted(self):
+        from aya.usecases.relay_ops import packet_summary
+
+        profile, peer = self._profile_with_trusted_peer()
+        pkt = self._packet(peer.did, peer.did)  # never signed
+
+        summary = packet_summary(profile, pkt, ingested=False)
+        assert summary["signature_valid"] is False
+        assert summary["trusted"] is False
+
+    def test_verified_but_unknown_sender_is_untrusted_not_invalid(self):
+        """The two negative states stay distinguishable."""
+        from aya.entities.identity import Identity
+        from aya.usecases.relay_ops import packet_summary
+
+        profile, _peer = self._profile_with_trusted_peer()
+        stranger = Identity.generate("stranger")
+        pkt = self._packet(stranger.did, stranger.did).sign(stranger)
+
+        summary = packet_summary(profile, pkt, ingested=False)
+        assert summary["signature_valid"] is True
+        assert summary["trusted"] is False

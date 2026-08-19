@@ -114,12 +114,17 @@ class Packet(BaseModel):
             )
             return False
 
-    def verify_from_did(self) -> bool:
+    def verify_from_did(self, *, log_failure: bool = True) -> bool:
         """Verify the packet signature using the sender's DID (no Identity object needed).
 
         Extracts the ed25519 public key from the from_did field and verifies
         the signature against it. This is the method used in the receive flow
         where we don't have the sender's private key.
+
+        Pass ``log_failure=False`` on listing paths, where an unverifiable packet
+        is data to render rather than an operational event. A warning per listed
+        packet would let anyone who can publish to the relay flood the log by
+        sending garbage, and the caller shows the outcome in its own output.
         """
         if self.signature is None:
             return False
@@ -133,12 +138,14 @@ class Packet(BaseModel):
             pub_key.verify(sig_bytes, self.canonical_bytes())
             return True
         except Exception as exc:
-            logger.warning(
-                "DID-based signature verification failed for packet %s: %s",
-                self.id,
-                exc,
-                exc_info=True,
-            )
+            if log_failure:
+                logger.warning(
+                    "DID-based signature verification failed for packet %s: %s", self.id, exc
+                )
+            # The traceback stays available under -v without riding on every
+            # failure: the exception is already in the message above, and a
+            # signature that does not verify is an outcome, not a crash.
+            logger.debug("verification failure detail for packet %s", self.id, exc_info=True)
             return False
 
     def fingerprint(self) -> str:

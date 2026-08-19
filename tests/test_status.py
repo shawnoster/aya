@@ -387,6 +387,25 @@ class TestCrontabCheck:
         assert "unknown" in r.detail
         assert "MISSING" not in r.detail
 
+    def test_unreadable_crontab_does_not_fail_a_host_that_never_wanted_a_tick(self, monkeypatch):
+        """Mirrors the MISSING branch: no `tick_interval`, no failure.
+
+        A hardened or policy-restricted host with an unreadable system crontab
+        is not an aya fault, and reporting systems.ok false there is noise.
+        """
+        import subprocess
+
+        from aya.usecases import status as status_mod
+
+        def boom():
+            raise subprocess.CalledProcessError(1, ["crontab", "-l"], stderr="denied")
+
+        monkeypatch.setattr("aya.usecases.status.aya_cron_installed", boom)
+        monkeypatch.setattr("aya.usecases.status.load_config", lambda *a, **kw: {})
+        r = status_mod._check_crontab()
+        assert r.ok
+        assert "unknown" in r.detail
+
     def test_appears_in_the_systems_payload(self, monkeypatch):
         import json as _json
 

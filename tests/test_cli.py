@@ -4837,3 +4837,21 @@ class TestScheduleInstallDryRunTense:
         out = runner.invoke(app, ["schedule", "install"]).output
         assert "installed" in out
         assert "would install" not in out
+
+
+class TestUninstallUnreadableCrontab:
+    def test_does_not_claim_not_present_when_the_read_failed(self):
+        from aya.adapters.install import UninstallResult
+
+        result = UninstallResult(
+            cron_removed=False,
+            hooks_removed=["SessionStart"],
+            errors=["crontab failed: permission denied (no changes were made)"],
+        )
+        with patch("aya.adapters.cli.schedule_cmds.uninstall_scheduler", lambda **kw: result):
+            out = runner.invoke(app, ["schedule", "uninstall"]).output
+        # Scoped to the Crontab line: an unrelated "OpenCode plugin: not
+        # present" also matches a bare "not present" and would make this pass
+        # or fail for the wrong reason.
+        assert "Crontab: not present" not in out
+        assert "Crontab: unknown" in out

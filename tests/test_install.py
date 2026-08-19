@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -579,7 +580,7 @@ class TestCrontabReadFailsClosed:
         assert writes == []
         assert any("crontab failed" in e for e in result.errors)
 
-    def test_a_readable_crontab_is_still_preserved(self) -> None:
+    def test_successful_read_preserves_unrelated_entries(self) -> None:
         # The behaviour this protects: unrelated entries survive a real install.
         state = {"text": self.REAL_CRONTAB}
         writes: list[str] = []
@@ -598,3 +599,87 @@ class TestCrontabReadFailsClosed:
         assert "backup.sh" in writes[0]
         assert "sync-photos.sh" in writes[0]
         assert "aya-scheduler-tick" in writes[0]
+
+
+class TestNoCrontabWordings:
+    """The benign-vs-real split, against stderr observed in real containers.
+
+    Kept as a table so the next wording question does not need re-deriving from
+    three Docker runs. Sources are named in the comment above the patterns in
+    `install.py`.
+    """
+
+    BUSYBOX_NO_SPOOL = (
+        "crontab: can't change directory to '/var/spool/cron/crontabs': No such file or directory\n"
+    )
+
+    BENIGN: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("cronie / AlmaLinux 9", "no crontab for root\n"),
+        ("vixie / Debian bookworm", "no crontab for root\n"),
+        ("busybox / Alpine", "crontab: can't open 'root': No such file or directory\n"),
+        ("busybox, spool dir absent", BUSYBOX_NO_SPOOL),
+    )
+
+    REAL_FAILURES: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("cronie / vixie denied", "You (user) are not allowed to use this program (crontab)\n"),
+        ("busybox denied", "crontab: can't open 'root': Permission denied\n"),
+        ("generic denied", "crontab: permission denied\n"),
+        ("io error", "crontab: I/O error reading /var/spool/cron/crontabs/root\n"),
+        ("silent failure", ""),
+    )
+
+    @pytest.mark.parametrize(("source", "stderr"), BENIGN, ids=[s for s, _ in BENIGN])
+    def test_benign_reads_as_empty(self, source: str, stderr: str) -> None:
+        from aya.adapters.install import _stderr_means_no_crontab
+
+        assert _stderr_means_no_crontab(stderr), f"{source} reports 'no crontab yet' this way"
+
+    @pytest.mark.parametrize(("source", "stderr"), REAL_FAILURES, ids=[s for s, _ in REAL_FAILURES])
+    def test_real_failure_fails_closed(self, source: str, stderr: str) -> None:
+        from aya.adapters.install import _stderr_means_no_crontab
+
+        assert not _stderr_means_no_crontab(stderr), f"{source} must not be read as empty"
+
+    def test_busybox_first_install_does_not_raise(self) -> None:
+        """The regression this arm exists for: a fresh Alpine host.
+
+        Without the busybox wording, the single most common real case — no
+        crontab yet — raised, so `aya schedule install` failed on first run.
+        """
+        from aya.adapters.install import _get_current_crontab
+
+        def mock_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="crontab: can't open 'root': No such file or directory\n"
+            )
+
+        with patch("aya.adapters.install.subprocess.run", side_effect=mock_run):
+            assert _get_current_crontab() == ""
+
+    def test_read_failure_says_nothing_was_changed(self) -> None:
+        from aya.adapters.install import CrontabUnreadableError, _crontab_error_detail
+
+        exc = CrontabUnreadableError(
+            1, ["crontab", "-l"], output="", stderr="crontab: permission denied\n"
+        )
+        detail = _crontab_error_detail(exc)
+        # str(CalledProcessError) carries only the exit status, so the cause has
+        # to come from stderr or the reader learns nothing actionable.
+        assert "permission denied" in detail
+        assert "no changes were made" in detail
+
+    def test_write_failure_does_not_claim_nothing_changed(self) -> None:
+        from aya.adapters.install import _crontab_error_detail
+
+        exc = subprocess.CalledProcessError(
+            1, ["crontab", "-"], output="", stderr="crontab: installation failed\n"
+        )
+        detail = _crontab_error_detail(exc)
+        assert "installation failed" in detail
+        assert "no changes were made" not in detail
+
+    def test_unreadable_error_is_still_a_called_process_error(self) -> None:
+        """Existing `except subprocess.CalledProcessError` handlers keep working."""
+        from aya.adapters.install import CrontabUnreadableError
+
+        assert issubclass(CrontabUnreadableError, subprocess.CalledProcessError)

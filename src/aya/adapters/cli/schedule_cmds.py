@@ -495,6 +495,11 @@ def schedule_uninstall(
 
     if result.cron_removed:
         console.print(f"  {prefix}[yellow]Crontab:[/yellow] removed")
+    elif result.errors:
+        # The crontab could not be read, so "not present" would be a claim about
+        # a state nobody observed. install exits before reaching its equivalent
+        # line; uninstall carries on removing hooks, so it says so instead.
+        console.print(f"  {prefix}[yellow]Crontab:[/yellow] unknown — see the error above")
     else:
         console.print(f"  {prefix}[dim]Crontab:[/dim] not present")
 

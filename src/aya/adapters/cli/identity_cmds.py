@@ -103,7 +103,7 @@ def whoami(
             state = "paired" if peer["paired"] else "[yellow]not paired[/yellow]"
             console.print(f"    {peer['label']}  [dim]{str(peer['did'])[:32]}…[/dim]  {state}")
     else:
-        console.print("    [dim](none — run 'aya pair')[/dim]")
+        console.print("    [dim](none — run 'aya pair --peer <label>')[/dim]")
     console.print("\nRelays: " + (", ".join(p.default_relays) or "(none)"))
 
 

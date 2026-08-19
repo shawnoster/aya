@@ -419,8 +419,9 @@ plausibly fire twice.
 | Exit 2, "packet(s) need confirmation but there is no terminal" | Missing ingest flag | Re-run with `--auto-ingest` |
 | Exit 2, "Packet body is empty" | No body source given | Add `-m`, `--files`, or `--seed --opener` |
 | `aya read <id>` → `PACKET_NOT_FOUND` | Not ingested yet | Run verb 1 (Check) first |
-| `Unknown recipient '<label>'` | Not in `trusted_keys` | `aya pair`, or `aya trust <did> --peer <label>` |
-| `No Nostr pubkey found for recipient` | Trust entry lacks `nostr_pubkey` | Re-pair via `aya pair` |
+| `Unknown recipient '<label>'` | Not in `trusted_keys` | `aya pair --peer <label>`, or `aya trust <did> --peer <label> --nostr-pubkey <hex>` — trusting without a pubkey leaves delivery with no address |
+| `No Nostr pubkey found for recipient` | Trust entry lacks `nostr_pubkey` | Re-pair via `aya pair --peer <label>` |
+| `Cannot ACK: the packet's sender … is not a trusted peer` | The packet was ingested from an unknown sender — `aya receive --yes` accepts all senders, `--auto-ingest` only trusted ones | Pair or trust the sender (the error carries the full DID), or reply with `aya send --to <peer> --in-reply-to <id>` |
 | Peer unreachable on a fresh install | Only public relays seeded; peer is on a private one | Re-pair with `aya pair --relay <url>` **on both machines** — each promotes the relay that carried it |
 | `No matching pairing request found (Relay mismatch)` | One end pinned `--relay`, the other polled the public defaults | Both ends must pass the same `--relay`, or neither |
 | Peer received the same content twice | Inbound dedup is by packet ID only — a resend with a new ID is a new packet | Send with `--idempotency-key` so a retry cannot double-publish |

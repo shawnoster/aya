@@ -529,8 +529,15 @@ class TestSend:
         )
         assert result.exit_code != 0
 
-    def test_send_default_resolves_to_single_trusted_key(self, profile_with_trusted: Path) -> None:
-        """'--to default' should succeed when exactly one trusted key exists."""
+    def test_send_succeeds_when_the_peer_is_named(self, profile_with_trusted: Path) -> None:
+        """The happy path this test meant to cover.
+
+        It previously passed `--to default` and asserted success, which only worked
+        because an unrecognised label resolved to the sole trusted peer. `default`
+        is the local *instance* label, not a recipient, and no sentinel makes it
+        one — so the assertion was pinning the guess rather than a documented
+        default. Naming the peer tests what the name claims.
+        """
         mock_publish = AsyncMock(return_value="b" * 64)
         with patch("aya.adapters.relay.RelayClient") as mock_client_cls:
             mock_client_cls.return_value.publish = mock_publish
@@ -539,7 +546,7 @@ class TestSend:
                 [
                     "send",
                     "--to",
-                    "default",
+                    "home",
                     "--intent",
                     "test",
                     "--profile",
@@ -5171,3 +5178,48 @@ class TestEmitErrorMarkupSafety:
             kernel._emit_error("TEST", "Ambiguous prefix '[dim]abc' matches 2.")
         payload = json_mod.loads(buf.getvalue())
         assert payload["error"]["message"] == "Ambiguous prefix '[dim]abc' matches 2."
+
+
+class TestSendUnknownRecipient:
+    def test_a_typo_is_refused_and_lists_the_real_labels(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With one trusted peer, a mistyped label used to resolve to that peer.
+
+        `resolve_recipient` returns the address the message is sent to, so the
+        message went to somebody the caller never named. The labels come back as
+        context because a JSON caller cannot read them out of the prose.
+        """
+        monkeypatch.setenv("AYA_FORMAT", "json")
+
+        local = Identity.generate("default")
+        peer = Identity.generate("home")
+        profile = Profile()
+        profile.instances["default"] = local
+        profile.trusted_keys["home"] = TrustedKey(
+            did=peer.did, label="home", nostr_pubkey=peer.nostr_public_hex
+        )
+        profile_path = tmp_path / "profile.json"
+        save_profile(profile, profile_path)
+
+        result = runner.invoke(
+            app,
+            [
+                "send",
+                "--to",
+                "hoem",
+                "-m",
+                "x",
+                "--intent",
+                "x",
+                "--dry-run",
+                "--profile",
+                str(profile_path),
+            ],
+        )
+
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "UNKNOWN_RECIPIENT"
+        assert payload["error"]["context"]["requested"] == "hoem"
+        assert payload["error"]["context"]["available"] == ["home"]
+        assert peer.did not in result.output, "the unnamed peer must not be addressed"

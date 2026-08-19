@@ -254,15 +254,22 @@ def send_cmd(
                 idempotency_key=idempotency_key,
                 publish=not dry_run,
             )
-        except (InstanceResolutionError, UnknownRecipientError, NoNostrPubkeyError) as exc:
-            code = (
-                ErrorCode.INSTANCE_NOT_FOUND
-                if isinstance(exc, InstanceResolutionError)
-                else ErrorCode.UNKNOWN_RECIPIENT
-                if isinstance(exc, UnknownRecipientError)
-                else ErrorCode.NO_NOSTR_PUBKEY
+        # Split per type: refusing a label is only actionable if the caller can see
+        # which labels exist, and a JSON caller cannot parse them back out of prose.
+        except InstanceResolutionError as exc:
+            _emit_error(
+                ErrorCode.INSTANCE_NOT_FOUND,
+                str(exc),
+                {"instance": as_, "available": exc.available},
             )
-            _emit_error(code, str(exc))
+        except UnknownRecipientError as exc:
+            _emit_error(
+                ErrorCode.UNKNOWN_RECIPIENT,
+                str(exc),
+                {"requested": exc.requested, "available": exc.available},
+            )
+        except NoNostrPubkeyError as exc:
+            _emit_error(ErrorCode.NO_NOSTR_PUBKEY, str(exc), {"did": exc.did})
         except relay_ops.SendFailedError as exc:
             _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
 

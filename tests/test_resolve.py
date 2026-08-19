@@ -36,10 +36,22 @@ class TestResolveRecipient:
         assert label == "beacon"
         assert did == profile.trusted_keys["beacon"].did
 
-    def test_sole_peer_absorbs_any_label(self, profile: Profile):
-        did, label = resolve_recipient(profile, "whatever")
-        assert label == "beacon"
-        assert did == profile.trusted_keys["beacon"].did
+    def test_a_sole_peer_does_not_absorb_an_unrecognised_label(self, profile: Profile):
+        """A typo must not become a delivery to the only peer you happen to have.
+
+        `resolve_recipient` returns the address a message is sent to, so absorbing
+        an unrecognised label routes the caller's own text to somebody they did not
+        name. Previously asserted the other way round, as a convenience.
+        """
+        with pytest.raises(UnknownRecipientError) as exc:
+            resolve_recipient(profile, "beacn")
+        assert exc.value.requested == "beacn"
+        assert exc.value.available == ["beacon"], "the real label is offered back"
+
+    def test_the_sole_peer_still_resolves_by_its_own_label(self, profile: Profile):
+        """Refusing a typo must not break naming the peer correctly."""
+        did, label = resolve_recipient(profile, "beacon")
+        assert (did, label) == (profile.trusted_keys["beacon"].did, "beacon")
 
     def test_unknown_with_multiple_peers_raises_and_lists(self, profile: Profile):
         other = Identity.generate("sean")

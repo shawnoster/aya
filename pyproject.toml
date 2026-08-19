@@ -16,6 +16,13 @@ dependencies = [
     "mcp>=2",  # 2.0 replaced the Server list_tools/call_tool decorators with on_* callbacks
 ]
 
+[project.optional-dependencies]
+# Only for the release job. semantic-release's build_command runs inside the
+# action's Docker image, which has pip but not uv, so uv has to be installed
+# there — and pinning it here rather than curling a script keeps it visible to
+# dependency bots. See PSR's uv integration guide.
+build = ["uv~=0.12.5"]
+
 [project.scripts]
 aya = "aya.adapters.cli:app"
 
@@ -189,7 +196,23 @@ warn_unreachable = true
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-build_command = "python -m pip install --quiet build && python -m build"
+# Bumping project.version desynchronises uv.lock, which records the project's own
+# version — so `uv lock --check` fails and every contributor's next `make check`
+# rewrites the lock, producing a dirty tree nobody asked for. Re-lock here and
+# `git add` it, so the bump and the lock arrive in one commit.
+#
+# --upgrade-package limits the lock to this project's version. A bare `uv lock`
+# could pull in newer dependencies that nothing has tested, turning a patch
+# release into an untested dependency bump.
+#
+# $PACKAGE_NAME is provided by semantic-release from project.name.
+build_command = """
+    set -e
+    python -m pip install --quiet -e '.[build]'
+    uv lock --upgrade-package "$PACKAGE_NAME"
+    git add uv.lock
+    uv build
+"""
 # "angular" was renamed to "conventional" and is removed in v11.
 commit_parser = "conventional"
 

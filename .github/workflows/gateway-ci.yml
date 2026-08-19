@@ -38,8 +38,16 @@ jobs:
         with:
           enable-cache: true
 
+      # Before the sync, and the sync is --frozen — see the root workflow.
+      - name: Lockfile is in sync
+        run: |
+          if ! uv lock --check; then
+            echo "::error title=gateway/uv.lock is out of sync with gateway/pyproject.toml::Run 'uv lock' in gateway/ and commit the result."
+            exit 1
+          fi
+
       - name: Install dependencies
-        run: uv sync --all-groups
+        run: uv sync --all-groups --frozen
 
       - name: Lint
         run: uv run ruff check .

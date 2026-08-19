@@ -37,19 +37,18 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: uv sync --all-groups
-
-      # Drift here is silent everywhere else: `uv sync` and `uv run` rewrite the
-      # lock in place, so a stale lock surfaces as an unexplained modified file
-      # in a contributor's tree rather than as an error. Named as its own step so
-      # the failure says what to run.
+      # Runs before `uv sync`, and the sync is --frozen. Both matter: `uv sync`
+      # silently rewrites a stale lock, so a check placed after it passes on a
+      # lock that was committed stale — the guard reports on its own repair.
       - name: Lockfile is in sync
         run: |
           if ! uv lock --check; then
             echo "::error title=uv.lock is out of sync with pyproject.toml::Run 'uv lock' and commit the result. If this appeared right after a release, the release job failed to re-lock — see build_command in pyproject.toml."
             exit 1
           fi
+
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
 
       - name: Lint
         run: uv run ruff check src tests

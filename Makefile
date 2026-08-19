@@ -1,7 +1,7 @@
 SKILLS_DIR := $(CURDIR)/skills
 COMMANDS_DIR := $(HOME)/.claude/commands
 
-.PHONY: install install-hooks lint fmt format type-check test check build clean link-skills unlink-skills
+.PHONY: install install-hooks lint lock-check fmt format type-check test check build clean link-skills unlink-skills
 
 install:
 	uv sync --all-groups

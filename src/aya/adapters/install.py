@@ -54,10 +54,13 @@ def _get_plugin_source() -> Path:
     packaged = Path(str(resources.files("aya"))) / OPENCODE_PLUGIN_PACKAGED_NAME
     if packaged.is_file():
         return packaged
+    # The two copies have different filenames, so the destination is spelled out
+    # in full: "copy it there" would leave the file under its authored name and
+    # the error unchanged.
     raise FileNotFoundError(
-        f"{OPENCODE_PLUGIN_PACKAGED_NAME} is missing from the installed aya package "
-        f"(looked in {packaged.parent}). Reinstall aya, or copy "
-        f"opencode-plugin/{OPENCODE_PLUGIN_NAME} there if running from a checkout."
+        f"{OPENCODE_PLUGIN_PACKAGED_NAME} is missing from the installed aya package. "
+        f"Reinstall aya, or from a checkout run: "
+        f"cp opencode-plugin/{OPENCODE_PLUGIN_NAME} {packaged}"
     )
 
 

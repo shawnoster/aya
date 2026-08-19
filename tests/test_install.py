@@ -744,6 +744,35 @@ class TestOpencodePluginSource:
             f"copy {authored} over the packaged copy"
         )
 
+    def test_the_missing_source_error_names_the_destination_it_wants(self, tmp_path):
+        """The remedy must be runnable as written.
+
+        The authored file is `aya-reminders.js` and the packaged one is
+        `opencode-plugin.js`, so guidance that says to copy the former "there"
+        leaves it under the wrong name and the error unchanged. Naming the full
+        destination makes the rename explicit.
+        """
+        from aya.adapters import install as install_mod
+        from aya.adapters.install import (
+            OPENCODE_PLUGIN_PACKAGED_NAME,
+            _get_plugin_source,
+        )
+
+        empty = tmp_path / "aya-package"
+        empty.mkdir()
+        with (
+            patch.object(install_mod.resources, "files", lambda _pkg: empty),
+            pytest.raises(FileNotFoundError) as excinfo,
+        ):
+            _get_plugin_source()
+
+        message = str(excinfo.value)
+        destination = empty / OPENCODE_PLUGIN_PACKAGED_NAME
+        assert str(destination) in message, (
+            "the error must name the full destination, or the copy it suggests "
+            f"lands under the wrong filename. Got: {message}"
+        )
+
     def test_a_missing_source_is_an_install_error_not_silence(self, tmp_path):
         """A broken package must not read as "OpenCode plugin: not present".
 

@@ -142,9 +142,13 @@ def watch_target(item: SchedulerItem) -> str | None:
     half a target.
     """
     provider = item.get("provider")
-    config = item.get("watch_config") or {}
-    if not isinstance(config, dict):
+    config = item.get("watch_config")
+    # Checked before the `or {}` default: a falsy non-dict — [], "", 0 — would
+    # otherwise be replaced by an empty dict and read as a valid empty config,
+    # which for relay-inbox renders "default" off corrupt data.
+    if config is not None and not isinstance(config, dict):
         return None
+    config = config or {}
 
     if provider in {PROVIDER_GITHUB_PR, PROVIDER_CI_CHECKS}:
         owner, repo, pr = config.get("owner"), config.get("repo"), config.get("pr")

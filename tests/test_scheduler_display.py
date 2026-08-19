@@ -883,6 +883,20 @@ class TestWatchTarget:
 
         assert watch_target(self._watch("github-pr", "oops")) is None  # type: ignore[arg-type]
 
+    def test_a_falsy_non_dict_config_is_not_mistaken_for_an_empty_one(self):
+        """`[]`, `""` and `0` are corrupt, not "no config".
+
+        A truthiness default would replace them with `{}` and read them as a
+        valid empty config — which for relay-inbox renders "default", inventing a
+        target out of corrupt data. The truthy case (`"oops"`) is caught by the
+        isinstance check either way, so only these prove the ordering.
+        """
+        from aya.scheduler import watch_target
+
+        for corrupt in ([], "", 0):
+            item = self._watch("relay-inbox", corrupt)  # type: ignore[arg-type]
+            assert watch_target(item) is None, f"{corrupt!r} must not read as an empty config"
+
 
 def assert_cli_pending_shows(pending, *expected: str) -> None:
     """Assert `aya schedule pending` actually renders each fragment.

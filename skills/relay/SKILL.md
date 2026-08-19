@@ -288,7 +288,7 @@ at the chart table.
 ## 5. Status
 
 ```bash
-aya relay status     # identity, trusted peers, relays, last poll
+aya relay status     # identity, trusted peers, relays, last successful poll
 aya whoami           # instances, active one, peers, relays
 aya sent --failed    # outbound packets a relay rejected
 ```

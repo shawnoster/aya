@@ -491,7 +491,15 @@ async def _fetch(
     instance: str | None,
     relay: str | None,
     client_factory: ClientFactory | None,
-) -> tuple[Any, str, list[str], list[Packet], bool]:
+) -> tuple[Any, str, list[str], list[Packet], bool, list[str]]:
+    """Poll every configured relay.
+
+    Returns ``(local, label, relay_urls, packets, reachable, reached)``. *reachable*
+    is an any-relay-answered summary — the client only raises when every relay
+    fails — so it cannot say which relays were reached. *reached* can: the client
+    reports its refusals, and anything not refused answered. Callers recording
+    per-relay state need *reached*; the poll envelope reports *reachable*.
+    """
     local, label = resolve_instance(profile, instance)
     relay_urls = resolve_relays(profile, relay)
     make = _factory(client_factory)
@@ -500,8 +508,12 @@ async def _fetch(
         packets = [pkt async for pkt in client.fetch_pending()]
     except Exception:
         logger.exception("Relay fetch failed")
-        return local, label, relay_urls, [], False
-    return local, label, relay_urls, packets, True
+        return local, label, relay_urls, [], False, []
+    # getattr: a client that does not report refusals is treated as having reached
+    # everything, which matches the pre-existing behaviour for such clients.
+    refused = set(getattr(client, "last_fetch_unreachable", []) or [])
+    reached = [url for url in relay_urls if url not in refused]
+    return local, label, relay_urls, packets, True, reached
 
 
 async def inbox(
@@ -517,7 +529,7 @@ async def inbox(
     Returns ``(result, packets)`` — the envelope plus the Packet objects, so a
     surface can render richer detail than the summary dicts carry.
     """
-    _local, label, relay_urls, packets, reachable = await _fetch(
+    _local, label, relay_urls, packets, reachable, _reached = await _fetch(
         profile, instance, relay, client_factory
     )
     dropped = set(profile.dropped_ids)
@@ -551,11 +563,17 @@ async def receive(
     one ingested without a body on disk makes it unreadable and hides it from
     the inbox, losing it silently.
     """
-    local, label, relay_urls, packets, reachable = await _fetch(
+    local, label, relay_urls, packets, reachable, reached = await _fetch(
         profile, instance, relay, client_factory
     )
+    # Needed outside the loop below: the ingest loop stamps ingested_at with it.
     now_iso = _now_iso()
-    for url in relay_urls:
+    # Only relays that answered. `aya relay status` and MCP `aya_relay_status`
+    # render this as when the relay was last reached, so a relay that refused must
+    # keep whatever it had — including nothing. Per-relay rather than gated on the
+    # any-relay `reachable` summary, because one dead relay in a multi-relay
+    # profile is the common case and would otherwise be stamped as reached.
+    for url in reached:
         profile.last_checked[url] = now_iso
 
     sorted_packets = triage(

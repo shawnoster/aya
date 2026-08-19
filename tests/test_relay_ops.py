@@ -34,8 +34,13 @@ class FakeClient:
     receipts: ClassVar[list[str]] = []
     published: ClassVar[list[Packet]] = []
 
+    unreachable: ClassVar[list[str]] = []
+
     def __init__(self, relay_urls, priv, pub):
         self.relay_urls = list(relay_urls)
+        # Mirrors RelayClient: relays that refused the last fetch, reported on the
+        # instance because fetch_pending is a generator.
+        self.last_fetch_unreachable = list(type(self).unreachable)
         self.last_publish_report = list(type(self).report) or [
             {"url": u, "ok": True, "error": None} for u in relay_urls
         ]
@@ -61,6 +66,7 @@ def _reset():
     FakeClient.queued = []
     FakeClient.fail_publish = False
     FakeClient.fetch_raises = False
+    FakeClient.unreachable = []
     FakeClient.report = []
     FakeClient.receipts = []
     FakeClient.published = []
@@ -92,6 +98,58 @@ def _incoming(peer: Identity, to: Profile, intent: str = "hello") -> Packet:
         intent=intent,
         content="body",
     ).sign(peer)
+
+
+class TestLastCheckedOnlyWhenReached:
+    """`last_checked` claims a relay was reached, so only reached relays get stamped.
+
+    `aya relay status` and MCP `aya_relay_status` both render this as when each
+    relay was last reached, and the command contacts nothing — the stored value is
+    its only health datum.
+
+    The scheduler resolves the same conflation the opposite way: `last_checked_at`
+    is stamped on every attempt, because it doubles as the poll-interval gate and
+    withholding it makes a broken watch re-poll every tick, with
+    `consecutive_failures` added to keep the outcome visible. Nothing gates on
+    `last_checked`, which is what lets this one simply be withheld.
+    """
+
+    async def test_an_unreachable_relay_is_not_stamped(self, profile):
+        p, path = profile
+        FakeClient.fetch_raises = True
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert result.relay_reachable is False, "precondition: the fetch failed"
+        assert p.last_checked == {}, (
+            f"a poll that reached nothing must leave no check time, got {p.last_checked}"
+        )
+
+    async def test_a_reachable_relay_is_stamped(self, profile):
+        """The positive case, so the rule is not simply never stamping."""
+        p, path = profile
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert result.relay_reachable is True
+        assert sorted(p.last_checked) == ["wss://a", "wss://b"]
+
+    async def test_only_the_relay_that_answered_is_stamped(self, profile):
+        """One relay down is the common case, and the summary flag cannot see it.
+
+        The client raises only when *every* relay fails, so `relay_reachable` stays
+        True while a dead relay sits in the same profile. Gating on that flag alone
+        would stamp the dead one as reached.
+        """
+        p, path = profile
+        FakeClient.unreachable = ["wss://b"]
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert result.relay_reachable is True, "precondition: one relay still answered"
+        assert sorted(p.last_checked) == ["wss://a"], (
+            f"the refused relay must keep its old state, got {p.last_checked}"
+        )
 
 
 class TestSend:

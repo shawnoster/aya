@@ -182,7 +182,12 @@ class Profile:
     primary_instance: str | None = None
     trusted_keys: dict[str, TrustedKey] = field(default_factory=dict)
     default_relays: list[str] = field(default_factory=lambda: list(_DEFAULT_RELAYS))
-    last_checked: dict[str, str] = field(default_factory=dict)  # relay → ISO timestamp
+    # relay → ISO timestamp of the last poll that *reached* that relay. A relay
+    # that refused is left alone, so a missing entry means "never reached", not
+    # "never polled". Display-only: nothing gates on it, which is what lets it be
+    # withheld — the scheduler's similarly-named last_checked_at is also a poll
+    # interval gate and so must be stamped on every attempt instead.
+    last_checked: dict[str, str] = field(default_factory=dict)
     # {id, ingested_at, from_did?} — dedup
     ingested_ids: list[dict[str, str]] = field(default_factory=list)
     # Outbound log: {id, sent_at, to_did, to_label, intent, event_id,

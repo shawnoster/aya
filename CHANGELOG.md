@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v2.1.5 (2026-08-19)
+
+### Bug Fixes
+
+- Address PR #331 review feedback ([#331](https://github.com/shawnoster/aya/pull/331),
+  [`c9490cf`](https://github.com/shawnoster/aya/commit/c9490cff4e3e01c4a2bce2093146810a35b7691d))
+
+- **scheduler**: Cover the surface that motivated this, and the sibling markup bug
+  ([#331](https://github.com/shawnoster/aya/pull/331),
+  [`c9490cf`](https://github.com/shawnoster/aya/commit/c9490cff4e3e01c4a2bce2093146810a35b7691d))
+
+- **scheduler**: Show what a watch is watching ([#331](https://github.com/shawnoster/aya/pull/331),
+  [`c9490cf`](https://github.com/shawnoster/aya/commit/c9490cff4e3e01c4a2bce2093146810a35b7691d))
+
+### Chores
+
+- Update uv.lock to reflect aya-ai-assist 2.1.4 ([#331](https://github.com/shawnoster/aya/pull/331),
+  [`c9490cf`](https://github.com/shawnoster/aya/commit/c9490cff4e3e01c4a2bce2093146810a35b7691d))
+
+
 ## v2.1.4 (2026-08-19)
 
 ### Bug Fixes

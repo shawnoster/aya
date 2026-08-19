@@ -342,7 +342,11 @@ def ack(
             _emit_error(ErrorCode.PACKET_NOT_FOUND, str(exc), {"packet_id": packet_id})
         except relay_ops.AmbiguousPrefixError as exc:
             _emit_error(ErrorCode.AMBIGUOUS_PREFIX, str(exc), {"packet_id": packet_id})
-        except (relay_ops.AmbiguousAckRecipientError, relay_ops.NoTrustedPeerError) as exc:
+        except (
+            relay_ops.AmbiguousAckRecipientError,
+            relay_ops.NoTrustedPeerError,
+            relay_ops.AckSenderNotTrustedError,
+        ) as exc:
             _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc))
         except InstanceResolutionError as exc:
             _emit_error(

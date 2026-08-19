@@ -153,6 +153,15 @@ Intent: <intent>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
+`aya inbox` and `aya_inbox` list on the unverified path, so unlike `receive`
+they *do* surface bad-signature packets inline. Each carries `signature_valid`
+alongside `trusted`. `signature_valid: false` means the claimed `from_did` does
+not check out — report it as a sender that could not be authenticated, not as
+"held, sender not paired". Such a packet has no `from_label` (it is null, and
+the table shows the raw DID): there is no verified identity to name, so don't
+supply the claimed peer's name yourself. `trusted` is gated on the signature
+too, so it is false for those packets.
+
 `from` is a DID. `aya inbox --format json` and `aya_inbox` both include
 `from_label` for pending packets; for already-ingested ones use
 `aya whoami` (its `peers` list maps label → DID).

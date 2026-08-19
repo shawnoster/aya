@@ -104,6 +104,21 @@ def label_for_did(profile: Profile, did: str) -> str | None:
     return None
 
 
+def label_for_authenticated_sender(
+    profile: Profile, did: str, *, signature_valid: bool
+) -> str | None:
+    """Peer label for a DID, but only once the signature over it has verified.
+
+    A label names *who* sent a packet. Without a verified signature there is no
+    authenticated identity to name, and returning the trusted peer's label would
+    hand a forger that peer's standing on every surface that reads the label
+    without also reading the flag beside it.
+    """
+    if not signature_valid:
+        return None
+    return label_for_did(profile, did)
+
+
 def resolve_relays(profile: Profile, relay: str | None) -> list[str]:
     """Relays to use: an explicit override, else the profile's defaults."""
     return [relay] if relay else list(profile.default_relays)

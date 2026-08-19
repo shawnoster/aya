@@ -4881,6 +4881,29 @@ class TestInboxTrustBadge:
         assert data["signature_valid"] is True
         assert data["trusted"] is True
 
+    def test_a_forged_sender_is_not_labelled_with_the_peer_it_claims(self, capsys):
+        """The badge is one column; the From column must not undo it.
+
+        A reader scanning From, or a script reading from_label without also
+        reading signature_valid, would otherwise be told the packet is "home".
+        """
+        from aya.adapters.cli._render import _extract_packet_data, _show_inbox
+        from aya.entities.identity import Identity
+        from aya.entities.packet import Packet
+
+        profile, peer = self._setup()
+        attacker = Identity.generate("attacker")
+        forged = Packet(
+            from_did=attacker.did, to_did=attacker.did, intent="forged", content="y"
+        ).sign(attacker)
+        forged.from_did = peer.did
+
+        assert _extract_packet_data(forged, profile)["from_label"] is None
+
+        _show_inbox([forged], profile)
+        out = capsys.readouterr().out
+        assert "home" not in out, "the forged row must not carry the claimed peer's label"
+
     def test_the_three_badge_states_are_distinct(self, capsys):
         """A bad signature must not render as the same cautious '?' as a stranger."""
         from aya.adapters.cli._render import _show_inbox
@@ -4901,7 +4924,17 @@ class TestInboxTrustBadge:
 
         _show_inbox([good, stranger, forged], profile)
         out = capsys.readouterr().out
-        assert "bad sig" in out, "a forged sender needs its own marker"
-        # Rich renders to plain text, so assert on what a user actually sees.
-        assert "✓" in out
-        assert "?" in out
+        # The caption legend names all three symbols, so assert on the rows
+        # alone — otherwise every marker is "present" no matter what rendered.
+        rows = out.split("\u2514")[0]
+        good_row, stranger_row, forged_row = (
+            line
+            for line in rows.splitlines()
+            if "good" in line or "stranger" in line or "forged" in line
+        )
+        assert "\u2713" in good_row
+        assert "?" in stranger_row
+        # Rich wraps "invalid signature" across the row's two lines, so match
+        # the word that stays on the first one.
+        assert "invalid" in forged_row, "a forged sender needs its own marker"
+        assert "?" not in forged_row, "a forgery must not read as merely unknown"

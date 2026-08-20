@@ -22,12 +22,12 @@ from aya.adapters.cli._kernel import (
     _resolve_instance,
     app,
     console,
-    err,
     resolve_format,
 )
 
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
+from aya.adapters.error_map import describe
 from aya.usecases.pair import (
     PairingError,
     generate_code,
@@ -84,8 +84,11 @@ def pair(
         try:
             result = asyncio.run(join_pairing(local, code, relay_urls))
         except PairingError as exc:
-            err.print(f"[red]{exc}[/red]")
-            raise typer.Exit(1) from exc
+            # Through _emit_error: this printed straight to the console, so
+            # `--format json` reported a pairing failure with no payload at all.
+            described = describe(exc)
+            code, detail, context = described or (ErrorCode.PAIR_FAILED, str(exc), {})
+            _emit_error(code, detail, context)
 
         trusted = result.trusted
         promoted = _record_pairing(p, profile, peer, trusted, result.relay)

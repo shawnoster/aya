@@ -23,6 +23,7 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
+from aya.adapters.error_map import describe
 from aya.adapters.outbox import (
     NOT_INGESTED_HINT,
     delivery_from_report,
@@ -367,8 +368,14 @@ def _text(data: object) -> types.CallToolResult:
     return _rendered(json.dumps(data, indent=2, default=str))
 
 
-def _error(message: str) -> types.CallToolResult:
+def _error(
+    message: str, *, code: str | None = None, context: dict[str, Any] | None = None
+) -> types.CallToolResult:
     """A failed tool call.
+
+    *code* and *context* come from ``adapters.error_map`` for a domain error, so an
+    agent gets the same machine-readable fields the CLI emits. Without them the DID
+    in a truncated message was unrecoverable here while the CLI carried it in full.
 
     ``is_error`` is what tells a client this was a failure. Set here rather than
     at the dispatch boundary because handlers construct their own errors too, and
@@ -376,8 +383,13 @@ def _error(message: str) -> types.CallToolResult:
     carry an ``error`` key — ``relay_ops`` puts ``error: "persist_failed"`` on a
     packet whose body would not write — so there is nothing in the content to sniff.
     """
+    payload: dict[str, Any] = {"error": message}
+    if code is not None:
+        payload["code"] = code
+    if context:
+        payload["context"] = context
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=json.dumps({"error": message}))],
+        content=[types.TextContent(type="text", text=json.dumps(payload, default=str))],
         is_error=True,
     )
 
@@ -711,7 +723,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResul
         return await handler(arguments)
     except Exception as exc:
         logger.exception("Tool %s failed", name)
-        return _error(str(exc))
+        described = describe(exc)
+        if described is None:
+            return _error(str(exc))
+        code, detail, context = described
+        return _error(detail, code=code, context=context)
 
 
 # ── transport wiring ─────────────────────────────────────────────────────────

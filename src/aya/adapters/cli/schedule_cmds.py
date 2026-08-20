@@ -23,6 +23,7 @@ from aya.adapters.install import install_scheduler, uninstall_scheduler
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
 from aya.scheduler import (
+    DEFAULT_PRUNE_DAYS,
     SEVERITY_ACTIONABLE,
     SEVERITY_HEARTBEAT,
     AlertItem,
@@ -41,6 +42,7 @@ from aya.scheduler import (
     is_idle,
     list_items,
     parse_due,
+    prune_items,
     record_activity,
     run_tick,
     show_alerts,
@@ -267,6 +269,53 @@ def schedule_list(
         _output_json({"items": items})
     else:
         _display_items(items)
+
+
+@schedule_app.command("prune")
+def schedule_prune(
+    older_than: int = typer.Option(
+        DEFAULT_PRUNE_DAYS, "--older-than", help="Drop finished items older than N days"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would go"),
+    format_: OutputFormat = typer.Option(
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
+    ),
+) -> None:
+    """Drop dismissed and done items. Nothing that could still fire is touched."""
+    format_ = resolve_format(format_)
+    pruned, remaining = prune_items(older_than_days=older_than, dry_run=dry_run)
+
+    if format_ == OutputFormat.JSON:
+        _output_json(
+            {
+                "pruned": [
+                    {"id": i["id"], "type": i.get("type"), "status": i.get("status")}
+                    for i in pruned
+                ],
+                "pruned_count": len(pruned),
+                "remaining": remaining,
+                "older_than_days": older_than,
+                "dry_run": dry_run,
+            }
+        )
+        return
+
+    # "would drop" only in dry-run: a preview that reports the change as done is
+    # how `schedule install` came to claim a crontab it had not written.
+    verb = "would drop" if dry_run else "dropped"
+    if not pruned:
+        console.print(f"[dim]Nothing to prune — no finished items older than {older_than}d.[/dim]")
+        return
+    console.print(f"[yellow]{verb}[/yellow] {len(pruned)} item(s) older than {older_than}d:")
+    for item in pruned[:10]:
+        console.print(
+            f"  {item['id'][:8]}  {item.get('type', '?')}/{item.get('status', '?')}  "
+            f"{str(item.get('message', ''))[:50]}"
+        )
+    if len(pruned) > 10:
+        console.print(f"  [dim]… and {len(pruned) - 10} more[/dim]")
+    tense = "would remain" if dry_run else "remain"
+    console.print(f"[dim]{remaining} item(s) {tense}.[/dim]")
 
 
 @schedule_app.command("dismiss")

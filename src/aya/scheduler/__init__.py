@@ -164,6 +164,8 @@ from .display import (
 
 # ── core operations ──────────────────────────────────────────────────────────
 from .core import (
+    DEFAULT_PRUNE_DAYS,
+    prune_items,
     _passes_severity_filter,
     add_recurring,
     add_reminder,
@@ -282,7 +284,9 @@ __all__ = [
     "add_recurring",
     "add_seed_alert",
     "list_items",
+    "DEFAULT_PRUNE_DAYS",
     "dismiss_item",
+    "prune_items",
     "dismiss_alert",
     "snooze_item",
     "check_due",

@@ -73,6 +73,10 @@ class SchedulerItem(TypedDict):
     # Reminder-specific (absent on watch / recurring items)
     due_at: NotRequired[str]
     delivered_at: NotRequired[str | None]
+    # Set on every dismissal so prune_items can age items out. Watches had no
+    # dismissal time before, so pruning fell back to created_at, which ages a
+    # long-lived watch out the moment it is dismissed.
+    dismissed_at: NotRequired[str]
     snoozed_until: NotRequired[str | None]
     # Watch-specific
     provider: NotRequired[str]

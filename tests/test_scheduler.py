@@ -919,3 +919,111 @@ class TestGetActiveWatches:
         add_reminder("Not a watch", "in 1 hour")
         watches = get_active_watches()
         assert all(w["type"] == "watch" for w in watches)
+
+
+class TestPruneItems:
+    """Dismissed records accumulated with no way to clear them — 31 of 33 locally.
+
+    Pruning has to be careful in one direction only: dropping something that could
+    still fire loses a reminder or stops a watch, while keeping a stale record
+    costs a few bytes. So every ambiguity resolves toward keeping.
+    """
+
+    @staticmethod
+    def _item(item_id: str, *, status: str, days_ago: int | None, key: str = "dismissed_at"):
+        from datetime import timedelta
+
+        from aya.adapters import clock
+
+        item = {
+            "id": item_id,
+            "type": "watch",
+            "status": status,
+            "message": f"item {item_id}",
+            "created_at": clock.now().isoformat(),
+        }
+        if days_ago is not None:
+            item[key] = (clock.now() - timedelta(days=days_ago)).isoformat()
+        return item
+
+    def test_it_drops_old_dismissed_items(self):
+        from aya.scheduler import prune_items
+        from aya.scheduler.storage import save_items
+
+        save_items(
+            [
+                self._item("01OLD", status="dismissed", days_ago=90),
+                self._item("01NEW", status="dismissed", days_ago=1),
+            ]
+        )
+        pruned, remaining = prune_items(older_than_days=30)
+
+        assert [i["id"] for i in pruned] == ["01OLD"]
+        assert remaining == 1
+
+    def test_it_never_drops_something_that_could_still_fire(self):
+        """Age is irrelevant for anything unfinished."""
+        from aya.scheduler import prune_items
+        from aya.scheduler.storage import load_items, save_items
+
+        save_items(
+            [
+                self._item("01ACTIVE", status="active", days_ago=999),
+                self._item("01PENDING", status="pending", days_ago=999),
+                self._item("01SNOOZED", status="snoozed", days_ago=999),
+            ]
+        )
+        pruned, _remaining = prune_items(older_than_days=1)
+
+        assert pruned == []
+        assert len(load_items()) == 3
+
+    def test_a_dry_run_writes_nothing(self):
+        """A preview that reports the change as done is how #326 happened."""
+        from aya.scheduler import prune_items
+        from aya.scheduler.storage import load_items, save_items
+
+        save_items([self._item("01OLD", status="dismissed", days_ago=90)])
+        pruned, remaining = prune_items(older_than_days=30, dry_run=True)
+
+        assert [i["id"] for i in pruned] == ["01OLD"], "the preview still reports the item"
+        assert remaining == 0, "and projects the count, rather than reporting the current one"
+        assert len(load_items()) == 1, "while the store is untouched"
+
+    def test_it_falls_back_to_created_at_when_there_is_no_dismissal_time(self):
+        """Watches dismissed before `dismissed_at` existed carry only created_at."""
+        from aya.scheduler import prune_items
+        from aya.scheduler.storage import save_items
+
+        # key="created_at" overwrites the fresh created_at, leaving an item with an
+        # old creation time and no dismissed_at — the pre-existing shape.
+        item = self._item("01LEGACY", status="dismissed", days_ago=90, key="created_at")
+        assert "dismissed_at" not in item
+        save_items([item])
+        pruned, _remaining = prune_items(older_than_days=30)
+
+        assert [i["id"] for i in pruned] == ["01LEGACY"]
+
+    def test_an_unparseable_date_is_kept(self):
+        """A date we cannot read is not evidence that the item is old."""
+        from aya.scheduler import prune_items
+        from aya.scheduler.storage import load_items, save_items
+
+        item = self._item("01BADDATE", status="dismissed", days_ago=None)
+        item["dismissed_at"] = "not-a-date"
+        save_items([item])
+        pruned, _remaining = prune_items(older_than_days=1)
+
+        assert pruned == []
+        assert len(load_items()) == 1
+
+    def test_dismissing_records_the_time(self):
+        """Without it, pruning a watch had to fall back to when it was created."""
+        from aya.scheduler import dismiss_item
+        from aya.scheduler.storage import save_items
+
+        save_items([self._item("01TODISMISS", status="active", days_ago=None)])
+        dismissed = dismiss_item("01TODISMISS")
+
+        assert dismissed["status"] == "dismissed"
+        assert dismissed["dismissed_at"], "every type records a dismissal time now"

@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v2.1.11 (2026-08-20)
+
+### Bug Fixes
+
+- **adapters**: Address PR review — narrow the error map to Exception
+  ([#344](https://github.com/shawnoster/aya/pull/344),
+  [`fe9eefc`](https://github.com/shawnoster/aya/commit/fe9eefcf82d92c8777a018c96e4d46993a7468ac))
+
+- **relay**: Address PR review — stop the pairing error shadowing the pairing code
+  ([#344](https://github.com/shawnoster/aya/pull/344),
+  [`fe9eefc`](https://github.com/shawnoster/aya/commit/fe9eefcf82d92c8777a018c96e4d46993a7468ac))
+
+### Refactoring
+
+- **adapters**: Map domain errors in one place, for both surfaces
+  ([#344](https://github.com/shawnoster/aya/pull/344),
+  [`fe9eefc`](https://github.com/shawnoster/aya/commit/fe9eefcf82d92c8777a018c96e4d46993a7468ac))
+
+### Testing
+
+- Make the commands in error messages runnable by construction
+  ([#343](https://github.com/shawnoster/aya/pull/343),
+  [`1176f70`](https://github.com/shawnoster/aya/commit/1176f70345a6e373e51ca862ed82a76a4d15e6af))
+
+
 ## v2.1.10 (2026-08-20)
 
 ### Bug Fixes

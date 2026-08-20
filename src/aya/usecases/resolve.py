@@ -36,7 +36,10 @@ class UnknownRecipientError(ValueError):
                 f"Available: {', '.join(available)}. Use a label above or a full DID."
             )
         else:
-            msg = f"Unknown recipient '{requested}'. Use a full DID, or add one with 'aya trust'."
+            msg = (
+                f"Unknown recipient '{requested}'. Use a full DID, or add a peer: "
+                "'aya trust <did> --peer <label> --nostr-pubkey <hex>'."
+            )
         super().__init__(msg)
         self.requested = requested
         self.available = available

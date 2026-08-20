@@ -87,8 +87,9 @@ def pair(
             # Through _emit_error: this printed straight to the console, so
             # `--format json` reported a pairing failure with no payload at all.
             described = describe(exc)
-            code, detail, context = described or (ErrorCode.PAIR_FAILED, str(exc), {})
-            _emit_error(code, detail, context)
+            # error_code, not code: `code` is this command's pairing-code option.
+            error_code, detail, context = described or (ErrorCode.PAIR_FAILED, str(exc), {})
+            _emit_error(error_code, detail, context)
 
         trusted = result.trusted
         promoted = _record_pairing(p, profile, peer, trusted, result.relay)

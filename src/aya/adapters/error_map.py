@@ -68,8 +68,13 @@ _CODES: dict[type[Exception], str] = {
 }
 
 
-def error_code_for(exc: BaseException) -> str | None:
-    """The reportable code for *exc*, or None if it is not a domain error."""
+def error_code_for(exc: Exception) -> str | None:
+    """The reportable code for *exc*, or None if it is not a domain error.
+
+    Takes ``Exception`` rather than ``BaseException`` to match ``_CODES``, and
+    deliberately: ``SystemExit`` and ``KeyboardInterrupt`` must propagate rather
+    than be reported to a caller as a failed operation.
+    """
     for cls in type(exc).__mro__:
         code = _CODES.get(cls)
         if code is not None:
@@ -77,12 +82,12 @@ def error_code_for(exc: BaseException) -> str | None:
     return None
 
 
-def error_context(exc: BaseException) -> dict[str, Any]:
+def error_context(exc: Exception) -> dict[str, Any]:
     """The exception's own public attributes, as machine-readable context."""
     return {k: v for k, v in vars(exc).items() if not k.startswith("_")}
 
 
-def describe(exc: BaseException) -> tuple[str, str, dict[str, Any]] | None:
+def describe(exc: Exception) -> tuple[str, str, dict[str, Any]] | None:
     """``(code, message, context)`` for a domain error, else None."""
     code = error_code_for(exc)
     if code is None:

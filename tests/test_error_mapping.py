@@ -21,9 +21,13 @@ import aya
 from aya.adapters.error_map import _CODES, describe, error_code_for, error_context
 
 
-def _domain_exceptions() -> list[type[BaseException]]:
-    """Every exception class aya defines, excluding abstract bases."""
-    found: dict[str, type[BaseException]] = {}
+def _domain_exceptions() -> list[type[Exception]]:
+    """Every exception class aya defines, excluding abstract bases.
+
+    Exception, not BaseException: error_map deliberately does not map SystemExit or
+    KeyboardInterrupt, which must propagate rather than be reported as a failure.
+    """
+    found: dict[str, type[Exception]] = {}
     for module in pkgutil.walk_packages(aya.__path__, prefix="aya."):
         try:
             mod = importlib.import_module(module.name)
@@ -31,7 +35,7 @@ def _domain_exceptions() -> list[type[BaseException]]:
             continue
         for _name, obj in inspect.getmembers(mod, inspect.isclass):
             if (
-                issubclass(obj, BaseException)
+                issubclass(obj, Exception)
                 and obj.__module__.split(".")[0] == "aya"
                 and obj.__name__ not in {"RelayOpError"}  # base class, never raised bare
             ):
@@ -118,7 +122,9 @@ class TestBothSurfacesAgree:
         from aya.usecases.relay_ops import AckSenderNotTrustedError
 
         exc = AckSenderNotTrustedError("did:key:zFullSenderIdentifier")
-        code, message, context = describe(exc)  # type: ignore[misc]
+        described = describe(exc)
+        assert described is not None, "precondition: the error is mapped"
+        code, message, context = described
         payload = json.loads(_error(message, code=code, context=context).content[0].text)
 
         assert payload["code"] == "PEER_NOT_TRUSTED"

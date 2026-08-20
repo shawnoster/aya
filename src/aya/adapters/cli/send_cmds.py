@@ -28,6 +28,7 @@ from aya.adapters.cli._render import (
     _render_ack,
     _render_send,
 )
+from aya.adapters.error_map import describe
 from aya.adapters.outbox import (
     check_idempotency,
     record_idempotency,
@@ -35,9 +36,6 @@ from aya.adapters.outbox import (
 
 # Subcommand modules — imported at top-level; each is only invoked when its
 # subcommand is actually called, so startup cost is acceptable.
-from aya.entities.identity import (
-    InstanceResolutionError,
-)
 from aya.entities.packet import ConflictStrategy, Packet
 from aya.scheduler import (
     dismiss_alert,
@@ -46,7 +44,6 @@ from aya.scheduler import (
 from aya.usecases import relay_ops
 from aya.usecases.resolve import (
     NoNostrPubkeyError,
-    UnknownRecipientError,
     nostr_pubkey_for,
 )
 
@@ -256,22 +253,12 @@ def send_cmd(
             )
         # Split per type: refusing a label is only actionable if the caller can see
         # which labels exist, and a JSON caller cannot parse them back out of prose.
-        except InstanceResolutionError as exc:
-            _emit_error(
-                ErrorCode.INSTANCE_NOT_FOUND,
-                str(exc),
-                {"instance": as_, "available": exc.available},
-            )
-        except UnknownRecipientError as exc:
-            _emit_error(
-                ErrorCode.UNKNOWN_RECIPIENT,
-                str(exc),
-                {"requested": exc.requested, "available": exc.available},
-            )
-        except NoNostrPubkeyError as exc:
-            _emit_error(ErrorCode.NO_NOSTR_PUBKEY, str(exc), {"did": exc.did})
-        except relay_ops.SendFailedError as exc:
-            _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
+        except Exception as exc:
+            described = describe(exc)
+            if described is None:
+                raise
+            code, detail, context = described
+            _emit_error(code, detail, context)
 
         if dry_run and result.packet is not None:
             _output_json(json.loads(result.packet.to_json()))
@@ -345,32 +332,15 @@ def ack(
                 idempotency_key=idempotency_key,
                 publish=not dry_run,
             )
-        except relay_ops.PacketNotIngestedError as exc:
-            _emit_error(ErrorCode.PACKET_NOT_FOUND, str(exc), {"packet_id": packet_id})
-        except relay_ops.AmbiguousPrefixError as exc:
-            _emit_error(ErrorCode.AMBIGUOUS_PREFIX, str(exc), {"packet_id": packet_id})
-        # Split rather than grouped: each of these knows something a JSON caller
-        # would otherwise have to scrape back out of the prose, and the DID in the
-        # message is truncated for readability so it is not recoverable there.
-        except relay_ops.AckSenderNotTrustedError as exc:
-            _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc), {"sender_did": exc.sender_did})
-        except relay_ops.AmbiguousAckRecipientError as exc:
-            _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc), {"available": exc.available})
-        except relay_ops.NoTrustedPeerError as exc:
-            _emit_error(ErrorCode.PEER_NOT_TRUSTED, str(exc))
-        # Reached when the sender is trusted but has no delivery key: the resolver
-        # raises rather than substituting a different peer, so this is the surface
-        # that has to render it. send and send-raw already map it.
-        except NoNostrPubkeyError as exc:
-            _emit_error(ErrorCode.NO_NOSTR_PUBKEY, str(exc), {"did": exc.did})
-        except InstanceResolutionError as exc:
-            _emit_error(
-                ErrorCode.INSTANCE_NOT_FOUND,
-                str(exc),
-                {"instance": as_, "available": exc.available},
-            )
-        except relay_ops.SendFailedError as exc:
-            _emit_error(ErrorCode.SEND_FAILED, str(exc), {"relays": exc.relays})
+        # One clause: the mapping lives in adapters.error_map so this surface and
+        # MCP cannot disagree about a code, and so a new domain error cannot reach
+        # a command that forgot to name it.
+        except Exception as exc:
+            described = describe(exc)
+            if described is None:
+                raise
+            code, detail, context = described
+            _emit_error(code, detail, context)
 
         if dry_run and result.packet is not None:
             _output_json(json.loads(result.packet.to_json()))

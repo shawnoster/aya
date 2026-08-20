@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v2.1.10 (2026-08-20)
+
+### Bug Fixes
+
+- **relay**: Address PR review — assert the exit code, not only the payload
+  ([#342](https://github.com/shawnoster/aya/pull/342),
+  [`3f22ee3`](https://github.com/shawnoster/aya/commit/3f22ee3da085614543959beb452b748d2400a9c0))
+
+- **relay**: Refuse an unrecognised recipient instead of guessing the only peer
+  ([#342](https://github.com/shawnoster/aya/pull/342),
+  [`3f22ee3`](https://github.com/shawnoster/aya/commit/3f22ee3da085614543959beb452b748d2400a9c0))
+
+
 ## v2.1.9 (2026-08-19)
 
 ### Bug Fixes

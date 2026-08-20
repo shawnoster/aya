@@ -65,9 +65,15 @@ def resolve_instance(profile: Profile, instance: str | None) -> tuple[Identity, 
 def resolve_recipient(profile: Profile, to: str) -> tuple[str, str]:
     """Resolve a label or raw DID to ``(did, label)``.
 
-    A raw DID passes through. A known label maps to its DID. When exactly one
-    peer is trusted, any label resolves to it — the same single-candidate
-    convenience ``resolve_instance_name`` applies locally.
+    A raw DID passes through and a known label maps to its DID. An unrecognised
+    label is refused, however few peers are trusted.
+
+    ``resolve_instance_name`` does apply a single-candidate default, but it is not
+    the same situation and is not a precedent for one here: it chooses among the
+    caller's *own* identities, and it returns the rule it applied so the caller can
+    say which one it used. A recipient is somebody else. Absorbing an unrecognised
+    label into "the only peer" delivers the message — content the caller wrote —
+    to a party the caller did not name, and says nothing about having done so.
     """
     if to.startswith("did:"):
         return to, to
@@ -75,11 +81,7 @@ def resolve_recipient(profile: Profile, to: str) -> tuple[str, str]:
     if key:
         return key.did, to
 
-    available = list(profile.trusted_keys)
-    if len(available) == 1:
-        label = available[0]
-        return profile.trusted_keys[label].did, label
-    raise UnknownRecipientError(to, available)
+    raise UnknownRecipientError(to, list(profile.trusted_keys))
 
 
 def nostr_pubkey_for(profile: Profile, did: str) -> str:

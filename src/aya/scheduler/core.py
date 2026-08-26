@@ -45,6 +45,8 @@ from .time_utils import (
 from .types import (
     SEVERITY_ACTIONABLE,
     SEVERITY_ORDER,
+    STATUS_DISMISSED,
+    STATUS_DONE,
     AlertDetails,
     AlertItem,
     AlertSeverity,
@@ -270,10 +272,60 @@ def dismiss_item(item_id: str) -> SchedulerItem:
         if not item:
             raise ValueError(f"Item {item_id} not found.")
         item["status"] = "dismissed"
+        now_iso = clock.now(_get_local_tz()).isoformat()
+        # Recorded for every type so prune_items can age items out. Watches had no
+        # dismissal time at all, so pruning them had to fall back to created_at —
+        # which ages a long-lived watch out the moment it is dismissed.
+        item["dismissed_at"] = now_iso
         if item["type"] == "reminder":
-            item["delivered_at"] = clock.now(_get_local_tz()).isoformat()
+            item["delivered_at"] = now_iso
         _atomic_write(_scheduler_file(), _scheduler_data(items))
     return item
+
+
+DEFAULT_PRUNE_DAYS = 30
+
+
+def prune_items(
+    *, older_than_days: int = DEFAULT_PRUNE_DAYS, dry_run: bool = False
+) -> tuple[list[SchedulerItem], int]:
+    """Drop finished items older than *older_than_days*.
+
+    Returns ``(pruned, remaining)``. Nothing that could still fire is touched:
+    only ``dismissed`` and ``done`` are eligible, so an active watch, a pending
+    reminder and a snoozed one all survive regardless of age.
+
+    Age comes from ``dismissed_at`` where present, then ``completed_at`` — how a
+    watch chain marks itself ``done`` — falling back to ``created_at`` for items
+    finished before either field existed. An item with neither is kept — an
+    unparseable date is not evidence that something is old.
+
+    *dry_run* returns exactly what a real run would remove and writes nothing.
+    """
+    cutoff = clock.now(_get_local_tz()) - timedelta(days=older_than_days)
+
+    def finished_before_cutoff(item: SchedulerItem) -> bool:
+        if item.get("status") not in {STATUS_DISMISSED, STATUS_DONE}:
+            return False
+        stamp = item.get("dismissed_at") or item.get("completed_at") or item.get("created_at")
+        if not stamp:
+            return False
+        try:
+            return datetime.fromisoformat(str(stamp)) < cutoff
+        except ValueError:
+            logger.warning("Keeping item %s: unparseable date %r", item.get("id"), stamp)
+            return False
+
+    with _file_lock():
+        items = _load_items_unlocked()
+        pruned = [i for i in items if finished_before_cutoff(i)]
+        if pruned and not dry_run:
+            keep = [i for i in items if not finished_before_cutoff(i)]
+            _atomic_write(_scheduler_file(), _scheduler_data(keep))
+            return pruned, len(keep)
+    # Projected either way: a dry run reporting the *current* count alongside a
+    # list of items it would drop invites the reader to do the subtraction.
+    return pruned, len(items) - len(pruned)
 
 
 def snooze_item(item_id: str, until_text: str) -> tuple[SchedulerItem, datetime]:

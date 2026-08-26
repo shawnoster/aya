@@ -1,0 +1,4 @@
+python-semantic-release == 10.6.1
+# Pinned — see Dockerfile comment. Remove once
+# python-semantic-release/python-semantic-release#1477 ships in a release.
+gitpython == 3.1.59

@@ -76,9 +76,15 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups
 
+      # Vendored rather than `python-semantic-release/python-semantic-release@...`
+      # directly: the upstream Docker image is rebuilt from PyPI at job start
+      # regardless of which action SHA is pinned, and GitPython 3.1.60 broke
+      # every PSR config load (python-semantic-release/python-semantic-release#1476).
+      # See .github/actions/semantic-release-pinned/Dockerfile. Revert to the
+      # upstream action once #1477 ships in a release.
       - name: Run semantic release
         id: release
-        uses: python-semantic-release/python-semantic-release@39dd2052f2ce8282a5d932c31d58a2ca06d2550e # v10.6.1
+        uses: ./.github/actions/semantic-release-pinned
         with:
           github_token: ${{ secrets.RELEASE_TOKEN }}
           no_operation_mode: ${{ inputs.dry_run || false }}

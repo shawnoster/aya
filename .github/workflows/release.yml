@@ -81,7 +81,7 @@ jobs:
       # regardless of which action SHA is pinned, and GitPython 3.1.60 broke
       # every PSR config load (python-semantic-release/python-semantic-release#1476).
       # See .github/actions/semantic-release-pinned/Dockerfile. Revert to the
-      # upstream action once #1477 ships in a release.
+      # upstream action once #1477 ships in a release — tracked in #352.
       - name: Run semantic release
         id: release
         uses: ./.github/actions/semantic-release-pinned

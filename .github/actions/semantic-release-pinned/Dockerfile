@@ -10,7 +10,7 @@
 # reaches into the upstream image's dependency resolution, so vendoring is
 # the only lever — see python-semantic-release/python-semantic-release#1476.
 # Drop this directory and point release.yml back at the upstream action once
-# #1477 ships in a release.
+# #1477 ships in a release — tracked in shawnoster/aya#352.
 FROM python:3.14-slim-trixie
 ARG WORK_DIR="/opt/psr"
 

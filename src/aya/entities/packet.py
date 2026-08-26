@@ -152,12 +152,6 @@ class Packet(BaseModel):
         """Short content hash for display — first 8 chars of SHA-256."""
         return hashlib.sha256(self.canonical_bytes()).hexdigest()[:8]
 
-    def summary(self) -> str:
-        """One-line display for inbox listing."""
-        age = human_age(self.sent_at)
-        expiry = "⏰ expiring soon" if self._expiring_soon() else ""
-        return f"[{self.id[:8]}] {self.intent}  ·  {age} {expiry}".strip()
-
     def _expiring_soon(self) -> bool:
         if self.expires_at is None:
             return False

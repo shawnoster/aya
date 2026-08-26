@@ -23,7 +23,7 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from aya.adapters.error_map import describe
+from aya.adapters.error_map import ErrorCode, describe
 from aya.adapters.outbox import (
     NOT_INGESTED_HINT,
     delivery_from_report,
@@ -33,9 +33,7 @@ from aya.adapters.profile_store import load_profile
 from aya.usecases import relay_ops
 from aya.usecases.packet_view import read_view
 from aya.usecases.resolve import (
-    NoNostrPubkeyError,
     label_for_did,
-    nostr_pubkey_for,
     resolve_instance,
     resolve_recipient,
 )
@@ -414,14 +412,6 @@ def _resolve_did(to: str, profile: Any) -> tuple[str, str]:
     return resolve_recipient(profile, to)
 
 
-def _resolve_nostr_pubkey(did: str, profile: Any) -> str | None:
-    """Look up the Nostr pubkey for a DID, or None."""
-    try:
-        return nostr_pubkey_for(profile, did)
-    except NoNostrPubkeyError:
-        return None
-
-
 def _record_send(
     profile: Any,
     packet: Any,
@@ -477,6 +467,28 @@ async def _handle_status() -> types.CallToolResult:
     return _rendered(_render_json(data))
 
 
+def _poll_result(result: relay_ops.PollResult) -> types.CallToolResult:
+    """A poll's envelope, flagged as a failure when no relay answered.
+
+    ``packets: []`` with ``is_error`` unset reads as "nothing new", when the truth
+    may be "could not check" — the two are indistinguishable to an agent, and the
+    quiet one is far more common. The envelope is kept rather than replaced with a
+    bare error so the caller can still see which instance and relays were tried.
+    """
+    payload = result.envelope()
+    if result.relay_reachable:
+        return _text(payload)
+    payload["error"] = (
+        f"No relay answered, so the inbox could not be read: {', '.join(result.relays)}. "
+        "An empty packet list here means unknown, not empty."
+    )
+    payload["code"] = ErrorCode.RELAY_UNREACHABLE
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=json.dumps(payload, indent=2, default=str))],
+        is_error=True,
+    )
+
+
 async def _handle_inbox(arguments: dict[str, Any]) -> types.CallToolResult:
     profile = _load_profile()
     result, _packets = await relay_ops.inbox(
@@ -484,7 +496,7 @@ async def _handle_inbox(arguments: dict[str, Any]) -> types.CallToolResult:
         instance=arguments.get("instance"),
         relay=arguments.get("relay"),
     )
-    return _text(result.envelope())
+    return _poll_result(result)
 
 
 async def _handle_send(arguments: dict[str, Any]) -> types.CallToolResult:
@@ -526,7 +538,7 @@ async def _handle_receive(arguments: dict[str, Any]) -> types.CallToolResult:
         instance=arguments.get("instance"),
         relay=arguments.get("relay"),
     )
-    return _text(result.envelope())
+    return _poll_result(result)
 
 
 async def _handle_schedule_remind(arguments: dict[str, Any]) -> types.CallToolResult:

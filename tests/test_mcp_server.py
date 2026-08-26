@@ -890,3 +890,108 @@ class TestToolErrorsAreFlagged:
         result = await call_tool("aya_config_show", {})
         assert result.is_error is False
         assert isinstance(json.loads(result.content[0].text), dict)
+
+
+class TestUnreachableRelayIsFlagged:
+    """`packets: []` must not read the same as "nothing new".
+
+    An unreachable poll returned a successful result whose packet list was empty,
+    so an agent could not distinguish "the inbox is empty" from "the relay could
+    not be reached" — and the quiet reading is the more common one.
+    """
+
+    @staticmethod
+    def _poll_result(*, reachable: bool):
+        from aya.usecases.relay_ops import PollResult
+
+        return PollResult(
+            packets=[],
+            instance="default",
+            relays=["wss://a", "wss://b"],
+            relay_reachable=reachable,
+        )
+
+    def test_an_unreachable_poll_is_an_error(self):
+        import json
+
+        from aya.adapters.mcp_server import _poll_result
+
+        result = _poll_result(self._poll_result(reachable=False))
+        payload = json.loads(result.content[0].text)
+
+        assert result.is_error is True
+        assert payload["code"] == "RELAY_UNREACHABLE"
+        assert "could not be read" in payload["error"]
+
+    def test_the_envelope_survives_the_error(self):
+        """A bare error would lose which instance and relays were tried."""
+        import json
+
+        from aya.adapters.mcp_server import _poll_result
+
+        payload = json.loads(_poll_result(self._poll_result(reachable=False)).content[0].text)
+
+        assert payload["instance"] == "default"
+        assert payload["relays"] == ["wss://a", "wss://b"]
+        assert payload["packets"] == []
+        assert payload["relay_reachable"] is False
+
+    async def test_the_inbox_handler_actually_uses_it(self, monkeypatch):
+        """Through call_tool, because the helper alone proves no wiring.
+
+        Asserting on `_poll_result` directly passes even if the handlers bypass it
+        — which is exactly what an earlier draft of these tests did.
+        """
+        import json
+
+        from aya.adapters import mcp_server
+        from aya.adapters.mcp_server import call_tool
+        from aya.entities.identity import Identity, Profile
+        from aya.usecases import relay_ops
+
+        profile = Profile()
+        profile.instances["default"] = Identity.generate("default")
+        monkeypatch.setattr(mcp_server, "_load_profile", lambda: profile)
+
+        async def unreachable(*_args, **_kwargs):
+            return self._poll_result(reachable=False), []
+
+        monkeypatch.setattr(relay_ops, "inbox", unreachable)
+        result = await call_tool("aya_inbox", {})
+
+        assert result.is_error is True
+        assert json.loads(result.content[0].text)["code"] == "RELAY_UNREACHABLE"
+
+    async def test_the_receive_handler_actually_uses_it(self, monkeypatch):
+        import json
+
+        from aya.adapters import mcp_server
+        from aya.adapters.mcp_server import call_tool
+        from aya.entities.identity import Identity, Profile
+        from aya.usecases import relay_ops
+
+        profile = Profile()
+        profile.instances["default"] = Identity.generate("default")
+        monkeypatch.setattr(mcp_server, "_load_profile", lambda: profile)
+
+        async def unreachable(*_args, **_kwargs):
+            return self._poll_result(reachable=False)
+
+        monkeypatch.setattr(relay_ops, "receive", unreachable)
+        result = await call_tool("aya_receive", {})
+
+        assert result.is_error is True
+        assert json.loads(result.content[0].text)["code"] == "RELAY_UNREACHABLE"
+
+    def test_a_reachable_empty_poll_is_still_a_success(self):
+        """An empty inbox is not a failure — the flag must distinguish them."""
+        import json
+
+        from aya.adapters.mcp_server import _poll_result
+
+        result = _poll_result(self._poll_result(reachable=True))
+        payload = json.loads(result.content[0].text)
+
+        assert result.is_error is False
+        assert "error" not in payload
+        assert payload["packets"] == []

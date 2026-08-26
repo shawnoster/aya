@@ -186,11 +186,3 @@ class TestPacketSerialisation:
         assert packet.content_type == ContentType.SEED
         assert isinstance(packet.content, dict)
         assert packet.content["opener"] == "Have you decided on 8 or 12 guests?"
-
-
-class TestPacketSummary:
-    def test_summary_contains_intent(self, basic_packet: Packet) -> None:
-        assert "dinner party" in basic_packet.summary()
-
-    def test_summary_contains_short_id(self, basic_packet: Packet) -> None:
-        assert basic_packet.id[:8] in basic_packet.summary()

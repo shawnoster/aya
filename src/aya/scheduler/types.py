@@ -232,6 +232,9 @@ class RelayInboxConfig(TypedDict):
     """
 
     instance: NotRequired[str]
+    # No command writes this — `aya schedule watch relay-inbox <target>` only ever
+    # sets `instance`. It is read by providers._check_relay_inbox, so hand-editing
+    # scheduler.json to pin one relay works; that is the only way to set it.
     relay: NotRequired[str]
 
 

@@ -256,7 +256,7 @@ docker restart nostr-relay
 | ---- | ---- | ---- |
 | `curl https://nostr.yourdomain.com` returns 502 | Container not running or wrong port | Check Container Manager logs; verify port 8008 is mapped |
 | WebSocket connection refused | Missing Upgrade headers in reverse proxy | Add `Upgrade` and `Connection` custom headers |
-| `aya inbox` shows nothing | `last_checked` window — packets older than cursor | Run `aya inbox --relay wss://nostr.yourdomain.com` directly |
+| `aya inbox` shows nothing | Relay unreachable, or nothing pending — check `relay_reachable` in `aya inbox --format json` | Run `aya inbox --relay wss://nostr.yourdomain.com` directly |
 | Let's Encrypt cert fails | Port 80/443 not forwarded to NAS | Check router port forwarding; verify DDNS resolves to your WAN IP |
 | NIP-42 auth rejected | Pubkey not in whitelist | Add hex pubkey to `pubkey_whitelist` in config.toml and restart |
 | Works on LAN, fails remotely | NAS firewall blocking 443 | DSM Control Panel → Security → Firewall → allow 443 from WAN |

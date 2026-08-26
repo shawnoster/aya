@@ -33,9 +33,7 @@ from aya.adapters.profile_store import load_profile
 from aya.usecases import relay_ops
 from aya.usecases.packet_view import read_view
 from aya.usecases.resolve import (
-    NoNostrPubkeyError,
     label_for_did,
-    nostr_pubkey_for,
     resolve_instance,
     resolve_recipient,
 )
@@ -412,14 +410,6 @@ def _resolve_instance(profile: Any, instance: str | None) -> Any:
 def _resolve_did(to: str, profile: Any) -> tuple[str, str]:
     """Resolve a label or DID. Raises UnknownRecipientError (a ValueError)."""
     return resolve_recipient(profile, to)
-
-
-def _resolve_nostr_pubkey(did: str, profile: Any) -> str | None:
-    """Look up the Nostr pubkey for a DID, or None."""
-    try:
-        return nostr_pubkey_for(profile, did)
-    except NoNostrPubkeyError:
-        return None
 
 
 def _record_send(

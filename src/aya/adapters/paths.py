@@ -41,10 +41,37 @@ _CONSTANTS: dict[str, str] = {
 }
 
 
+class RealAyaHomeUnderTestError(RuntimeError):
+    """Raised when test code would resolve the developer's real AYA_HOME."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Refusing to use the real AYA_HOME from a test: set the AYA_HOME "
+            "environment variable to a temporary directory. Code run outside "
+            "tests/ does not get conftest's isolate_aya_home fixture, so it would "
+            "read and write the developer's own aya data."
+        )
+
+
 def default_home() -> Path:
-    """Resolve AYA_HOME from the environment, falling back to ``~/.aya``."""
+    """Resolve AYA_HOME from the environment, falling back to ``~/.aya``.
+
+    Under pytest the fallback is refused rather than served. ``tests/conftest.py``
+    sets AYA_HOME for every test, but only for code run from ``tests/`` — a script
+    or probe run from anywhere else reaches the developer's real home and writes
+    to it. That is not hypothetical: it overwrote a real ledger, losing the sent
+    log and the drop list, and nothing failed at the time.
+
+    Raising here rather than in each writer covers every path under the home —
+    profile, scheduler, packets — and fails at resolution, before anything is
+    created. Set AYA_HOME explicitly to run against a chosen directory.
+    """
     env = os.environ.get("AYA_HOME")
-    return Path(env).expanduser() if env else Path.home() / ".aya"
+    if env:
+        return Path(env).expanduser()
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        raise RealAyaHomeUnderTestError
+    return Path.home() / ".aya"
 
 
 if TYPE_CHECKING:

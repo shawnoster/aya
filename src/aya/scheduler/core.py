@@ -295,9 +295,10 @@ def prune_items(
     only ``dismissed`` and ``done`` are eligible, so an active watch, a pending
     reminder and a snoozed one all survive regardless of age.
 
-    Age comes from ``dismissed_at`` where present, falling back to ``created_at``
-    for items dismissed before that field existed. An item with neither is kept —
-    an unparseable date is not evidence that something is old.
+    Age comes from ``dismissed_at`` where present, then ``completed_at`` — how a
+    watch chain marks itself ``done`` — falling back to ``created_at`` for items
+    finished before either field existed. An item with neither is kept — an
+    unparseable date is not evidence that something is old.
 
     *dry_run* returns exactly what a real run would remove and writes nothing.
     """
@@ -306,7 +307,7 @@ def prune_items(
     def finished_before_cutoff(item: SchedulerItem) -> bool:
         if item.get("status") not in {STATUS_DISMISSED, STATUS_DONE}:
             return False
-        stamp = item.get("dismissed_at") or item.get("created_at")
+        stamp = item.get("dismissed_at") or item.get("completed_at") or item.get("created_at")
         if not stamp:
             return False
         try:

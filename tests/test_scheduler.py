@@ -990,6 +990,23 @@ class TestPruneItems:
         assert remaining == 0, "and projects the count, rather than reporting the current one"
         assert len(load_items()) == 1, "while the store is untouched"
 
+    def test_a_done_item_is_aged_by_completion_not_creation(self):
+        """A watch chain records completed_at, not dismissed_at, when it finishes."""
+        from datetime import timedelta
+
+        from aya.adapters import clock
+        from aya.scheduler import prune_items
+        from aya.scheduler.storage import save_items
+
+        # Long-lived chain: created long ago, but only just completed.
+        item = self._item("01CHAIN", status="done", days_ago=1, key="completed_at")
+        item["created_at"] = (clock.now() - timedelta(days=90)).isoformat()
+        save_items([item])
+        pruned, remaining = prune_items(older_than_days=30)
+
+        assert pruned == []
+        assert remaining == 1
+
     def test_it_falls_back_to_created_at_when_there_is_no_dismissal_time(self):
         """Watches dismissed before `dismissed_at` existed carry only created_at."""
         from aya.scheduler import prune_items

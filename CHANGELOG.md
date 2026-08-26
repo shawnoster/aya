@@ -2,6 +2,55 @@
 
 <!-- version list -->
 
+## v2.2.0 (2026-08-26)
+
+### Bug Fixes
+
+- **mcp**: Report an unreachable relay as a failed call, not an empty inbox
+  ([#346](https://github.com/shawnoster/aya/pull/346),
+  [`b0d6ccc`](https://github.com/shawnoster/aya/commit/b0d6ccc6ee459227ef34e9792581115f6d2e9770))
+
+- **paths**: Address PR review feedback — drop redundant PYTEST_CURRENT_TEST setenv
+  ([#345](https://github.com/shawnoster/aya/pull/345),
+  [`699758b`](https://github.com/shawnoster/aya/commit/699758b8556de4061fe411d54e1171b111cd668e))
+
+- **paths**: Refuse the real AYA_HOME when running under pytest
+  ([#345](https://github.com/shawnoster/aya/pull/345),
+  [`699758b`](https://github.com/shawnoster/aya/commit/699758b8556de4061fe411d54e1171b111cd668e))
+
+- **release**: Vendor python-semantic-release's docker action to pin gitpython
+  ([#351](https://github.com/shawnoster/aya/pull/351),
+  [`d144bb9`](https://github.com/shawnoster/aya/commit/d144bb966de086df2eea2f320ece0a19b630b282))
+
+- **scheduler**: Address PR review feedback — age done items by completed_at
+  ([#348](https://github.com/shawnoster/aya/pull/348),
+  [`c968f1a`](https://github.com/shawnoster/aya/commit/c968f1aa7a8eeee4b347701278c7e95fac5371bf))
+
+### Chores
+
+- Retire dead code and a stale doc row from the audit sweep
+  ([#347](https://github.com/shawnoster/aya/pull/347),
+  [`f4ad1f5`](https://github.com/shawnoster/aya/commit/f4ad1f5529588ccd29451bbe615cd6a1ed52a961))
+
+- **deps-dev**: Bump mypy from 2.3.0 to 2.3.1 ([#350](https://github.com/shawnoster/aya/pull/350),
+  [`852cde6`](https://github.com/shawnoster/aya/commit/852cde6f86b1e73f29205889ac263948c246399a))
+
+- **deps-dev**: Bump ruff from 0.16.3 to 0.16.4 ([#349](https://github.com/shawnoster/aya/pull/349),
+  [`8966556`](https://github.com/shawnoster/aya/commit/89665565a5f0fd5c200a7134d014119c8b3363c0))
+
+### Features
+
+- **scheduler**: Add `aya schedule prune` for finished items
+  ([#348](https://github.com/shawnoster/aya/pull/348),
+  [`c968f1a`](https://github.com/shawnoster/aya/commit/c968f1aa7a8eeee4b347701278c7e95fac5371bf))
+
+### Testing
+
+- Set AYA_HOME for the whole session, not just inside each test
+  ([#345](https://github.com/shawnoster/aya/pull/345),
+  [`699758b`](https://github.com/shawnoster/aya/commit/699758b8556de4061fe411d54e1171b111cd668e))
+
+
 ## v2.1.11 (2026-08-20)
 
 ### Bug Fixes

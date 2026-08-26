@@ -20,6 +20,14 @@ from rich.console import Console
 from rich.markup import escape
 
 from aya.adapters import paths as _paths
+
+# Explicit re-export (mypy strict forbids the implicit form): the CLI modules
+# have always imported ErrorCode from here, and the codes now live beside the
+# mapping that MCP shares.
+# The redundant-looking alias is mypy's explicit re-export form, which strict
+# mode requires and ruff's PLC0414 objects to. Keeping it means the nine CLI
+# modules that import ErrorCode from here need no change.
+from aya.adapters.error_map import ErrorCode as ErrorCode  # noqa: PLC0414
 from aya.adapters.profile_store import load_profile, save_profile
 
 # Subcommand modules — imported at top-level; each is only invoked when its
@@ -123,23 +131,6 @@ def resolve_status_format(fmt: StatusFormat) -> StatusFormat:
     if env in ("text", "json", "rich"):
         return StatusFormat(env)
     return StatusFormat.TEXT if sys.stdout.isatty() else StatusFormat.JSON
-
-
-class ErrorCode:
-    PROFILE_NOT_FOUND = "PROFILE_NOT_FOUND"
-    INSTANCE_NOT_FOUND = "INSTANCE_NOT_FOUND"
-    RELAY_UNREACHABLE = "RELAY_UNREACHABLE"
-    RELAY_TIMEOUT = "RELAY_TIMEOUT"
-    SIGNATURE_INVALID = "SIGNATURE_INVALID"
-    PACKET_NOT_FOUND = "PACKET_NOT_FOUND"
-    PEER_NOT_TRUSTED = "PEER_NOT_TRUSTED"
-    PAIR_FAILED = "PAIR_FAILED"
-    INVALID_ARGUMENT = "INVALID_ARGUMENT"
-    AMBIGUOUS_PREFIX = "AMBIGUOUS_PREFIX"
-    SEND_FAILED = "SEND_FAILED"
-    PAIR_TIMEOUT = "PAIR_TIMEOUT"
-    UNKNOWN_RECIPIENT = "UNKNOWN_RECIPIENT"
-    NO_NOSTR_PUBKEY = "NO_NOSTR_PUBKEY"
 
 
 def _want_json_errors() -> bool:

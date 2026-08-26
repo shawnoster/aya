@@ -27,7 +27,6 @@ class TestRealHomeIsRefusedUnderTest:
         from aya.adapters.paths import default_home
 
         monkeypatch.setenv("AYA_HOME", str(tmp_path / "chosen"))
-        monkeypatch.setenv("PYTEST_CURRENT_TEST", "probe (call)")
         assert default_home() == tmp_path / "chosen"
 
     def test_outside_pytest_the_fallback_still_works(self, monkeypatch):

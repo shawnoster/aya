@@ -25,6 +25,31 @@ os.environ["NO_COLOR"] = "1"
 os.environ.pop("FORCE_COLOR", None)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _session_aya_home(tmp_path_factory):
+    """Guarantee AYA_HOME is set for the whole session, not just inside a test.
+
+    ``isolate_aya_home`` is function-scoped, so it has not run when a module- or
+    session-scoped fixture executes — and ``paths.default_home()`` refuses the real
+    home under pytest. Any module-scoped fixture that touches a path would fail
+    without this, which is not a property of the fixture that wrote it.
+
+    Per-test isolation still comes from ``isolate_aya_home``; this only ensures the
+    variable is never unset.
+    """
+    home = tmp_path_factory.mktemp("aya_home_session")
+    (home / "packets").mkdir(exist_ok=True)
+    previous = os.environ.get("AYA_HOME")
+    os.environ["AYA_HOME"] = str(home)
+    try:
+        yield home
+    finally:
+        if previous is None:
+            os.environ.pop("AYA_HOME", None)
+        else:
+            os.environ["AYA_HOME"] = previous
+
+
 @pytest.fixture(autouse=True)
 def isolate_aya_home(tmp_path, monkeypatch):
     """Point every aya data path at a per-test scratch directory.

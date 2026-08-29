@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.2.1 (2026-08-29)
+
+### Bug Fixes
+
+- **hooks**: Bundle all new session crons into one JSON object
+  ([#355](https://github.com/shawnoster/aya/pull/355),
+  [`a08673c`](https://github.com/shawnoster/aya/commit/a08673c929487f2d3624c35b2f43b47b3146254b))
+
+
 ## v2.2.0 (2026-08-26)
 
 ### Bug Fixes

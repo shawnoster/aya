@@ -785,10 +785,13 @@ class TestHookCrons:
         assert "CronCreate" in ctx
         assert "test-cron" in ctx
 
-    def test_multiple_crons_emit_separate_lines(self, isolated_scheduler):
-        """Each session cron must produce its own JSON line so Claude Code
-        creates a separate system reminder per cron — prevents truncation
-        when multiple crons are bundled into a single hookSpecificOutput."""
+    def test_multiple_crons_bundle_into_one_json_object(self, isolated_scheduler):
+        """All new session crons must bundle into ONE JSON object. Claude
+        Code parses a hook's stdout as a single JSON document, so printing
+        one JSON object per cron produces NDJSON that fails to parse as
+        soon as more than one cron is new at once — the exact bug this
+        test guards against. Every cron's REGISTER instruction must still
+        appear intact inside the single additionalContext string."""
         scheduler_file = isolated_scheduler / "scheduler.json"
         scheduler_file.write_text(
             json.dumps(
@@ -823,21 +826,15 @@ class TestHookCrons:
         assert result.exit_code == 0
 
         lines = [ln for ln in result.output.strip().splitlines() if ln.strip()]
-        assert len(lines) == 2, f"Expected 2 JSON lines, got {len(lines)}: {lines}"
+        assert len(lines) == 1, f"Expected exactly 1 JSON line, got {len(lines)}: {lines}"
 
-        parsed = [json.loads(ln) for ln in lines]
-        ids = set()
-        for obj in parsed:
-            assert "hookSpecificOutput" in obj
-            ctx = obj["hookSpecificOutput"]["additionalContext"]
-            assert "REQUIRED ACTION" in ctx
-            assert "CronCreate" in ctx
-            # Extract the cron id from the context
-            for cron_id in ("cron-health", "cron-relay"):
-                if cron_id in ctx:
-                    ids.add(cron_id)
-
-        assert ids == {"cron-health", "cron-relay"}, f"Missing cron IDs: {ids}"
+        obj = json.loads(lines[0])
+        assert "hookSpecificOutput" in obj
+        ctx = obj["hookSpecificOutput"]["additionalContext"]
+        assert "REQUIRED ACTION" in ctx
+        assert "CronCreate" in ctx
+        assert "cron-health" in ctx
+        assert "cron-relay" in ctx
 
     def test_escapes_double_quotes_in_prompt(self, isolated_scheduler):
         """Prompts with double quotes must be escaped to avoid malformed output."""

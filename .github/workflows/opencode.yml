@@ -8,11 +8,19 @@ on:
 
 jobs:
   opencode:
+    # This is a public repo: any comment can carry the trigger phrase, and the
+    # workflow spends ANTHROPIC_API_KEY once it runs. Restrict to commenters
+    # GitHub itself trusts with repo access — excludes bots (e.g. Copilot's
+    # review comments) and any outside/first-time commenter, not just the
+    # trigger phrase.
     if: |
-      contains(github.event.comment.body, ' /oc') ||
-      startsWith(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, ' /opencode') ||
-      startsWith(github.event.comment.body, '/opencode')
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+      (
+        contains(github.event.comment.body, ' /oc') ||
+        startsWith(github.event.comment.body, '/oc') ||
+        contains(github.event.comment.body, ' /opencode') ||
+        startsWith(github.event.comment.body, '/opencode')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

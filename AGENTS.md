@@ -26,6 +26,10 @@ aya schedule activity
 # Check what's pending for this session
 aya schedule pending --format json
 
+# Callers that run every turn: skip delivered alerts, then confirm delivery
+aya schedule pending --format json --skip-delivered --defer-receipt
+aya schedule delivered <alert-id> [<alert-id>...]
+
 # List active items
 aya schedule list
 
@@ -168,17 +172,35 @@ To remove everything: `aya schedule uninstall`.
 
 aya ships an OpenCode plugin (`opencode-plugin/aya-reminders.js`) that
 proactively surfaces due reminders and unseen alerts inside OpenCode sessions.
+It targets the OpenCode V2 plugin API and does not load in OpenCode 1.x.
 
 ### How it works
 
-The plugin hooks into OpenCode's `session.idle` event (fires when you stop
-typing). On each idle tick it calls `aya schedule pending --format json`,
-and if anything is due it:
+The plugin subscribes to OpenCode's event stream. When a top-level session
+finishes a turn (`session.execution.succeeded`), it calls
+`aya schedule pending --format json --skip-delivered --defer-receipt` and adds
+any pending alerts to that session as a synthetic message, queued without
+starting a new turn, so the agent sees them on your next prompt. Due reminders
+reach it as alerts, created by `aya schedule tick`. Subagent sessions are
+skipped.
 
-1. Shows a `tui.toast.show` notification in the TUI status bar for each item
-2. Injects a summary into `tui.prompt.append` so the agent sees it on your next message
+Delivery is confirmed in two steps, because the plugin runs every turn rather
+than once per session:
 
-A 15-second debounce prevents hammering aya on every brief pause.
+- `--skip-delivered` leaves out alerts any session has already been given.
+  Without it, an alert returns each time its 5-minute claim expires.
+- `--defer-receipt` claims alerts without marking them delivered. The plugin
+  runs `aya schedule delivered <id>...` once the message is posted. If posting
+  fails, the claim expires and the alert is offered again instead of being
+  lost.
+
+A 15-second debounce avoids starting an `aya` process on every turn. Session
+crons are not handled by the plugin
+([#365](https://github.com/shawnoster/aya/issues/365)).
+
+The plugin needs aya 2.3.0 or later for those options. With an older aya,
+`pending` rejects the options and the plugin logs the error to the OpenCode
+server log.
 
 ### Install
 
@@ -192,7 +214,7 @@ Or add it to your `opencode.json` by path:
 
 ```json
 {
-  "plugin": ["/path/to/aya/opencode-plugin/aya-reminders.js"]
+  "plugins": ["/path/to/aya/opencode-plugin/aya-reminders.js"]
 }
 ```
 

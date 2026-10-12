@@ -1212,6 +1212,48 @@ class TestScheduleStatusCLI:
         assert "alerts" in data
         assert "session_crons" in data
 
+    def test_pending_defer_receipt_then_delivered_is_the_plugin_flow(self):
+        """`pending --defer-receipt` claims; `delivered` confirms; nothing repeats."""
+        from aya.scheduler import _alerts_file, load_alerts
+        from aya.scheduler.storage import _claims_dir
+
+        _alerts_file().write_text(
+            json.dumps(
+                {
+                    "alerts": [
+                        {
+                            "id": "cli-a1",
+                            "source_item_id": "s1",
+                            "created_at": "2026-01-01T00:00:00-07:00",
+                            "message": "Reminder due: test",
+                            "details": {},
+                            "seen": False,
+                        }
+                    ]
+                }
+            )
+        )
+        args = ["schedule", "pending", "--format", "json", "--skip-delivered", "--defer-receipt"]
+
+        first = runner.invoke(app, args)
+        assert first.exit_code == 0
+        assert [a["id"] for a in json.loads(first.output)["alerts"]] == ["cli-a1"]
+        assert "delivered_at" not in load_alerts()[0]
+
+        confirmed = runner.invoke(app, ["schedule", "delivered", "cli-a1", "--format", "json"])
+        assert confirmed.exit_code == 0
+        assert json.loads(confirmed.output) == {"delivered": ["cli-a1"], "missing": []}
+
+        for claim in _claims_dir().glob("*.claimed"):
+            claim.unlink()
+        again = runner.invoke(app, args)
+        assert json.loads(again.output)["alerts"] == []
+
+    def test_delivered_unknown_id_exits_nonzero(self):
+        result = runner.invoke(app, ["schedule", "delivered", "no-such-alert", "--format", "json"])
+        assert result.exit_code == 1
+        assert json.loads(result.output) == {"delivered": [], "missing": ["no-such-alert"]}
+
     def test_pending_json_long_prompt_no_wrapping(self, tmp_path, monkeypatch):
         """Regression: Rich console.print() wraps at 80 cols, injecting literal
         newlines inside JSON string values.  console.out() must be used instead.

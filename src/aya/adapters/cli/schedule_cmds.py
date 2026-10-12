@@ -41,6 +41,7 @@ from aya.scheduler import (
     get_scheduler_status,
     is_idle,
     list_items,
+    mark_alerts_delivered,
     parse_due,
     prune_items,
     record_activity,
@@ -393,6 +394,19 @@ def schedule_pending(
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
+    skip_delivered: bool = typer.Option(
+        False,
+        "--skip-delivered",
+        help="Leave out alerts already delivered to any session. For callers that run every turn.",
+    ),
+    defer_receipt: bool = typer.Option(
+        False,
+        "--defer-receipt",
+        help=(
+            "Claim alerts without marking them delivered; confirm with `aya schedule delivered`. "
+            "Unconfirmed alerts return once their claim expires."
+        ),
+    ),
 ) -> None:
     """Show pending items for this session — alerts to deliver + session crons.
 
@@ -400,18 +414,49 @@ def schedule_pending(
         aya scheduler pending --format text
     """
     format_ = resolve_format(format_)
+    stamp_receipt = not defer_receipt
     if format_ == OutputFormat.JSON:
         min_severity: AlertSeverity = SEVERITY_HEARTBEAT if all_severities else SEVERITY_ACTIONABLE
-        pending = get_pending(min_severity=min_severity)
+        pending = get_pending(
+            min_severity=min_severity,
+            skip_delivered=skip_delivered,
+            stamp_receipt=stamp_receipt,
+        )
         _output_json(pending)
     else:
         # Always fetch all severities for text output so format_pending
         # can summarize queued non-actionable alerts without --all.
-        pending = get_pending(min_severity=SEVERITY_HEARTBEAT)
+        pending = get_pending(
+            min_severity=SEVERITY_HEARTBEAT,
+            skip_delivered=skip_delivered,
+            stamp_receipt=stamp_receipt,
+        )
         # Same reason as schedule status below: format_pending is plain text and
         # brackets both the severity and the cron meta block, which Rich would
         # read as style tags and drop.
         console.print(format_pending(pending, show_all=all_severities), markup=False)
+
+
+@schedule_app.command("delivered")
+def schedule_delivered(
+    alert_ids: list[str] = typer.Argument(help="Full alert IDs to mark delivered"),
+    format_: OutputFormat = typer.Option(
+        OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
+    ),
+) -> None:
+    """Mark alerts delivered — the confirmation step after `pending --defer-receipt`."""
+    format_ = resolve_format(format_)
+    requested = set(alert_ids)
+    missing = mark_alerts_delivered(requested)
+    delivered = sorted(requested - missing)
+    if format_ == OutputFormat.JSON:
+        _output_json({"delivered": delivered, "missing": sorted(missing)})
+    else:
+        console.print(f"[green]✓[/green] Marked {len(delivered)} alert(s) delivered")
+        for alert_id in sorted(missing):
+            err.print(f"[red]Alert {alert_id} not found.[/red]")
+    if missing:
+        raise typer.Exit(1)
 
 
 @schedule_app.command("status")

@@ -89,28 +89,38 @@ def hook_crons(
 
     new_crons = [c for c in crons if c.get("id", "") in new_ids]
 
-    # Emit one hookSpecificOutput per new cron so each gets its own system
-    # reminder and can't be truncated when multiple crons are bundled.
+    # Emit ONE hookSpecificOutput bundling every new cron. Claude Code
+    # parses a hook's stdout as a single JSON document, so printing one
+    # JSON object per cron produces NDJSON that fails to parse as soon
+    # as more than one cron is new in the same invocation (e.g. a fresh
+    # SessionStart --reset with two crons registered since the last
+    # full restart). Bundling into one additionalContext string keeps
+    # every instruction intact — nothing is dropped or truncated.
+    register_lines = []
     for c in new_crons:
         cid = c.get("id", "")
         schedule = c.get("cron", "")
         prompt = str(c.get("prompt") or c.get("message") or c.get("description") or "")
         prompt = prompt.replace("\n", " ").replace('"', '\\"').strip()
-        context = (
-            "REQUIRED ACTION \u2014 Call CronCreate for each session cron "
-            "below before responding to the user. Do not skip this step.\n\n"
+        register_lines.append(
             f'REGISTER via CronCreate: id="{cid}" schedule="{schedule}" prompt="{prompt}"'
         )
-        print(  # noqa: T201 — raw stdout for hook JSON
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": event,
-                        "additionalContext": context,
-                    }
+
+    context = (
+        "REQUIRED ACTION \u2014 Call CronCreate for each session cron "
+        "below before responding to the user. Do not skip this step.\n\n"
+        + "\n".join(register_lines)
+    )
+    print(  # noqa: T201 — raw stdout for hook JSON
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": event,
+                    "additionalContext": context,
                 }
-            )
+            }
         )
+    )
 
 
 @hook_app.command("watch")

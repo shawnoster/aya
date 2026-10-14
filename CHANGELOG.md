@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v2.2.2 (2026-10-14)
+
+### Bug Fixes
+
+- **github-workflows**: Restrict opencode trigger to trusted commenters
+  ([#354](https://github.com/shawnoster/aya/pull/354),
+  [`af15c14`](https://github.com/shawnoster/aya/commit/af15c14fea918cfdd7f88037b66bd0a5e25c8051))
+
+### Chores
+
+- **deps**: Bump cryptography from 50.0.0 to 50.0.1
+  ([#358](https://github.com/shawnoster/aya/pull/358),
+  [`329606e`](https://github.com/shawnoster/aya/commit/329606e0e316c34305337f1523ddcb6382c989e9))
+
+- **deps**: Bump uv from 0.12.5 to 0.12.7 ([#357](https://github.com/shawnoster/aya/pull/357),
+  [`1a1de44`](https://github.com/shawnoster/aya/commit/1a1de44f4bf66da2d914e2ca5e81e4b49cf49298))
+
+- **deps**: Bump websockets from 17.0.1 to 17.1 ([#356](https://github.com/shawnoster/aya/pull/356),
+  [`d6e3baf`](https://github.com/shawnoster/aya/commit/d6e3baf5bcac60449e805976fb9713fb865839a7))
+
+- **release**: Link the gitpython-pin vendoring to its tracking issue
+  ([#353](https://github.com/shawnoster/aya/pull/353),
+  [`de1c2e7`](https://github.com/shawnoster/aya/commit/de1c2e700d67a49bd024943d26999e6e4788ba0a))
+
+
 ## v2.2.1 (2026-08-29)
 
 ### Bug Fixes

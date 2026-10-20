@@ -126,3 +126,19 @@ def isolate_crontab(monkeypatch):
 
     monkeypatch.setattr(_install.subprocess, "run", fake_run)
     return state
+
+
+@pytest.fixture(autouse=True)
+def isolate_opencode_plugin_dir(tmp_path, monkeypatch):
+    """Keep the suite off the real OpenCode plugin directory.
+
+    ``install_scheduler`` and ``uninstall_scheduler`` delete the legacy
+    ``aya-reminders.js`` from ``~/.config/opencode/plugins``. A test that reaches
+    them without passing ``opencode_plugin_dir`` would delete it from whoever ran
+    the suite.
+    """
+    from aya.adapters import install as _install
+
+    plugin_dir = tmp_path / "opencode_plugins"
+    monkeypatch.setattr(_install, "LEGACY_OPENCODE_PLUGIN_DIR", plugin_dir)
+    return plugin_dir

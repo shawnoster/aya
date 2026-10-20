@@ -524,10 +524,11 @@ def schedule_install(
     for event in result.hooks_updated:
         console.print(f"  {prefix}[yellow]{event}:[/yellow] {did_update}")
 
-    if result.opencode_plugin_already_present:
-        console.print(f"  {prefix}[dim]OpenCode plugin:[/dim] already installed")
-    elif result.opencode_plugin_installed:
-        console.print(f"  {prefix}[green]OpenCode plugin:[/green] {did}")
+    if result.legacy_opencode_plugin_removed:
+        console.print(
+            f"  {prefix}[yellow]Legacy OpenCode plugin:[/yellow] "
+            f"{'would remove' if dry_run else 'removed'}"
+        )
 
     if not dry_run and not result.errors:
         console.print("\n[green]✓[/green] Scheduler integrations installed.")
@@ -564,10 +565,8 @@ def schedule_uninstall(
     if not result.hooks_removed:
         console.print(f"  {prefix}[dim]Hooks:[/dim] not present")
 
-    if result.opencode_plugin_removed:
-        console.print(f"  {prefix}[yellow]OpenCode plugin:[/yellow] removed")
-    else:
-        console.print(f"  {prefix}[dim]OpenCode plugin:[/dim] not present")
+    if result.legacy_opencode_plugin_removed:
+        console.print(f"  {prefix}[yellow]Legacy OpenCode plugin:[/yellow] removed")
 
     if not dry_run and not result.errors:
         console.print("\n[green]✓[/green] Scheduler integrations removed.")

@@ -5040,9 +5040,9 @@ class TestUninstallUnreadableCrontab:
         )
         with patch("aya.adapters.cli.schedule_cmds.uninstall_scheduler", lambda **kw: result):
             out = runner.invoke(app, ["schedule", "uninstall"]).output
-        # Scoped to the Crontab line: an unrelated "OpenCode plugin: not
-        # present" also matches a bare "not present" and would make this pass
-        # or fail for the wrong reason.
+        # Scoped to the Crontab line: the "Hooks: not present" line also matches
+        # a bare "not present" and would make this pass or fail for the wrong
+        # reason.
         assert "Crontab: not present" not in out
         assert "Crontab: unknown" in out
 

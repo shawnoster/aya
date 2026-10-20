@@ -5040,9 +5040,6 @@ class TestUninstallUnreadableCrontab:
         )
         with patch("aya.adapters.cli.schedule_cmds.uninstall_scheduler", lambda **kw: result):
             out = runner.invoke(app, ["schedule", "uninstall"]).output
-        # Scoped to the Crontab line: the "Hooks: not present" line also matches
-        # a bare "not present" and would make this pass or fail for the wrong
-        # reason.
         assert "Crontab: not present" not in out
         assert "Crontab: unknown" in out
 
@@ -5227,3 +5224,26 @@ class TestSendUnknownRecipient:
         assert payload["error"]["context"]["requested"] == "hoem"
         assert payload["error"]["context"]["available"] == ["home"]
         assert peer.did not in result.output, "the unnamed peer must not be addressed"
+
+
+class TestInstallWarnings:
+    def test_a_warning_neither_fails_the_install_nor_skips_the_interval(self, monkeypatch):
+        """A failed optional cleanup is reported, but the interval is still saved."""
+        from aya.adapters.install import InstallResult
+
+        result = InstallResult(
+            cron_installed=True,
+            tick_interval="2m",
+            warnings=["could not remove the legacy OpenCode plugin: denied"],
+        )
+        saved: dict[str, str] = {}
+        monkeypatch.setattr(
+            "aya.adapters.cli.schedule_cmds.set_config_value",
+            lambda key, value: saved.update({key: value}) or {},
+        )
+        with patch("aya.adapters.cli.schedule_cmds.install_scheduler", lambda **kw: result):
+            out = runner.invoke(app, ["schedule", "install", "--tick-interval", "2m"])
+
+        assert out.exit_code == 0
+        assert "Warning" in out.output
+        assert saved == {"tick_interval": "2m"}

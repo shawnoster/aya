@@ -479,7 +479,10 @@ def schedule_install(
         help="Replace any existing aya cron entries instead of treating them as already-installed.",
     ),
 ) -> None:
-    """Install scheduler integrations — system crontab + Claude Code hooks."""
+    """Install the system crontab entry and Claude Code hooks.
+
+    Also deletes the legacy aya OpenCode plugin file if an earlier aya installed one.
+    """
     from aya.adapters.install import DEFAULT_TICK_INTERVAL
 
     # Resolve the effective tick interval: explicit flag > persisted config > default.
@@ -488,6 +491,9 @@ def schedule_install(
         tick_interval = cfg.get("tick_interval", DEFAULT_TICK_INTERVAL)
 
     result = install_scheduler(dry_run=dry_run, tick_interval=tick_interval, force=force)
+
+    for w in result.warnings:
+        err.print(f"[yellow]Warning:[/yellow] {w}")
 
     if result.errors:
         for e in result.errors:
@@ -540,8 +546,14 @@ def schedule_install(
 def schedule_uninstall(
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Preview changes without applying"),
 ) -> None:
-    """Remove scheduler integrations — system crontab + Claude Code hooks."""
+    """Remove the system crontab entry and Claude Code hooks.
+
+    Also deletes the legacy aya OpenCode plugin file if an earlier aya installed one.
+    """
     result = uninstall_scheduler(dry_run=dry_run)
+
+    for w in result.warnings:
+        err.print(f"[yellow]Warning:[/yellow] {w}")
 
     if result.errors:
         for e in result.errors:
@@ -566,7 +578,10 @@ def schedule_uninstall(
         console.print(f"  {prefix}[dim]Hooks:[/dim] not present")
 
     if result.legacy_opencode_plugin_removed:
-        console.print(f"  {prefix}[yellow]Legacy OpenCode plugin:[/yellow] removed")
+        console.print(
+            f"  {prefix}[yellow]Legacy OpenCode plugin:[/yellow] "
+            f"{'would remove' if dry_run else 'removed'}"
+        )
 
     if not dry_run and not result.errors:
         console.print("\n[green]✓[/green] Scheduler integrations removed.")

@@ -161,11 +161,11 @@ aya schedule install --dry-run  # preview without changing anything
 
 This installs the system crontab entry for background polling and all required
 Claude Code hooks in `~/.claude/settings.json`. Run it once per machine.
-To remove everything: `aya schedule uninstall`.
+To remove the crontab entry and hooks: `aya schedule uninstall`.
 
-aya no longer ships an OpenCode plugin. If an earlier version installed one,
-`aya schedule install` and `aya schedule uninstall` delete the leftover
-`~/.config/opencode/plugins/aya-reminders.js`.
+Both commands also delete `~/.config/opencode/plugins/aya-reminders.js` when it is
+the V1 aya plugin (it exports `AyaRemindersPlugin` and never calls `Plugin.define`).
+aya installs no OpenCode plugin.
 
 ### Hooks installed
 

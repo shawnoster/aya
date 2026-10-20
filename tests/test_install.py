@@ -709,16 +709,20 @@ class TestNoCrontabWordings:
 
 
 class TestLegacyOpencodePluginCleanup:
-    """aya no longer ships an OpenCode plugin, but earlier installs left one behind.
+    """Install and uninstall delete the legacy ``aya-reminders.js`` OpenCode plugin.
 
-    OpenCode V2 does not run V1 plugins, so the leftover is dead weight that
-    install and uninstall both remove — and only when it is aya's own.
+    Only a V1 file containing ``AyaRemindersPlugin`` is deleted. Any other file in
+    the directory, including a V2 plugin or a user file with the same name, stays.
     """
 
     LEGACY = "export const AyaRemindersPlugin = async ({ $ }) => ({})\n"
+    V2_PORT = (
+        'import { Plugin } from "@opencode/plugin"\n'
+        'export const AyaRemindersPlugin = Plugin.define({ id: "aya-reminders", setup() {} })\n'
+    )
 
     def _plant(self, plugin_dir: Path, text: str) -> Path:
-        plugin_dir.mkdir(parents=True)
+        plugin_dir.mkdir(parents=True, exist_ok=True)
         dest = plugin_dir / "aya-reminders.js"
         dest.write_text(text)
         return dest
@@ -749,13 +753,14 @@ class TestLegacyOpencodePluginCleanup:
         assert result.legacy_opencode_plugin_removed is True
         assert not dest.exists()
 
-    def test_dry_run_reports_the_removal_and_keeps_the_file(self, tmp_path):
-        from aya.adapters.install import uninstall_scheduler
+    @pytest.mark.parametrize("command", ["install", "uninstall"])
+    def test_dry_run_reports_the_removal_and_keeps_the_file(self, tmp_path, command):
+        from aya.adapters import install as install_mod
 
         plugin_dir = tmp_path / "plugins"
         dest = self._plant(plugin_dir, self.LEGACY)
 
-        result = uninstall_scheduler(
+        result = getattr(install_mod, f"{command}_scheduler")(
             dry_run=True,
             settings_path=tmp_path / "settings.json",
             opencode_plugin_dir=plugin_dir,
@@ -763,6 +768,20 @@ class TestLegacyOpencodePluginCleanup:
 
         assert result.legacy_opencode_plugin_removed is True
         assert dest.exists()
+
+    def test_a_v2_plugin_with_the_same_name_and_export_is_left_alone(self, tmp_path):
+        """A V2 port may reuse the filename and export name; only V1 is dead."""
+        from aya.adapters.install import uninstall_scheduler
+
+        plugin_dir = tmp_path / "plugins"
+        dest = self._plant(plugin_dir, self.V2_PORT)
+
+        result = uninstall_scheduler(
+            settings_path=tmp_path / "settings.json", opencode_plugin_dir=plugin_dir
+        )
+
+        assert result.legacy_opencode_plugin_removed is False
+        assert dest.read_text() == self.V2_PORT
 
     def test_a_user_file_with_the_same_name_is_left_alone(self, tmp_path):
         from aya.adapters.install import uninstall_scheduler
@@ -801,3 +820,28 @@ class TestLegacyOpencodePluginCleanup:
 
         assert result.legacy_opencode_plugin_removed is False
         assert result.errors == []
+        assert result.warnings == []
+
+    @pytest.mark.parametrize("command", ["install", "uninstall"])
+    def test_a_failed_cleanup_is_a_warning_not_an_error(self, tmp_path, command):
+        """An unreadable leftover must not turn a finished install into exit 1."""
+        from aya.adapters import install as install_mod
+
+        with patch.object(
+            install_mod, "_remove_legacy_opencode_plugin", side_effect=PermissionError("denied")
+        ):
+            result = getattr(install_mod, f"{command}_scheduler")(
+                settings_path=tmp_path / "settings.json"
+            )
+
+        assert result.errors == []
+        assert any("legacy OpenCode plugin" in w and "denied" in w for w in result.warnings)
+
+    def test_the_suite_never_points_at_the_real_plugin_directory(
+        self, isolate_opencode_plugin_dir, tmp_path
+    ):
+        """Guards the autouse fixture: without it a test could delete a real file."""
+        from aya.adapters import install as install_mod
+
+        assert isolate_opencode_plugin_dir == install_mod.LEGACY_OPENCODE_PLUGIN_DIR
+        assert tmp_path in install_mod.LEGACY_OPENCODE_PLUGIN_DIR.parents

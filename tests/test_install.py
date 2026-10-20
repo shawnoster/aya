@@ -708,86 +708,140 @@ class TestNoCrontabWordings:
         assert issubclass(CrontabUnreadableError, subprocess.CalledProcessError)
 
 
-class TestOpencodePluginSource:
-    """The plugin source must actually resolve — it never did.
+class TestLegacyOpencodePluginCleanup:
+    """Install and uninstall delete the legacy ``aya-reminders.js`` OpenCode plugin.
 
-    `_get_plugin_source` counted `.parent` levels from `__file__` and was one
-    directory too shallow in both branches, so it returned a path that could not
-    exist. `_install_opencode_plugin` then saw a missing file and returned
-    silently, so the plugin was reported "not present" on every machine forever
-    rather than "could not be installed".
+    Only a V1 file containing ``AyaRemindersPlugin`` is deleted. Any other file in
+    the directory, including a V2 plugin or a user file with the same name, stays.
     """
 
-    def test_the_resolved_source_exists(self):
-        """The assertion the old code needed and nobody made."""
-        from aya.adapters.install import _get_plugin_source
+    LEGACY = "export const AyaRemindersPlugin = async ({ $ }) => ({})\n"
+    V2_PORT = (
+        'import { Plugin } from "@opencode/plugin"\n'
+        'export const AyaRemindersPlugin = Plugin.define({ id: "aya-reminders", setup() {} })\n'
+    )
 
-        source = _get_plugin_source()
-        assert source.is_file(), f"{source} does not exist"
-        assert source.read_text().strip(), "plugin source is empty"
+    def _plant(self, plugin_dir: Path, text: str) -> Path:
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        dest = plugin_dir / "aya-reminders.js"
+        dest.write_text(text)
+        return dest
 
-    def test_the_vendored_copy_matches_the_authored_original(self):
-        """Two tracked copies with no build step between them drift silently.
+    def test_uninstall_removes_the_legacy_plugin(self, tmp_path):
+        from aya.adapters.install import uninstall_scheduler
 
-        `opencode-plugin/aya-reminders.js` is the authored package (it has its own
-        package.json and AGENTS.md tells users to point OpenCode at it); the copy
-        inside `aya/` is what ships in the wheel. Nothing regenerates one from the
-        other, so only a test keeps them honest.
-        """
-        from aya.adapters.install import OPENCODE_PLUGIN_NAME, _get_plugin_source
+        plugin_dir = tmp_path / "plugins"
+        dest = self._plant(plugin_dir, self.LEGACY)
 
-        repo_root = Path(__file__).resolve().parent.parent
-        authored = repo_root / "opencode-plugin" / OPENCODE_PLUGIN_NAME
-        assert authored.is_file(), f"{authored} is missing"
-        assert authored.read_text() == _get_plugin_source().read_text(), (
-            "the vendored plugin copy has drifted from the authored original — "
-            f"copy {authored} over the packaged copy"
+        result = uninstall_scheduler(
+            settings_path=tmp_path / "settings.json", opencode_plugin_dir=plugin_dir
         )
 
-    def test_the_missing_source_error_names_the_destination_it_wants(self, tmp_path):
-        """The remedy must be runnable as written.
+        assert result.legacy_opencode_plugin_removed is True
+        assert not dest.exists()
 
-        The authored file is `aya-reminders.js` and the packaged one is
-        `opencode-plugin.js`, so guidance that says to copy the former "there"
-        leaves it under the wrong name and the error unchanged. Naming the full
-        destination makes the rename explicit.
-        """
-        from aya.adapters import install as install_mod
-        from aya.adapters.install import (
-            OPENCODE_PLUGIN_PACKAGED_NAME,
-            _get_plugin_source,
-        )
-
-        empty = tmp_path / "aya-package"
-        empty.mkdir()
-        with (
-            patch.object(install_mod.resources, "files", lambda _pkg: empty),
-            pytest.raises(FileNotFoundError) as excinfo,
-        ):
-            _get_plugin_source()
-
-        message = str(excinfo.value)
-        destination = empty / OPENCODE_PLUGIN_PACKAGED_NAME
-        assert str(destination) in message, (
-            "the error must name the full destination, or the copy it suggests "
-            f"lands under the wrong filename. Got: {message}"
-        )
-
-    def test_a_missing_source_is_an_install_error_not_silence(self, tmp_path):
-        """A broken package must not read as "OpenCode plugin: not present".
-
-        Returns a nonexistent path rather than raising, because that is what the
-        broken resolver actually did — the old code checked `.exists()` and
-        returned quietly, so this is the assertion that distinguishes the two.
-        """
+    def test_install_removes_the_legacy_plugin(self, tmp_path):
         from aya.adapters.install import install_scheduler
 
-        absent = tmp_path / "nowhere" / "opencode-plugin.js"
+        plugin_dir = tmp_path / "plugins"
+        dest = self._plant(plugin_dir, self.LEGACY)
 
-        with patch("aya.adapters.install._get_plugin_source", lambda: absent):
-            result = install_scheduler(dry_run=True, settings_path=Path("/nonexistent/s.json"))
-
-        assert result.opencode_plugin_installed is False
-        assert any("opencode plugin failed" in e for e in result.errors), (
-            f"the failure must reach result.errors, got {result.errors}"
+        result = install_scheduler(
+            settings_path=tmp_path / "settings.json", opencode_plugin_dir=plugin_dir
         )
+
+        assert result.legacy_opencode_plugin_removed is True
+        assert not dest.exists()
+
+    @pytest.mark.parametrize("command", ["install", "uninstall"])
+    def test_dry_run_reports_the_removal_and_keeps_the_file(self, tmp_path, command):
+        from aya.adapters import install as install_mod
+
+        plugin_dir = tmp_path / "plugins"
+        dest = self._plant(plugin_dir, self.LEGACY)
+
+        result = getattr(install_mod, f"{command}_scheduler")(
+            dry_run=True,
+            settings_path=tmp_path / "settings.json",
+            opencode_plugin_dir=plugin_dir,
+        )
+
+        assert result.legacy_opencode_plugin_removed is True
+        assert dest.exists()
+
+    def test_a_v2_plugin_with_the_same_name_and_export_is_left_alone(self, tmp_path):
+        """A V2 port may reuse the filename and export name; only V1 is dead."""
+        from aya.adapters.install import uninstall_scheduler
+
+        plugin_dir = tmp_path / "plugins"
+        dest = self._plant(plugin_dir, self.V2_PORT)
+
+        result = uninstall_scheduler(
+            settings_path=tmp_path / "settings.json", opencode_plugin_dir=plugin_dir
+        )
+
+        assert result.legacy_opencode_plugin_removed is False
+        assert dest.read_text() == self.V2_PORT
+
+    def test_a_user_file_with_the_same_name_is_left_alone(self, tmp_path):
+        from aya.adapters.install import uninstall_scheduler
+
+        plugin_dir = tmp_path / "plugins"
+        dest = self._plant(plugin_dir, "export const MyOwnPlugin = async () => ({})\n")
+
+        result = uninstall_scheduler(
+            settings_path=tmp_path / "settings.json", opencode_plugin_dir=plugin_dir
+        )
+
+        assert result.legacy_opencode_plugin_removed is False
+        assert dest.exists()
+
+    def test_other_files_in_the_plugin_directory_are_untouched(self, tmp_path):
+        from aya.adapters.install import uninstall_scheduler
+
+        plugin_dir = tmp_path / "plugins"
+        self._plant(plugin_dir, self.LEGACY)
+        other = plugin_dir / "notify.js"
+        other.write_text("export const Notify = async () => ({})\n")
+
+        uninstall_scheduler(
+            settings_path=tmp_path / "settings.json", opencode_plugin_dir=plugin_dir
+        )
+
+        assert other.exists()
+
+    def test_a_missing_plugin_directory_is_not_an_error(self, tmp_path):
+        from aya.adapters.install import uninstall_scheduler
+
+        result = uninstall_scheduler(
+            settings_path=tmp_path / "settings.json",
+            opencode_plugin_dir=tmp_path / "does-not-exist",
+        )
+
+        assert result.legacy_opencode_plugin_removed is False
+        assert result.errors == []
+        assert result.warnings == []
+
+    @pytest.mark.parametrize("command", ["install", "uninstall"])
+    def test_a_failed_cleanup_is_a_warning_not_an_error(self, tmp_path, command):
+        """An unreadable leftover must not turn a finished install into exit 1."""
+        from aya.adapters import install as install_mod
+
+        with patch.object(
+            install_mod, "_remove_legacy_opencode_plugin", side_effect=PermissionError("denied")
+        ):
+            result = getattr(install_mod, f"{command}_scheduler")(
+                settings_path=tmp_path / "settings.json"
+            )
+
+        assert result.errors == []
+        assert any("legacy OpenCode plugin" in w and "denied" in w for w in result.warnings)
+
+    def test_the_suite_never_points_at_the_real_plugin_directory(
+        self, isolate_opencode_plugin_dir, tmp_path
+    ):
+        """Guards the autouse fixture: without it a test could delete a real file."""
+        from aya.adapters import install as install_mod
+
+        assert isolate_opencode_plugin_dir == install_mod.LEGACY_OPENCODE_PLUGIN_DIR
+        assert tmp_path in install_mod.LEGACY_OPENCODE_PLUGIN_DIR.parents

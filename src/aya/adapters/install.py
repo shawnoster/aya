@@ -1,4 +1,4 @@
-"""Install/uninstall aya scheduler integrations — crontab + Claude Code hooks + OpenCode plugin."""
+"""Install and uninstall the aya scheduler: crontab, Claude Code hooks, legacy plugin cleanup."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -29,39 +28,13 @@ CRON_COMMENT = "# aya-scheduler-tick"
 
 CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
-# OpenCode global plugin directory
-OPENCODE_PLUGIN_DIR = Path.home() / ".config" / "opencode" / "plugins"
-OPENCODE_PLUGIN_NAME = "aya-reminders.js"
-# Filename of the copy vendored into the package, which is what ships in the
-# wheel. The authored original lives in opencode-plugin/ with its package.json.
-OPENCODE_PLUGIN_PACKAGED_NAME = "opencode-plugin.js"
-# Resolved at call-time so tests can patch Path.home()
-_PLUGIN_SOURCE: Path | None = None
-
-
-def _get_plugin_source() -> Path:
-    """Return the path to the bundled OpenCode plugin JS file.
-
-    Located through the package rather than by counting ``.parent`` levels from
-    ``__file__``. The file is vendored inside the ``aya`` package, so one lookup
-    covers an installed wheel, an editable install and a source checkout alike —
-    and it cannot drift when a module moves between directories.
-
-    Raises FileNotFoundError if the file is missing, which means the package was
-    built without it. The caller records that as an install error: an OpenCode
-    user whose plugin never appears deserves better than silence.
-    """
-    packaged = Path(str(resources.files("aya"))) / OPENCODE_PLUGIN_PACKAGED_NAME
-    if packaged.is_file():
-        return packaged
-    # The two copies have different filenames, so the destination is spelled out
-    # in full: "copy it there" would leave the file under its authored name and
-    # the error unchanged.
-    raise FileNotFoundError(
-        f"{OPENCODE_PLUGIN_PACKAGED_NAME} is missing from the installed aya package. "
-        f"Reinstall aya, or from a checkout run: "
-        f"cp opencode-plugin/{OPENCODE_PLUGIN_NAME} {packaged}"
-    )
+# V1 ``aya-reminders.js`` plugin, deleted by ``install_scheduler`` and ``uninstall_scheduler``.
+LEGACY_OPENCODE_PLUGIN_DIR = Path.home() / ".config" / "opencode" / "plugins"
+LEGACY_OPENCODE_PLUGIN_NAME = "aya-reminders.js"
+# Export name that identifies the file as aya's.
+LEGACY_OPENCODE_PLUGIN_MARKER = "AyaRemindersPlugin"
+# V2 plugins define themselves with this call, so a file containing it is not V1.
+OPENCODE_V2_PLUGIN_MARKER = "Plugin.define"
 
 
 CANONICAL_HOOKS: dict[str, list[dict[str, Any]]] = {
@@ -154,9 +127,9 @@ class InstallResult:
     hooks_installed: list[str] = field(default_factory=list)
     hooks_already_present: list[str] = field(default_factory=list)
     hooks_updated: list[str] = field(default_factory=list)
-    opencode_plugin_installed: bool = False
-    opencode_plugin_already_present: bool = False
+    legacy_opencode_plugin_removed: bool = False
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def cron_line(self) -> str:
         """Backwards-compat: first line of cron_lines, or empty string."""
@@ -172,8 +145,9 @@ class UninstallResult:
     Recorded where it happens rather than inferred downstream from the error
     list: a settings.json or plugin failure says nothing about the crontab."""
     hooks_removed: list[str] = field(default_factory=list)
-    opencode_plugin_removed: bool = False
+    legacy_opencode_plugin_removed: bool = False
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 # ── Crontab helpers ──────────────────────────────────────────────────────────
@@ -585,56 +559,33 @@ def _remove_hooks(dry_run: bool = False, settings_path: Path | None = None) -> l
     return removed
 
 
-# ── OpenCode plugin helpers ──────────────────────────────────────────────────
+# ── Legacy OpenCode plugin cleanup ───────────────────────────────────────────
 
 
-def _install_opencode_plugin(
-    dry_run: bool = False,
-    plugin_dir: Path | None = None,
-) -> tuple[bool, bool]:
-    """Copy the aya-reminders plugin to the OpenCode global plugin dir.
-
-    Returns (installed, already_present).
-
-    A missing source file raises rather than skipping: the file ships inside the
-    package, so its absence is a broken install, not a layout the user chose.
-    Validated before the dry-run branch, because a dry run reads no file and would
-    otherwise report "would install" for a source that does not exist.
-    """
-    source = _get_plugin_source()
-    if not source.is_file():
-        raise FileNotFoundError(f"OpenCode plugin source is missing: {source}")
-
-    dest_dir = plugin_dir or OPENCODE_PLUGIN_DIR
-    dest = dest_dir / OPENCODE_PLUGIN_NAME
-
-    if dest.exists():
-        # Already present — check if it's identical to avoid spurious reinstalls
-        if dest.read_text() == source.read_text():
-            return False, True
-        # Content differs — update it
-        if not dry_run:
-            dest.write_text(source.read_text())
-        return True, False
-
-    if not dry_run:
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest.write_text(source.read_text())
-    return True, False
-
-
-def _remove_opencode_plugin(
+def _remove_legacy_opencode_plugin(
     dry_run: bool = False,
     plugin_dir: Path | None = None,
 ) -> bool:
-    """Remove the aya-reminders plugin from the OpenCode global plugin dir.
+    """Deletes the V1 ``aya-reminders.js`` plugin from OpenCode's plugin directory.
 
-    Returns True if something was removed.
+    Leaves a file of that name alone unless it contains
+    ``LEGACY_OPENCODE_PLUGIN_MARKER`` and does not contain
+    ``OPENCODE_V2_PLUGIN_MARKER``, because any other file belongs to the user or
+    is a V2 plugin.
+
+    Args:
+        dry_run: Report the removal without deleting the file.
+        plugin_dir: Override the directory searched (for tests).
+
+    Returns:
+        True if the file was removed, or would be under ``dry_run``.
     """
-    dest_dir = plugin_dir or OPENCODE_PLUGIN_DIR
-    dest = dest_dir / OPENCODE_PLUGIN_NAME
+    dest = (plugin_dir or LEGACY_OPENCODE_PLUGIN_DIR) / LEGACY_OPENCODE_PLUGIN_NAME
 
-    if not dest.exists():
+    if not dest.is_file():
+        return False
+    text = dest.read_text(errors="replace")
+    if LEGACY_OPENCODE_PLUGIN_MARKER not in text or OPENCODE_V2_PLUGIN_MARKER in text:
         return False
 
     if not dry_run:
@@ -650,8 +601,9 @@ def install_scheduler(
     settings_path: Path | None = None,
     tick_interval: str = DEFAULT_TICK_INTERVAL,
     force: bool = False,
+    opencode_plugin_dir: Path | None = None,
 ) -> InstallResult:
-    """Install all scheduler integrations — crontab + Claude Code hooks + OpenCode plugin.
+    """Installs the crontab entry and Claude Code hooks, and deletes the legacy OpenCode plugin.
 
     Args:
         dry_run: Preview changes without applying.
@@ -661,6 +613,8 @@ def install_scheduler(
             generate multi-line crontab entries with sleep offsets.
         force: Replace any existing aya cron entries instead of treating
             them as already-installed.
+        opencode_plugin_dir: Override the OpenCode plugin directory searched for
+            the legacy plugin (for tests).
     """
     result = InstallResult()
     result.tick_interval = tick_interval
@@ -703,21 +657,29 @@ def install_scheduler(
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         result.errors.append(f"settings.json failed: {exc}")
 
-    # OpenCode plugin
     try:
-        oc_installed, oc_already = _install_opencode_plugin(dry_run=dry_run)
-        result.opencode_plugin_installed = oc_installed
-        result.opencode_plugin_already_present = oc_already
+        result.legacy_opencode_plugin_removed = _remove_legacy_opencode_plugin(
+            dry_run=dry_run, plugin_dir=opencode_plugin_dir
+        )
     except OSError as exc:
-        result.errors.append(f"opencode plugin failed: {exc}")
+        result.warnings.append(f"could not remove the legacy OpenCode plugin: {exc}")
 
     return result
 
 
 def uninstall_scheduler(
-    dry_run: bool = False, settings_path: Path | None = None
+    dry_run: bool = False,
+    settings_path: Path | None = None,
+    opencode_plugin_dir: Path | None = None,
 ) -> UninstallResult:
-    """Remove all scheduler integrations — crontab + Claude Code hooks + OpenCode plugin."""
+    """Removes the crontab entry, the Claude Code hooks and the legacy OpenCode plugin.
+
+    Args:
+        dry_run: Preview changes without applying.
+        settings_path: Override the Claude Code settings.json location (for tests).
+        opencode_plugin_dir: Override the OpenCode plugin directory searched for
+            the legacy plugin (for tests).
+    """
     result = UninstallResult()
 
     # Crontab
@@ -733,10 +695,11 @@ def uninstall_scheduler(
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         result.errors.append(f"settings.json failed: {exc}")
 
-    # OpenCode plugin
     try:
-        result.opencode_plugin_removed = _remove_opencode_plugin(dry_run=dry_run)
+        result.legacy_opencode_plugin_removed = _remove_legacy_opencode_plugin(
+            dry_run=dry_run, plugin_dir=opencode_plugin_dir
+        )
     except OSError as exc:
-        result.errors.append(f"opencode plugin failed: {exc}")
+        result.warnings.append(f"could not remove the legacy OpenCode plugin: {exc}")
 
     return result

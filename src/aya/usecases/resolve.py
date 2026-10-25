@@ -23,6 +23,7 @@ __all__ = [
     "resolve_instance",
     "resolve_recipient",
     "resolve_relays",
+    "sender_keys",
 ]
 
 
@@ -101,6 +102,23 @@ def nostr_pubkey_for(profile: Profile, did: str) -> str:
         if inst.did == did and inst.nostr_public_hex:
             return inst.nostr_public_hex
     raise NoNostrPubkeyError(did)
+
+
+def sender_keys(profile: Profile) -> dict[str, set[str]]:
+    """Every DID with a known transport key, mapped to all of its keys.
+
+    A set, not a single key: a peer re-paired under a new label can leave the
+    same DID recorded twice with different keys, and packets on either are
+    genuinely from that peer.
+    """
+    keys: dict[str, set[str]] = {}
+    for key in profile.trusted_keys.values():
+        if key.nostr_pubkey:
+            keys.setdefault(key.did, set()).add(key.nostr_pubkey)
+    for inst in profile.instances.values():
+        if inst.nostr_public_hex:
+            keys.setdefault(inst.did, set()).add(inst.nostr_public_hex)
+    return keys
 
 
 def label_for_did(profile: Profile, did: str) -> str | None:

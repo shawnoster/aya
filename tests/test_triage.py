@@ -67,3 +67,66 @@ class TestTriage:
 
     def test_empty_input_is_falsey(self):
         assert not triage([], ingested=set(), dropped=set())
+
+
+class TestMisrouted:
+    """A signature proves who wrote a packet, not who it was for or who sent it."""
+
+    def test_packet_for_someone_else_is_rejected(self, sender: Identity):
+        pkt = _packet(sender, "for a third party")  # addressed to did:key:zRECIPIENT
+        result = triage([pkt], ingested=set(), dropped=set(), local_did="did:key:zME")
+        assert result.fresh == []
+        assert result.misrouted == [(pkt, "addressed to another instance")]
+
+    def test_packet_for_this_instance_passes(self, sender: Identity):
+        pkt = _packet(sender, "for me")
+        result = triage([pkt], ingested=set(), dropped=set(), local_did="did:key:zRECIPIENT")
+        assert result.fresh == [pkt]
+
+    def test_known_sender_on_wrong_key_is_rejected(self, sender: Identity):
+        pkt = _packet(sender, "relayed by someone else")
+        pkt.set_transport_pubkey("ff" * 32)
+        result = triage(
+            [pkt],
+            ingested=set(),
+            dropped=set(),
+            sender_keys={sender.did: {sender.nostr_public_hex}},
+        )
+        assert result.misrouted == [(pkt, "published by a key that isn't the sender's")]
+
+    def test_known_sender_on_own_key_passes(self, sender: Identity):
+        pkt = _packet(sender, "straight from the sender")
+        pkt.set_transport_pubkey(sender.nostr_public_hex)
+        result = triage(
+            [pkt],
+            ingested=set(),
+            dropped=set(),
+            sender_keys={sender.did: {sender.nostr_public_hex}},
+        )
+        assert result.fresh == [pkt]
+
+    def test_any_known_key_for_the_sender_passes(self, sender: Identity):
+        """A peer re-paired under a second label keeps both keys valid."""
+        pkt = _packet(sender, "from the newer key")
+        pkt.set_transport_pubkey("ee" * 32)
+        result = triage(
+            [pkt],
+            ingested=set(),
+            dropped=set(),
+            sender_keys={sender.did: {sender.nostr_public_hex, "ee" * 32}},
+        )
+        assert result.fresh == [pkt]
+
+    def test_unknown_sender_is_left_to_the_trust_check(self, sender: Identity):
+        """No known key to compare against; trust decides what happens next."""
+        pkt = _packet(sender, "stranger")
+        pkt.set_transport_pubkey("ff" * 32)
+        result = triage([pkt], ingested=set(), dropped=set(), sender_keys={})
+        assert result.fresh == [pkt]
+
+    def test_bad_signature_wins_over_misrouting(self, sender: Identity):
+        pkt = _packet(sender, "tampered")
+        pkt.intent = "tampered-after-signing"
+        result = triage([pkt], ingested=set(), dropped=set(), local_did="did:key:zME")
+        assert result.bad_signature == [pkt]
+        assert result.misrouted == []

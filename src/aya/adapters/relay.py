@@ -406,6 +406,9 @@ class RelayClient:
                             )
                             continue
                         packet = Packet.from_json(plaintext)
+                    # Both paths: the receiver checks this against the key it
+                    # knows for the packet's sender, plaintext or not.
+                    packet.set_transport_pubkey(raw.get("pubkey"))
                     if not packet.is_expired():
                         yield packet
                 except Exception as exc:  # noqa: BLE001 — one bad event must not end the poll

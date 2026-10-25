@@ -44,6 +44,7 @@ from aya.usecases.resolve import (
     resolve_instance,
     resolve_recipient,
     resolve_relays,
+    sender_keys,
 )
 from aya.usecases.triage import triage
 
@@ -238,6 +239,13 @@ class PollResult:
     relays: list[str] = field(default_factory=list)
     relay_reachable: bool = True
     bad_signature: list[Packet] = field(default_factory=list)
+    misrouted: list[tuple[Packet, str]] = field(default_factory=list)
+
+    def rejected(self) -> list[dict[str, str]]:
+        """Every packet refused this poll, with why. One list for every surface."""
+        refused = [{"id": pkt.id, "reason": "bad signature"} for pkt in self.bad_signature]
+        refused += [{"id": pkt.id, "reason": reason} for pkt, reason in self.misrouted]
+        return refused
 
     def envelope(self) -> dict[str, Any]:
         """The wire shape both surfaces return."""
@@ -246,6 +254,7 @@ class PollResult:
             "instance": self.instance,
             "relays": list(self.relays),
             "relay_reachable": self.relay_reachable,
+            "rejected": self.rejected(),
         }
 
 
@@ -529,14 +538,25 @@ async def inbox(
     Returns ``(result, packets)`` — the envelope plus the Packet objects, so a
     surface can render richer detail than the summary dicts carry.
     """
-    _local, label, relay_urls, packets, reachable, _reached = await _fetch(
+    local, label, relay_urls, packets, reachable, _reached = await _fetch(
         profile, instance, relay, client_factory
     )
     dropped = set(profile.dropped_ids)
     ingested = {e["id"] for e in profile.ingested_ids}
 
-    visible = [pkt for pkt in packets if pkt.id not in dropped]
-    fresh = triage(visible, ingested=ingested, dropped=dropped, verify=False).fresh
+    # Misrouted packets are hidden from the listing as well as from receive:
+    # a packet addressed to someone else is not waiting for this instance.
+    # `ingested` is left empty here because include_ingested still wants the
+    # ingested ones; they are split out on the next line instead.
+    visible = triage(
+        packets,
+        ingested=set(),
+        dropped=dropped,
+        verify=False,
+        local_did=local.did,
+        sender_keys=sender_keys(profile),
+    ).fresh
+    fresh = [pkt for pkt in visible if pkt.id not in ingested]
     shown = visible if include_ingested else fresh
 
     summaries = [packet_summary(profile, pkt, ingested=pkt.id in ingested) for pkt in shown]
@@ -580,6 +600,8 @@ async def receive(
         packets,
         ingested={e["id"] for e in profile.ingested_ids},
         dropped=set(profile.dropped_ids),
+        local_did=local.did,
+        sender_keys=sender_keys(profile),
     )
 
     if on_fresh is not None and sorted_packets.fresh:
@@ -633,6 +655,7 @@ async def receive(
         relays=relay_urls,
         relay_reachable=reachable,
         bad_signature=sorted_packets.bad_signature,
+        misrouted=sorted_packets.misrouted,
     )
 
 

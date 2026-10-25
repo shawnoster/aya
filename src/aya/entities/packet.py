@@ -13,7 +13,7 @@ from typing import Any
 
 import base58
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from ulid import ULID
 
 from aya.entities.identity import Identity
@@ -68,6 +68,18 @@ class Packet(BaseModel):
     signature: str | None = None
 
     model_config = {"populate_by_name": True}
+
+    # The Nostr key that carried this packet, as reported by the event it
+    # arrived in. Not part of the signed envelope: the sender signs `from`,
+    # and the transport key is what binds that claim to whoever published.
+    _transport_pubkey: str | None = PrivateAttr(default=None)
+
+    @property
+    def transport_pubkey(self) -> str | None:
+        return self._transport_pubkey
+
+    def set_transport_pubkey(self, pubkey: str | None) -> None:
+        self._transport_pubkey = pubkey or None
 
     @model_validator(mode="after")
     def set_default_expiry(self) -> Packet:

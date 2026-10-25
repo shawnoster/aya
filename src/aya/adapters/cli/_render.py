@@ -125,6 +125,8 @@ def _render_receive(
             f"[red]⚠ Packet {packet.id[:8]} failed signature verification "
             f"(from {packet.from_did[:30]}…) — discarded[/red]"
         )
+    for packet, reason in result.misrouted:
+        err.print(f"[red]⚠ Packet {packet.id[:8]} ignored: {reason}[/red]")
     if not result.relay_reachable:
         err.print(f"[yellow]Could not reach relay — skipping relay fetch.{context}[/yellow]")
         return

@@ -521,6 +521,29 @@ class TestFetchPending:
         assert packets[0].id == p.id
         assert packets[0].intent == p.intent
         assert packets[0].encrypted is True
+        # The publishing key is recorded so the receiver can bind it to `from`.
+        assert packets[0].transport_pubkey == sender.nostr_public_hex
+
+    async def test_records_transport_key_for_plaintext_packets(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """The plaintext path must record the publishing key too, or a forged
+        unencrypted packet would skip the sender-key check."""
+        p = Packet(from_did=sender.did, to_did=recipient.did, intent="plain", content="x")
+        raw_event = {"id": "evt-plain", "pubkey": "ab" * 32, "content": p.to_json()}
+
+        async def fake_read_until_eose(ws, sub_id):
+            yield raw_event
+
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose):
+            mock_ws = AsyncMock()
+            mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws.__aexit__ = AsyncMock(return_value=False)
+
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
+                packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert [pkt.transport_pubkey for pkt in packets] == ["ab" * 32]
 
 
 # ── pagination ────────────────────────────────────────────────────────────────

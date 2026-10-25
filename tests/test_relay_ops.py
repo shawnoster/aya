@@ -305,6 +305,43 @@ class TestReceive:
         assert result.packets[0]["ingested"] is False
         assert p.ingested_ids == []
 
+    async def test_replayed_packet_for_a_third_party_is_not_ingested(self, profile, peer):
+        """The review's proof of concept: a trusted peer signs a packet for carol,
+        carol re-sends it to us, and it used to be ingested as trusted from the peer."""
+        p, path = profile
+        carol = Identity.generate("carol")
+        pkt = Packet(from_did=peer.did, to_did=carol.did, intent="for carol", content="x").sign(
+            peer
+        )
+        pkt.set_transport_pubkey(carol.nostr_public_hex)
+        FakeClient.queued = [pkt]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.packets == []
+        assert result.misrouted == [(pkt, "addressed to another instance")]
+        assert result.envelope()["rejected"] == [
+            {"id": pkt.id, "reason": "addressed to another instance"}
+        ]
+        assert p.ingested_ids == []
+        assert FakeClient.receipts == []
+
+    async def test_trusted_did_on_a_stranger_key_is_not_ingested(self, profile, peer):
+        p, path = profile
+        pkt = _incoming(peer, p, "published by someone else")
+        pkt.set_transport_pubkey(Identity.generate("mallory").nostr_public_hex)
+        FakeClient.queued = [pkt]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.packets == []
+        assert result.misrouted == [(pkt, "published by a key that isn't the sender's")]
+        assert p.ingested_ids == []
+
+    async def test_trusted_did_on_its_own_key_is_ingested(self, profile, peer):
+        p, path = profile
+        pkt = _incoming(peer, p, "straight from the peer")
+        pkt.set_transport_pubkey(peer.nostr_public_hex)
+        FakeClient.queued = [pkt]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.packets[0]["ingested"] is True
+
     async def test_envelope_names_instance_and_relays(self, profile):
         p, path = profile
         result = await receive(p, path, client_factory=FakeClient)
@@ -329,6 +366,21 @@ class TestInbox:
         FakeClient.queued = [pkt]
         assert (await inbox(p, client_factory=FakeClient))[0].packets == []
         assert (await inbox(p, include_ingested=True, client_factory=FakeClient))[0].packets == []
+
+    async def test_packet_for_another_instance_is_not_listed(self, profile, peer):
+        p, _path = profile
+        pkt = Packet(
+            from_did=peer.did, to_did=Identity.generate("carol").did, intent="x", content="x"
+        ).sign(peer)
+        FakeClient.queued = [pkt]
+        assert (await inbox(p, client_factory=FakeClient))[0].packets == []
+
+    async def test_packet_on_a_stranger_key_is_not_listed(self, profile, peer):
+        p, _path = profile
+        pkt = _incoming(peer, p, "published by someone else")
+        pkt.set_transport_pubkey(Identity.generate("mallory").nostr_public_hex)
+        FakeClient.queued = [pkt]
+        assert (await inbox(p, client_factory=FakeClient))[0].packets == []
 
 
 class TestAckRecipientResolution:

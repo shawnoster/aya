@@ -633,6 +633,10 @@ async def receive(
         if packet.id in ingested_now:
             misrouted.append((packet, DUPLICATE_ID))
             continue
+        # Claimed on the first attempt, not on success: if the first packet
+        # fails to persist, a later one must not take the id and push it out
+        # of the id-keyed ledger for good. The first retries next poll.
+        ingested_now.add(packet.id)
         trusted = profile.is_trusted(packet.from_did)
         decision = decide(packet, trusted)
 
@@ -652,7 +656,6 @@ async def receive(
         profile.ingested_ids.append(
             {"id": packet.id, "ingested_at": now_iso, "from_did": packet.from_did}
         )
-        ingested_now.add(packet.id)
         summaries.append(_summary(packet, ingested=True))
 
         # A receipt used to be sent only from the interactive-confirm branch,

@@ -422,6 +422,26 @@ class TestReceive:
         assert [e["from_did"] for e in p.ingested_ids] == [peer.did]
         assert result.envelope()["rejected"][0]["from"] == stranger.did
 
+    async def test_failed_persist_still_holds_the_id(self, profile, peer, monkeypatch):
+        """A squatter must not take the id while the real packet retries."""
+        p, path = profile
+        real = _incoming(peer, p, "from the peer")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        stranger = Identity.generate("stranger")
+        squatter = Packet(
+            id=real.id, from_did=stranger.did, to_did=real.to_did, intent="squat", content="x"
+        ).sign(stranger)
+        squatter.set_transport_pubkey(stranger.nostr_public_hex)
+        FakeClient.queued = [real, squatter]
+        monkeypatch.setattr("aya.usecases.relay_ops.ingest_packet", lambda pkt: False)
+
+        result = await receive(
+            p, path, client_factory=FakeClient, decide=lambda pkt, t: Decision.INGEST
+        )
+
+        assert p.ingested_ids == []
+        assert result.envelope()["rejected"][0]["reason"] == "duplicate_id"
+
     async def test_envelope_names_instance_and_relays(self, profile):
         p, path = profile
         result = await receive(p, path, client_factory=FakeClient)

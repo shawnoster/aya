@@ -30,8 +30,8 @@ from aya.adapters.cli._kernel import (
 from aya.adapters.error_map import describe
 from aya.usecases.pair import (
     PairingError,
+    derive_pair_secret,
     generate_code,
-    hash_code,
     join_pairing,
     poll_for_pair_response,
     publish_pair_request,
@@ -133,12 +133,12 @@ def pair(
     else:
         # ── Initiator mode ───────────────────────────────────────────
         pairing_code = generate_code()
-        code_h = hash_code(pairing_code)
+        secret = derive_pair_secret(pairing_code)
 
         # Publish the request — embed our own label so the joiner knows what to call us
         if format_ != OutputFormat.JSON:
             console.print("[dim]Publishing pairing request…[/dim]")
-        request_event_id = asyncio.run(publish_pair_request(local, local.label, code_h, relay_urls))
+        request_event_id = asyncio.run(publish_pair_request(local, local.label, secret, relay_urls))
 
         # Show the code — user reads this aloud or types it on the other machine
         if format_ == OutputFormat.JSON:
@@ -171,7 +171,9 @@ def pair(
         )
         with ctx_mgr:
             result_or_none = asyncio.run(
-                poll_for_pair_response(relay_urls, local.nostr_public_hex, request_event_id)
+                poll_for_pair_response(
+                    relay_urls, local.nostr_public_hex, request_event_id, secret.mac_key
+                )
             )
 
         if result_or_none is None:

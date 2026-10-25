@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 import websockets
@@ -45,10 +46,18 @@ class PairResult:
 
 PAIR_TTL_SECONDS = 600  # 10 minutes
 PAIR_POLL_INTERVAL = 3  # seconds
+_PAIR_FETCH_LIMIT = 20  # room for junk events alongside the real one
+
+# The relay sees a tag derived from the code, so that derivation has to be slow
+# enough that ~29 bits can't be searched inside the 10-minute window: scrypt at
+# 128 MiB costs ~0.4 s per guess. The UTC day in the salt stops anyone building
+# one table of every code and reusing it forever.
+_KDF_N = 2**17
+_KDF_MAXMEM = 256 * 1024 * 1024
 
 # 256 words — easy to read aloud, no homophones, no offensive terms.
 # 8 bits per word x 2 words + ~13 bits (4-digit number) ≈ 29 bits.
-# Enough entropy for a 10-minute window.
+# Enough for a 10-minute window only because of the slow derivation below.
 WORD_LIST: tuple[str, ...] = (
     "AMBER",
     "ANCHOR",
@@ -320,15 +329,75 @@ def generate_code() -> str:
     return f"{w1}-{w2}-{num}"
 
 
-def hash_code(code: str) -> str:
-    """SHA-256 of the uppercased code — relay sees hash, not code."""
-    return hashlib.sha256(code.upper().encode()).hexdigest()
+@dataclass(frozen=True, slots=True)
+class PairSecret:
+    """What a pairing code turns into.
+
+    ``lookup`` is published as the request's ``d`` tag so the joiner can find
+    it. ``mac_key`` never leaves the machine: each side proves it knows the code
+    by MACing its own identity with it, which is what stops anyone else who
+    reads the relay from answering a request or posting a fake one.
+    """
+
+    lookup: str
+    mac_key: bytes
+
+
+def _day(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d")
+
+
+def derive_pair_secret(code: str, day: str | None = None) -> PairSecret:
+    """Derive the lookup tag and MAC key for *code* on *day* (UTC, default today)."""
+    day = day or _day(clock.now(UTC).timestamp())
+    raw = hashlib.scrypt(
+        code.strip().upper().encode(),
+        salt=f"aya-pair-v1|{day}".encode(),
+        n=_KDF_N,
+        r=8,
+        p=1,
+        maxmem=_KDF_MAXMEM,
+        dklen=64,
+    )
+    return PairSecret(lookup=raw[:32].hex(), mac_key=raw[32:])
+
+
+def _pair_mac(key: bytes, role: str, did: str, label: str, nostr_pubkey: str, ref: str) -> str:
+    message = json.dumps([role, did, label, nostr_pubkey, ref], separators=(",", ":"))
+    return hmac.new(key, message.encode(), hashlib.sha256).hexdigest()
+
+
+def _authenticate(event: dict[str, Any], key: bytes, role: str, ref: str) -> TrustedKey | None:
+    """The peer an event describes, or None unless its MAC proves the code.
+
+    The MAC covers the event's own pubkey, so a response lifted from the relay
+    and republished under another key fails here too.
+    """
+    try:
+        content = json.loads(event["content"])
+        did, label, mac = content["did"], content["label"], content.get("mac")
+        pubkey = event["pubkey"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(isinstance(v, str) for v in (did, label, pubkey)):
+        return None
+    if not isinstance(mac, str):
+        logger.warning(
+            "Ignored a pairing %s with no proof of the code — is the other machine on an "
+            "older aya? Both sides need to be upgraded.",
+            role,
+        )
+        return None
+    if not hmac.compare_digest(mac, _pair_mac(key, role, did, label, pubkey, ref)):
+        logger.warning("Ignored a pairing %s that did not prove the code", role)
+        return None
+    return TrustedKey(did=did, label=label, nostr_pubkey=pubkey)
 
 
 async def publish_pair_request(
     identity: Identity,
     label: str,
-    code_hash: str,
+    secret: PairSecret,
     relay_url: str | list[str],
 ) -> str:
     """Publish a pair-request event to all configured relays, returns event ID. **ASYNC.**
@@ -336,13 +405,13 @@ async def publish_pair_request(
     Usage::
 
         # In async context: await
-        event_id = await publish_pair_request(identity, label, code_hash, relay_url)
+        event_id = await publish_pair_request(identity, label, secret, relay_url)
 
         # In sync context: asyncio.run()
-        event_id = asyncio.run(publish_pair_request(identity, label, code_hash, relay_url))
+        event_id = asyncio.run(publish_pair_request(identity, label, secret, relay_url))
     """
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
-    request_event = _build_pair_request(identity, label, code_hash, relay_urls[0])
+    request_event = _build_pair_request(identity, label, secret)
     published = False
     last_event_id = request_event["id"]
     for url in relay_urls:
@@ -383,11 +452,14 @@ async def poll_for_pair_response(
     relay_url: str | list[str],
     my_pubkey: str,
     request_event_id: str,
+    mac_key: bytes,
     timeout_seconds: int = PAIR_TTL_SECONDS,
 ) -> PairResult | None:
     """Poll all configured relays for a pair-response. **ASYNC.**
 
-    Polls each relay in turn, returning as soon as any relay yields a response.
+    Polls each relay in turn, returning as soon as any relay yields a response
+    that proves the code. Anyone reading the relay can see the request and
+    answer it; only an answer MACed with the code is accepted.
     Applies per-relay exponential backoff when a relay has transient failures to
     avoid hammering rate-limited relays on reconnect.
 
@@ -398,10 +470,10 @@ async def poll_for_pair_response(
     Usage::
 
         # In async context: await
-        result = await poll_for_pair_response(relay_url, my_pubkey, event_id)
+        result = await poll_for_pair_response(relay_url, my_pubkey, event_id, mac_key)
 
         # In sync context: asyncio.run()
-        result = asyncio.run(poll_for_pair_response(relay_url, my_pubkey, event_id))
+        result = asyncio.run(poll_for_pair_response(relay_url, my_pubkey, event_id, mac_key))
     """
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
     since_ts = int(clock.now(UTC).timestamp()) - 5
@@ -418,7 +490,7 @@ async def poll_for_pair_response(
                     return None
                 await asyncio.sleep(min(delay, remaining))
             result, had_error = await _poll_single_relay(
-                url, my_pubkey, request_event_id, since_ts, deadline
+                url, my_pubkey, request_event_id, mac_key, since_ts, deadline
             )
             if result is not None:
                 return PairResult(trusted=result, relay=url)
@@ -435,6 +507,7 @@ async def _poll_single_relay(
     relay_url: str,
     my_pubkey: str,
     request_event_id: str,
+    mac_key: bytes,
     since_ts: int,
     deadline: float,
 ) -> tuple[TrustedKey | None, bool]:
@@ -452,20 +525,17 @@ async def _poll_single_relay(
                 "#p": [my_pubkey],
                 "#e": [request_event_id],
                 "since": since_ts,
-                "limit": 1,
+                "limit": _PAIR_FETCH_LIMIT,
             }
             sub_id = f"pair-poll-{clock.now(UTC).timestamp():.0f}"
             await ws.send(json.dumps(["REQ", sub_id, filter_]))
             try:
                 eose_timeout = max(1.0, deadline - clock.now(UTC).timestamp())
                 async for event in _read_until_eose(ws, sub_id, eose_timeout=eose_timeout):
-                    await ws.send(json.dumps(["CLOSE", sub_id]))
-                    content = json.loads(event["content"])
-                    return TrustedKey(
-                        did=content["did"],
-                        label=content["label"],
-                        nostr_pubkey=event["pubkey"],
-                    ), False
+                    peer = _authenticate(event, mac_key, "response", request_event_id)
+                    if peer is not None:
+                        await ws.send(json.dumps(["CLOSE", sub_id]))
+                        return peer, False
             except TimeoutError:
                 logger.debug("EOSE not received within timeout on %s; continuing", relay_url)
             await ws.send(json.dumps(["CLOSE", sub_id]))
@@ -486,8 +556,8 @@ async def join_pairing(
     """Joiner half of pairing flow — join using a pairing code. **ASYNC.**
 
     Joiner flow:
-      1. Hash the code, find matching pair-request on relay
-      2. Publish pair-response
+      1. Derive the lookup tag, find a pair-request on the relay that proves the code
+      2. Publish pair-response, MACed with the code
       3. Return the initiator's TrustedKey and the relay it was found on
 
     Usage::
@@ -499,10 +569,13 @@ async def join_pairing(
         result = asyncio.run(join_pairing(identity, code, relay_url))
     """
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
-    code_h = hash_code(code)
+    # The request may have been made on the other side of a UTC midnight.
+    now = clock.now(UTC).timestamp()
+    days = {_day(now), _day(now - PAIR_TTL_SECONDS)}
+    secrets_by_lookup = {s.lookup: s for s in (derive_pair_secret(code, d) for d in days)}
 
     # Find the pair request on any relay, with retry backoff
-    found = await _find_pair_request_with_retry(relay_urls, code_h)
+    found = await _find_pair_request_with_retry(relay_urls, secrets_by_lookup)
     if not found:
         raise PairingError(
             "No matching pairing request found.\n"
@@ -512,21 +585,17 @@ async def join_pairing(
             "  • Expired — pairing codes are valid for 10 minutes\n"
             "  • Relay propagation lag — the request may not have synced yet\n"
             "  • Relay mismatch — both sides must use the same relay\n"
+            "  • Version mismatch — both machines need an aya that proves the code\n"
             "\n"
             "Wait a few seconds and retry, or restart the pairing flow."
         )
 
-    request, found_on = found
-    req_content = json.loads(request["content"])
-    initiator_did = req_content["did"]
-    initiator_label = req_content["label"]
-    initiator_pubkey = request["pubkey"]
-    request_event_id = request["id"]
+    initiator, request_event_id, secret, found_on = found
 
     # Publish response to all relays; succeed if at least one accepts
     # Embed our own label so the initiator knows what to call us
     response_event = _build_pair_response(
-        identity, identity.label, initiator_pubkey, request_event_id, relay_urls[0]
+        identity, identity.label, initiator.nostr_pubkey or "", request_event_id, secret.mac_key
     )
     published = False
     for url in relay_urls:
@@ -545,28 +614,21 @@ async def join_pairing(
 
     # `found_on` — not relay_urls[0] — is the relay the initiator's request
     # actually arrived on, so it is the one both sides are proven to reach.
-    return PairResult(
-        trusted=TrustedKey(did=initiator_did, label=initiator_label, nostr_pubkey=initiator_pubkey),
-        relay=found_on,
-    )
+    return PairResult(trusted=initiator, relay=found_on)
 
 
 # ── Event builders ───────────────────────────────────────────────────────────
 
 
-def _build_pair_request(
-    identity: Identity,
-    label: str,
-    code_hash: str,
-    relay_url: str,  # noqa: ARG001
-) -> dict[str, Any]:
+def _build_pair_request(identity: Identity, label: str, secret: PairSecret) -> dict[str, Any]:
     """Build a Nostr event for a pairing request."""
     created_at = int(clock.now(UTC).timestamp())
     expiration = created_at + PAIR_TTL_SECONDS
-    content = json.dumps({"did": identity.did, "label": label})
+    mac = _pair_mac(secret.mac_key, "request", identity.did, label, identity.nostr_public_hex, "")
+    content = json.dumps({"did": identity.did, "label": label, "mac": mac})
     tags = [
         ["t", _TAG_PAIR_REQ],
-        ["d", code_hash],
+        ["d", secret.lookup],
         ["expiration", str(expiration)],
         ["aya-version", "0.2"],
     ]
@@ -594,12 +656,15 @@ def _build_pair_response(
     label: str,
     initiator_pubkey: str,
     request_event_id: str,
-    relay_url: str,  # noqa: ARG001
+    mac_key: bytes,
 ) -> dict[str, Any]:
     """Build a Nostr event responding to a pairing request."""
     created_at = int(clock.now(UTC).timestamp())
     expiration = created_at + PAIR_TTL_SECONDS
-    content = json.dumps({"did": identity.did, "label": label})
+    mac = _pair_mac(
+        mac_key, "response", identity.did, label, identity.nostr_public_hex, request_event_id
+    )
+    content = json.dumps({"did": identity.did, "label": label, "mac": mac})
     tags = [
         ["t", _TAG_PAIR_RESP],
         ["p", initiator_pubkey],
@@ -629,23 +694,28 @@ def _build_pair_response(
 # ── Relay queries ────────────────────────────────────────────────────────────
 
 
-async def _find_pair_request(
-    relay_url: str | list[str], code_hash: str
-) -> tuple[dict[str, Any], str] | None:
-    """Find a pair-request on any configured relay matching the given code hash.
+FoundRequest = tuple[TrustedKey, str, PairSecret, str]
+"""``(initiator, request_event_id, secret, relay_url)`` for a request that proved the code."""
 
-    Returns ``(event, relay_url)``. The URL is the point of the tuple: the
-    initiator published there and we read it back, so it is a relay both sides
-    reach — which is what the caller promotes to primary.
+
+async def _find_pair_request(
+    relay_url: str | list[str], secrets_by_lookup: dict[str, PairSecret]
+) -> FoundRequest | None:
+    """Find a pair-request on any configured relay that proves the code.
+
+    The relay URL is returned because the initiator published there and we read
+    it back, so it is a relay both sides reach, which the caller promotes to
+    primary. Requests that carry the lookup tag but fail the MAC are skipped:
+    the tag is public once the real request is posted, so anyone can copy it.
     """
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
     since_ts = int(clock.now(UTC).timestamp()) - PAIR_TTL_SECONDS
     filter_ = {
         "kinds": [AYA_KIND],
         "#t": [_TAG_PAIR_REQ],
-        "#d": [code_hash],
+        "#d": sorted(secrets_by_lookup),
         "since": since_ts,
-        "limit": 1,
+        "limit": _PAIR_FETCH_LIMIT,
     }
     for url in relay_urls:
         try:
@@ -653,8 +723,15 @@ async def _find_pair_request(
             async with websockets.connect(url) as ws:
                 await ws.send(json.dumps(["REQ", sub_id, filter_]))
                 async for event in _read_until_eose(ws, sub_id):
+                    lookup = next((t[1] for t in event.get("tags", []) if t[:1] == ["d"]), None)
+                    secret = secrets_by_lookup.get(lookup) if isinstance(lookup, str) else None
+                    if secret is None:
+                        continue
+                    initiator = _authenticate(event, secret.mac_key, "request", "")
+                    if initiator is None:
+                        continue
                     await ws.send(json.dumps(["CLOSE", sub_id]))
-                    return event, url
+                    return initiator, event["id"], secret, url
                 await ws.send(json.dumps(["CLOSE", sub_id]))
         except Exception as exc:  # noqa: BLE001 — tried per relay; returns None if none answer
             logger.warning("Failed to query %s for pair request: %s", url, exc)
@@ -665,8 +742,11 @@ _FIND_RETRY_DELAYS = (1, 2, 4)  # seconds — exponential backoff for not-found 
 
 
 async def _find_pair_request_with_retry(
-    relay_urls: list[str], code_hash: str, *, _delays: tuple[int, ...] = _FIND_RETRY_DELAYS
-) -> tuple[dict[str, Any], str] | None:
+    relay_urls: list[str],
+    secrets_by_lookup: dict[str, PairSecret],
+    *,
+    _delays: tuple[int, ...] = _FIND_RETRY_DELAYS,
+) -> FoundRequest | None:
     """Wrap :func:`_find_pair_request` with exponential backoff for "not found" results.
 
     Relays may lag behind on propagation, so retry up to ``len(_delays)`` times
@@ -674,7 +754,7 @@ async def _find_pair_request_with_retry(
     inside ``_find_pair_request`` are already logged there; here we only retry
     on a clean ``None`` (no matching event found yet).
     """
-    result = await _find_pair_request(relay_urls, code_hash)
+    result = await _find_pair_request(relay_urls, secrets_by_lookup)
     if result is not None:
         return result
     for attempt, delay in enumerate(_delays, start=1):
@@ -685,7 +765,7 @@ async def _find_pair_request_with_retry(
             delay,
         )
         await asyncio.sleep(delay)
-        result = await _find_pair_request(relay_urls, code_hash)
+        result = await _find_pair_request(relay_urls, secrets_by_lookup)
         if result is not None:
             return result
     return None

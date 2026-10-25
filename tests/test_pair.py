@@ -9,23 +9,34 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from aya.entities.identity import Identity
+from aya.entities.identity import Identity, TrustedKey
 from aya.usecases.pair import (
     _TAG_PAIR_REQ,
     _TAG_PAIR_RESP,
     PAIR_POLL_INTERVAL,
     PAIR_TTL_SECONDS,
     WORD_LIST,
+    _authenticate,
     _build_pair_request,
     _build_pair_response,
     _find_pair_request,
     _find_pair_request_with_retry,
+    derive_pair_secret,
     generate_code,
-    hash_code,
     join_pairing,
     poll_for_pair_response,
     publish_pair_request,
 )
+
+
+@pytest.fixture(autouse=True)
+def cheap_kdf(monkeypatch):
+    """The real cost is the point in production and a waste in tests."""
+    monkeypatch.setattr("aya.usecases.pair._KDF_N", 2**10)
+
+
+def _secret(code: str = "TEST-CODE-0000", day: str = "2026-10-25"):
+    return derive_pair_secret(code, day)
 
 
 @pytest.fixture
@@ -61,46 +72,56 @@ class TestCodeGeneration:
             assert len(num_part) == 4
 
 
-class TestCodeHashing:
+class TestPairSecret:
     def test_deterministic(self):
-        assert hash_code("MESA-TIGER-4927") == hash_code("MESA-TIGER-4927")
+        assert _secret("MESA-TIGER-4927") == _secret("MESA-TIGER-4927")
 
-    def test_case_insensitive(self):
-        assert hash_code("Mesa-Tiger-4927") == hash_code("MESA-TIGER-4927")
+    def test_case_and_whitespace_insensitive(self):
+        assert _secret(" Mesa-Tiger-4927 ") == _secret("MESA-TIGER-4927")
 
-    def test_different_codes_different_hashes(self):
-        assert hash_code("MESA-TIGER-4927") != hash_code("MESA-TIGER-4928")
+    def test_different_codes_differ(self):
+        assert _secret("MESA-TIGER-4927").lookup != _secret("MESA-TIGER-4928").lookup
 
-    def test_hash_is_hex_sha256(self):
-        h = hash_code("TEST-CODE-0000")
-        assert len(h) == 64
-        assert all(c in "0123456789abcdef" for c in h)
+    def test_salted_by_day(self):
+        """No single precomputed table covers every day."""
+        assert _secret(day="2026-10-25").lookup != _secret(day="2026-10-26").lookup
+
+    def test_lookup_is_not_the_mac_key(self):
+        secret = _secret()
+        assert len(secret.lookup) == 64
+        assert bytes.fromhex(secret.lookup) != secret.mac_key
+
+    def test_lookup_is_not_a_plain_hash_of_the_code(self):
+        import hashlib
+
+        plain = hashlib.sha256(b"TEST-CODE-0000").hexdigest()
+        assert _secret().lookup != plain
 
 
 class TestPairRequestEvent:
     def test_has_correct_tags(self, work):
-        code_h = hash_code("TEST-CODE-0000")
-        event = _build_pair_request(work, "work", code_h, "wss://relay.example.com")
+        secret = _secret()
+        event = _build_pair_request(work, "work", secret)
 
         tags_dict = {t[0]: t[1] for t in event["tags"]}
         assert tags_dict["t"] == _TAG_PAIR_REQ
-        assert tags_dict["d"] == code_h
+        assert tags_dict["d"] == secret.lookup
         assert "expiration" in tags_dict
 
     def test_content_contains_did_and_label(self, work):
-        event = _build_pair_request(work, "work", "fakehash", "wss://relay.example.com")
+        event = _build_pair_request(work, "work", _secret())
         content = json.loads(event["content"])
         assert content["did"] == work.did
         assert content["label"] == "work"
 
     def test_expiration_is_10_minutes(self, work):
-        event = _build_pair_request(work, "work", "fakehash", "wss://relay.example.com")
+        event = _build_pair_request(work, "work", _secret())
         created = event["created_at"]
         exp_tag = next(t[1] for t in event["tags"] if t[0] == "expiration")
         assert int(exp_tag) - created == PAIR_TTL_SECONDS
 
     def test_event_is_signed(self, work):
-        event = _build_pair_request(work, "work", "fakehash", "wss://relay.example.com")
+        event = _build_pair_request(work, "work", _secret())
         assert event["sig"]
         assert event["id"]
         assert event["pubkey"] == work.nostr_public_hex
@@ -109,7 +130,7 @@ class TestPairRequestEvent:
 class TestPairResponseEvent:
     def test_references_request(self, home):
         event = _build_pair_response(
-            home, "home", "initiator_pubkey_hex", "request_event_id_abc", "wss://relay.example.com"
+            home, "home", "initiator_pubkey_hex", "request_event_id_abc", _secret().mac_key
         )
         e_tags = [t for t in event["tags"] if t[0] == "e"]
         assert len(e_tags) == 1
@@ -118,7 +139,7 @@ class TestPairResponseEvent:
     def test_uses_standard_e_tag_for_nostr_event_id(self, home):
         """Standard 'e' tag should reference the pair-request event id (a real Nostr event ID)."""
         event = _build_pair_response(
-            home, "home", "initiator_pubkey_hex", "request_event_id_abc", "wss://relay.example.com"
+            home, "home", "initiator_pubkey_hex", "request_event_id_abc", _secret().mac_key
         )
         e_tags = [t for t in event["tags"] if t[0] == "e"]
         assert len(e_tags) == 1, "standard e tag must reference the pair-request event id"
@@ -127,20 +148,20 @@ class TestPairResponseEvent:
 
     def test_addresses_initiator(self, home):
         event = _build_pair_response(
-            home, "home", "initiator_pubkey_hex", "req123", "wss://relay.example.com"
+            home, "home", "initiator_pubkey_hex", "req123", _secret().mac_key
         )
         p_tags = [t for t in event["tags"] if t[0] == "p"]
         assert len(p_tags) == 1
         assert p_tags[0][1] == "initiator_pubkey_hex"
 
     def test_content_contains_did_and_label(self, home):
-        event = _build_pair_response(home, "home", "init_pub", "req123", "wss://relay.example.com")
+        event = _build_pair_response(home, "home", "init_pub", "req123", _secret().mac_key)
         content = json.loads(event["content"])
         assert content["did"] == home.did
         assert content["label"] == "home"
 
     def test_type_tag_is_pair_response(self, home):
-        event = _build_pair_response(home, "home", "init_pub", "req123", "wss://relay.example.com")
+        event = _build_pair_response(home, "home", "init_pub", "req123", _secret().mac_key)
         t_tags = [t for t in event["tags"] if t[0] == "t"]
         assert t_tags[0][1] == _TAG_PAIR_RESP
 
@@ -176,28 +197,166 @@ def _make_ws_mock(messages: list[str], ok_response: bool = True) -> AsyncMock:
     return FakeWS()
 
 
+def _answering_ws(events: list[dict]):
+    """A relay connection that answers any REQ with *events*, then EOSE."""
+
+    class AnsweringWS:
+        async def send(self, data):
+            msg = json.loads(data)
+            if msg[0] == "REQ":
+                self._out = [json.dumps(["EVENT", msg[1], e]) for e in events]
+                self._out.append(json.dumps(["EOSE", msg[1]]))
+
+        async def recv(self):
+            return json.dumps(["OK", "event_id", True, ""])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if getattr(self, "_out", None):
+                return self._out.pop(0)
+            raise StopAsyncIteration
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    return AnsweringWS()
+
+
+class TestPairingAuthentication:
+    """Reading the relay must not be enough to pair: each side proves the code."""
+
+    async def _poll(self, initiator: Identity, request_id: str, key: bytes, events: list[dict]):
+        with (
+            patch("aya.usecases.pair.websockets.connect", return_value=_answering_ws(events)),
+            patch("aya.usecases.pair.asyncio.sleep"),
+        ):
+            return await poll_for_pair_response(
+                "wss://relay.test", initiator.nostr_public_hex, request_id, key, timeout_seconds=1
+            )
+
+    async def test_initiator_ignores_a_stranger_and_accepts_the_real_peer(self, work, home):
+        secret = _secret()
+        request = _build_pair_request(work, work.label, secret)
+        mallory = Identity.generate("mallory")
+        forged = _build_pair_response(
+            mallory, "mallory", work.nostr_public_hex, request["id"], b"wrong-key"
+        )
+        real = _build_pair_response(
+            home, home.label, work.nostr_public_hex, request["id"], secret.mac_key
+        )
+
+        result = await self._poll(work, request["id"], secret.mac_key, [forged, real])
+
+        assert result is not None
+        assert result.trusted.did == home.did
+        assert result.trusted.nostr_pubkey == home.nostr_public_hex
+
+    async def test_initiator_rejects_a_response_with_no_proof(self, work):
+        secret = _secret()
+        request = _build_pair_request(work, work.label, secret)
+        mallory = Identity.generate("mallory")
+        unproven = _build_pair_response(
+            mallory, "mallory", work.nostr_public_hex, request["id"], secret.mac_key
+        )
+        content = json.loads(unproven["content"])
+        del content["mac"]
+        unproven["content"] = json.dumps(content)
+
+        assert await self._poll(work, request["id"], secret.mac_key, [unproven]) is None
+
+    async def test_real_response_republished_under_another_key_fails(self, work, home):
+        secret = _secret()
+        request = _build_pair_request(work, work.label, secret)
+        real = _build_pair_response(
+            home, home.label, work.nostr_public_hex, request["id"], secret.mac_key
+        )
+        lifted = {**real, "pubkey": Identity.generate("mallory").nostr_public_hex}
+
+        assert await self._poll(work, request["id"], secret.mac_key, [lifted]) is None
+
+    async def test_response_for_another_request_fails(self, work, home):
+        secret = _secret()
+        old = _build_pair_response(
+            home, home.label, work.nostr_public_hex, "an-earlier-request", secret.mac_key
+        )
+        assert await self._poll(work, "this-request", secret.mac_key, [old]) is None
+
+    async def test_joiner_skips_a_fake_request_with_the_copied_tag(self, work):
+        secret = _secret()
+        real = _build_pair_request(work, work.label, secret)
+        mallory = Identity.generate("mallory")
+        fake = _build_pair_request(mallory, "mallory", _secret("SOME-OTHER-0000"))
+        fake["tags"] = [["d", secret.lookup] if t[0] == "d" else t for t in fake["tags"]]
+
+        with patch(
+            "aya.usecases.pair.websockets.connect", return_value=_answering_ws([fake, real])
+        ):
+            found = await _find_pair_request("wss://relay.test", {secret.lookup: secret})
+
+        assert found is not None
+        assert found[0].did == work.did
+        assert found[1] == real["id"]
+
+    async def test_joiner_finds_a_request_made_before_utc_midnight(self, work, home):
+        """The request's day and the joiner's day can differ by one."""
+        code = "TEST-CODE-2359"
+        yesterday = derive_pair_secret(code, "2026-10-24")
+        request = _build_pair_request(work, work.label, yesterday)
+        seen_filters: list[dict] = []
+        ws = _answering_ws([request])
+        original_send = ws.send
+
+        async def send(data):
+            msg = json.loads(data)
+            if msg[0] == "REQ":
+                seen_filters.append(msg[2])
+            await original_send(data)
+
+        ws.send = send
+        from datetime import UTC, datetime
+
+        just_after_midnight = datetime(2026, 10, 25, 0, 3, tzinfo=UTC)
+        with (
+            patch("aya.usecases.pair.clock.now", return_value=just_after_midnight),
+            patch("aya.usecases.pair.websockets.connect", return_value=ws),
+        ):
+            result = await join_pairing(home, code, "wss://relay.test")
+
+        assert result.trusted.did == work.did
+        assert yesterday.lookup in seen_filters[0]["#d"]
+
+
 class TestPairingFlowMocked:
     """Integration tests with mocked WebSocket connections."""
 
     async def test_publish_pair_request_returns_event_id(self, work):
         ws = _make_ws_mock([])
         with patch("aya.usecases.pair.websockets.connect", return_value=ws):
-            event_id = await publish_pair_request(work, "work", "code_hash", "wss://relay.test")
+            event_id = await publish_pair_request(work, "work", _secret(), "wss://relay.test")
             assert event_id
             assert len(event_id) == 64  # sha256 hex
 
     async def test_join_pairing_success(self, work, home):
         code = "TEST-CODE-1234"
-        code_h = hash_code(code)
-        # Request embeds the initiator's own label (work.label = "work")
-        request_event = _build_pair_request(work, work.label, code_h, "wss://relay.test")
+        secret = derive_pair_secret(code)
+        found = (
+            TrustedKey(did=work.did, label=work.label, nostr_pubkey=work.nostr_public_hex),
+            "req-id",
+            secret,
+            "wss://relay.test",
+        )
 
         # Patch at the function level — _find_pair_request returns the event,
         # publish goes through a simple mock ws
         with (
             patch(
                 "aya.usecases.pair._find_pair_request",
-                return_value=(request_event, "wss://relay.test"),
+                return_value=found,
             ),
             patch(
                 "aya.usecases.pair.websockets.connect",
@@ -220,8 +379,13 @@ class TestPairingFlowMocked:
         (home.label = "home") so the initiator knows what label to assign the peer.
         """
         code = "TEST-CODE-5678"
-        code_h = hash_code(code)
-        request_event = _build_pair_request(work, work.label, code_h, "wss://relay.test")
+        secret = derive_pair_secret(code)
+        found = (
+            TrustedKey(did=work.did, label=work.label, nostr_pubkey=work.nostr_public_hex),
+            "req-id",
+            secret,
+            "wss://relay.test",
+        )
 
         sent_events: list[dict] = []
 
@@ -249,7 +413,7 @@ class TestPairingFlowMocked:
         with (
             patch(
                 "aya.usecases.pair._find_pair_request",
-                return_value=(request_event, "wss://relay.test"),
+                return_value=found,
             ),
             patch("aya.usecases.pair.websockets.connect", return_value=CapturingWS()),
         ):
@@ -260,6 +424,8 @@ class TestPairingFlowMocked:
         # The label in the response must be the joiner's own label, not the --peer value
         assert response_content["label"] == home.label  # "home", not "work"
         assert response_content["did"] == home.did
+        # ...and it proves the code, bound to the request it answers.
+        assert _authenticate(sent_events[0], secret.mac_key, "response", "req-id") is not None
 
     async def test_find_pair_request_reports_the_relay_that_answered(self, work):
         """The URL in the return value must be the relay that actually had the event.
@@ -268,45 +434,23 @@ class TestPairingFlowMocked:
         ``relay_urls[0]`` regardless, so a first relay that was unreachable
         became "primary" while the relay that did the work stayed a fallback.
         """
-        code_h = hash_code("TEST-CODE-9999")
-        request_event = _build_pair_request(work, work.label, code_h, "wss://second.test")
-
-        class AnsweringWS:
-            """Echoes the caller's own subscription id, which _read_until_eose matches on."""
-
-            async def send(self, data):
-                msg = json.loads(data)
-                if msg[0] == "REQ":
-                    self._out = [
-                        json.dumps(["EVENT", msg[1], request_event]),
-                        json.dumps(["EOSE", msg[1]]),
-                    ]
-
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                if getattr(self, "_out", None):
-                    return self._out.pop(0)
-                raise StopAsyncIteration
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                pass
+        secret = _secret("TEST-CODE-9999")
+        request_event = _build_pair_request(work, work.label, secret)
 
         def connect(url, *args, **kwargs):
             if url == "wss://first.test":
                 raise OSError("connection refused")
-            return AnsweringWS()
+            return _answering_ws([request_event])
 
         with patch("aya.usecases.pair.websockets.connect", side_effect=connect):
-            found = await _find_pair_request(["wss://first.test", "wss://second.test"], code_h)
+            found = await _find_pair_request(
+                ["wss://first.test", "wss://second.test"], {secret.lookup: secret}
+            )
 
         assert found is not None
-        event, url = found
-        assert event["id"] == request_event["id"]
+        initiator, request_id, _secret_used, url = found
+        assert request_id == request_event["id"]
+        assert initiator.did == work.did
         assert url == "wss://second.test"  # not first.test, which never answered
 
     async def test_find_pair_request_no_match(self):
@@ -314,7 +458,7 @@ class TestPairingFlowMocked:
         ws = _make_ws_mock([json.dumps(["EOSE", "sub1"])])
 
         with patch("aya.usecases.pair.websockets.connect", return_value=ws):
-            result = await _find_pair_request("wss://relay.test", "nonexistent_hash")
+            result = await _find_pair_request("wss://relay.test", {"nonexistent": _secret()})
 
         assert result is None
 
@@ -340,13 +484,13 @@ class TestPairingFlowMocked:
         fake_event = {"id": "abc", "pubkey": "xyz", "content": "{}"}
         call_count = 0
 
-        async def fake_find(relay_urls, code_hash):
+        async def fake_find(relay_urls, secrets_by_lookup):
             nonlocal call_count
             call_count += 1
             return fake_event, "wss://relay.test"
 
         with patch("aya.usecases.pair._find_pair_request", side_effect=fake_find):
-            result = await _find_pair_request_with_retry(["wss://relay.test"], "hash")
+            result = await _find_pair_request_with_retry(["wss://relay.test"], {})
 
         assert result == (fake_event, "wss://relay.test")
         assert call_count == 1
@@ -356,7 +500,7 @@ class TestPairingFlowMocked:
         fake_event = {"id": "abc", "pubkey": "xyz", "content": "{}"}
         call_count = 0
 
-        async def fake_find(relay_urls, code_hash):
+        async def fake_find(relay_urls, secrets_by_lookup):
             nonlocal call_count
             call_count += 1
             # Return None for first two calls, then succeed
@@ -372,7 +516,7 @@ class TestPairingFlowMocked:
             patch("aya.usecases.pair.asyncio.sleep", side_effect=fake_sleep),
         ):
             result = await _find_pair_request_with_retry(
-                ["wss://relay.test"], "hash", _delays=(1, 2, 4)
+                ["wss://relay.test"], {}, _delays=(1, 2, 4)
             )
 
         assert result == fake_event
@@ -384,7 +528,7 @@ class TestPairingFlowMocked:
         """Returns None after exhausting all retry attempts."""
         call_count = 0
 
-        async def fake_find(relay_urls, code_hash):
+        async def fake_find(relay_urls, secrets_by_lookup):
             nonlocal call_count
             call_count += 1
 
@@ -398,7 +542,7 @@ class TestPairingFlowMocked:
             patch("aya.usecases.pair.asyncio.sleep", side_effect=fake_sleep),
         ):
             result = await _find_pair_request_with_retry(
-                ["wss://relay.test"], "hash", _delays=(1, 2, 4)
+                ["wss://relay.test"], {}, _delays=(1, 2, 4)
             )
 
         assert result is None
@@ -423,7 +567,11 @@ class TestPollForPairResponseErrors:
 
             with patch("aya.usecases.pair.websockets.connect", return_value=mock_ws):
                 result = await poll_for_pair_response(
-                    "wss://relay.test", work.nostr_public_hex, "req_event_id", timeout_seconds=1
+                    "wss://relay.test",
+                    work.nostr_public_hex,
+                    "req_event_id",
+                    b"k",
+                    timeout_seconds=1,
                 )
 
         assert result is None
@@ -439,7 +587,7 @@ class TestPollForPairResponseErrors:
             side_effect=FakeConnectionError("connection refused"),
         ):
             result = await poll_for_pair_response(
-                "wss://relay.test", work.nostr_public_hex, "req_event_id", timeout_seconds=1
+                "wss://relay.test", work.nostr_public_hex, "req_event_id", b"k", timeout_seconds=1
             )
 
         assert result is None
@@ -474,7 +622,11 @@ class TestPollForPairResponseErrors:
             patch("aya.usecases.pair.asyncio.sleep"),
         ):
             await poll_for_pair_response(
-                "wss://relay.test", work.nostr_public_hex, "req_event_id_abc", timeout_seconds=1
+                "wss://relay.test",
+                work.nostr_public_hex,
+                "req_event_id_abc",
+                b"k",
+                timeout_seconds=1,
             )
 
         assert sent_filters, "Expected at least one REQ to be sent"
@@ -503,7 +655,11 @@ class TestPollForPairResponseErrors:
 
             with patch("aya.usecases.pair.websockets.connect", return_value=mock_ws):
                 await poll_for_pair_response(
-                    "wss://relay.test", work.nostr_public_hex, "req_event_id", timeout_seconds=1
+                    "wss://relay.test",
+                    work.nostr_public_hex,
+                    "req_event_id",
+                    b"k",
+                    timeout_seconds=1,
                 )
 
         # Every sleep duration must be ≤ PAIR_POLL_INTERVAL

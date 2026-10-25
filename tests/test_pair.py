@@ -1,4 +1,4 @@
-"""Tests for relay-mediated pairing — code generation, hashing, event structure."""
+"""Tests for relay-mediated pairing — code generation, key derivation, event structure."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def home() -> Identity:
 class TestCodeGeneration:
     def test_code_format(self):
         code = generate_code()
-        assert re.match(r"^[A-Z]+-[A-Z]+-\d{4}$", code)
+        assert re.match(r"^[A-Z]+-[A-Z]+-[A-Z]+-\d{4}$", code)
 
     def test_codes_are_unique(self):
         codes = {generate_code() for _ in range(100)}
@@ -61,14 +61,13 @@ class TestCodeGeneration:
     def test_words_from_word_list(self):
         code = generate_code()
         parts = code.split("-")
-        assert parts[0] in WORD_LIST
-        assert parts[1] in WORD_LIST
+        assert all(word in WORD_LIST for word in parts[:3])
 
     def test_number_is_zero_padded(self):
         # Generate enough to likely hit a number < 1000
         for _ in range(200):
             code = generate_code()
-            num_part = code.split("-")[2]
+            num_part = code.split("-")[3]
             assert len(num_part) == 4
 
 
@@ -300,6 +299,44 @@ class TestPairingAuthentication:
 
         assert found is not None
         assert found[0].did == work.did
+        assert found[1] == real["id"]
+
+    async def test_junk_before_the_real_response_does_not_stop_the_poll(self, work, home):
+        """One malformed event, newest first, must not hide the real one."""
+        secret = _secret()
+        request = _build_pair_request(work, work.label, secret)
+        real = _build_pair_response(
+            home, home.label, work.nostr_public_hex, request["id"], secret.mac_key
+        )
+        non_ascii = {**real, "content": json.dumps({"did": "x", "label": "x", "mac": "é"})}
+        not_json = {**real, "content": "{{{"}
+        no_pubkey = {k: v for k, v in real.items() if k != "pubkey"}
+
+        result = await self._poll(
+            work, request["id"], secret.mac_key, [non_ascii, not_json, no_pubkey, real]
+        )
+
+        assert result is not None
+        assert result.trusted.did == home.did
+
+    async def test_request_mac_is_not_accepted_as_a_response(self, work):
+        secret = _secret()
+        request = _build_pair_request(work, work.label, secret)
+        # A request's MAC, replayed in a response-shaped event, binds the wrong role.
+        assert _authenticate(request, secret.mac_key, "response", "") is None
+
+    async def test_joiner_survives_malformed_tags_before_the_real_request(self, work):
+        secret = _secret()
+        real = _build_pair_request(work, work.label, secret)
+        broken = {**real, "tags": [["d"], "not-a-list", ["d", secret.lookup]]}
+        broken["content"] = json.dumps({"did": "x", "label": "x", "mac": "é"})
+
+        with patch(
+            "aya.usecases.pair.websockets.connect", return_value=_answering_ws([broken, real])
+        ):
+            found = await _find_pair_request("wss://relay.test", {secret.lookup: secret})
+
+        assert found is not None
         assert found[1] == real["id"]
 
     async def test_joiner_finds_a_request_made_before_utc_midnight(self, work, home):

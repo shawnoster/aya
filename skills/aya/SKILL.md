@@ -174,7 +174,7 @@ aya instance with another machine.
    aya pair --peer {remote_label} --as {local_instance}
    ```
 
-   This prints a pairing code (e.g., `ANCHOR-NORTH-0045`). Tell the user:
+   This prints a pairing code (e.g., `ANCHOR-NORTH-BIRCH-0045`). Tell the user:
 
    > **Pairing code: `{CODE}`**
    > Enter this code on your other machine within 10 minutes.

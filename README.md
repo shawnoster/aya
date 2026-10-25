@@ -43,7 +43,7 @@ aya init --label bob         # on Bob's machine
 
 # Pair them
 aya pair --peer bob          # on Alice's machine — shows a code
-aya pair --code WORD-WORD-0000 --peer alice   # on Bob's machine
+aya pair --code WORD-WORD-WORD-0000 --peer alice   # on Bob's machine
 
 # Send a packet
 aya send --to bob --intent "build notes" --files notes.md

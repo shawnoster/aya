@@ -46,18 +46,21 @@ class PairResult:
 
 PAIR_TTL_SECONDS = 600  # 10 minutes
 PAIR_POLL_INTERVAL = 3  # seconds
-_PAIR_FETCH_LIMIT = 20  # room for junk events alongside the real one
+# Tolerates some junk alongside the real event. Someone who keeps posting more
+# than this under the same tags can still block a pairing (not hijack it).
+_PAIR_FETCH_LIMIT = 20
 
-# The relay sees a tag derived from the code, so that derivation has to be slow
-# enough that ~29 bits can't be searched inside the 10-minute window: scrypt at
-# 128 MiB costs ~0.4 s per guess. The UTC day in the salt stops anyone building
-# one table of every code and reusing it forever.
+# The relay sees a tag derived from the code, so the derivation is slow: scrypt
+# at 128 MiB, ~0.4 s per guess. The UTC day in the salt means no single table
+# covers every pairing, but the day is predictable, so an attacker can build a
+# table for a coming day in advance. Three words plus a number (~37 bits) puts
+# that at tens of millions of core-hours per day. Residual risk, accepted for a
+# personal tool; a PAKE (SPAKE2) would remove offline guessing entirely.
 _KDF_N = 2**17
 _KDF_MAXMEM = 256 * 1024 * 1024
 
 # 256 words — easy to read aloud, no homophones, no offensive terms.
-# 8 bits per word x 2 words + ~13 bits (4-digit number) ≈ 29 bits.
-# Enough for a 10-minute window only because of the slow derivation below.
+# 8 bits per word x 3 words + ~13 bits (4-digit number) ≈ 37 bits.
 WORD_LIST: tuple[str, ...] = (
     "AMBER",
     "ANCHOR",
@@ -322,11 +325,10 @@ _TAG_PAIR_RESP = _PAIR_TAG_RESP
 
 
 def generate_code() -> str:
-    """Generate a human-readable pairing code: WORD-WORD-NNNN."""
-    w1 = secrets.choice(WORD_LIST)
-    w2 = secrets.choice(WORD_LIST)
+    """Generate a human-readable pairing code: WORD-WORD-WORD-NNNN."""
+    words = [secrets.choice(WORD_LIST) for _ in range(3)]
     num = f"{secrets.randbelow(10000):04d}"
-    return f"{w1}-{w2}-{num}"
+    return "-".join([*words, num])
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,19 +352,26 @@ def _day(ts: float) -> str:
 def derive_pair_secret(code: str, day: str | None = None) -> PairSecret:
     """Derive the lookup tag and MAC key for *code* on *day* (UTC, default today)."""
     day = day or _day(clock.now(UTC).timestamp())
-    raw = hashlib.scrypt(
-        code.strip().upper().encode(),
-        salt=f"aya-pair-v1|{day}".encode(),
-        n=_KDF_N,
-        r=8,
-        p=1,
-        maxmem=_KDF_MAXMEM,
-        dklen=64,
-    )
+    try:
+        raw = hashlib.scrypt(
+            code.strip().upper().encode(),
+            salt=f"aya-pair-v1|{day}".encode(),
+            n=_KDF_N,
+            r=8,
+            p=1,
+            maxmem=_KDF_MAXMEM,
+            dklen=64,
+        )
+    except (ValueError, MemoryError) as exc:
+        raise PairingError(
+            f"Could not derive the pairing key ({exc}). Pairing needs about 128 MiB free."
+        ) from exc
     return PairSecret(lookup=raw[:32].hex(), mac_key=raw[32:])
 
 
 def _pair_mac(key: bytes, role: str, did: str, label: str, nostr_pubkey: str, ref: str) -> str:
+    # The message is the compact JSON array (Python's default ensure_ascii
+    # escaping); another implementation must reproduce it byte for byte.
     message = json.dumps([role, did, label, nostr_pubkey, ref], separators=(",", ":"))
     return hmac.new(key, message.encode(), hashlib.sha256).hexdigest()
 
@@ -371,27 +380,25 @@ def _authenticate(event: dict[str, Any], key: bytes, role: str, ref: str) -> Tru
     """The peer an event describes, or None unless its MAC proves the code.
 
     The MAC covers the event's own pubkey, so a response lifted from the relay
-    and republished under another key fails here too.
+    and republished under another key fails here too. Anything malformed is
+    just another event that didn't prove the code: one bad event on the relay
+    must not end the search for the real one.
     """
     try:
         content = json.loads(event["content"])
-        did, label, mac = content["did"], content["label"], content.get("mac")
+        did, label, mac = content["did"], content["label"], content["mac"]
         pubkey = event["pubkey"]
-    except (KeyError, TypeError, ValueError):
-        return None
-    if not all(isinstance(v, str) for v in (did, label, pubkey)):
-        return None
-    if not isinstance(mac, str):
-        logger.warning(
-            "Ignored a pairing %s with no proof of the code — is the other machine on an "
-            "older aya? Both sides need to be upgraded.",
-            role,
-        )
-        return None
-    if not hmac.compare_digest(mac, _pair_mac(key, role, did, label, pubkey, ref)):
-        logger.warning("Ignored a pairing %s that did not prove the code", role)
-        return None
-    return TrustedKey(did=did, label=label, nostr_pubkey=pubkey)
+        if not all(isinstance(v, str) for v in (did, label, mac, pubkey)):
+            raise TypeError("non-string field")
+        expected = _pair_mac(key, role, did, label, pubkey, ref)
+        # Bytes, not str: compare_digest raises on non-ASCII strings.
+        if hmac.compare_digest(mac.encode(), expected.encode()):
+            return TrustedKey(did=did, label=label, nostr_pubkey=pubkey)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        pass
+    # Debug, not warning: a flood of junk would otherwise flood the log.
+    logger.debug("Ignored a pairing %s that did not prove the code", role)
+    return None
 
 
 async def publish_pair_request(
@@ -571,7 +578,8 @@ async def join_pairing(
     relay_urls = [relay_url] if isinstance(relay_url, str) else relay_url
     # The request may have been made on the other side of a UTC midnight.
     now = clock.now(UTC).timestamp()
-    days = {_day(now), _day(now - PAIR_TTL_SECONDS)}
+    # And a couple of minutes ahead, in case this clock runs behind theirs.
+    days = {_day(now - PAIR_TTL_SECONDS), _day(now), _day(now + 120)}
     secrets_by_lookup = {s.lookup: s for s in (derive_pair_secret(code, d) for d in days)}
 
     # Find the pair request on any relay, with retry backoff
@@ -586,6 +594,7 @@ async def join_pairing(
             "  • Relay propagation lag — the request may not have synced yet\n"
             "  • Relay mismatch — both sides must use the same relay\n"
             "  • Version mismatch — both machines need an aya that proves the code\n"
+            "    (codes are now three words and a number)\n"
             "\n"
             "Wait a few seconds and retry, or restart the pairing flow."
         )
@@ -694,6 +703,19 @@ def _build_pair_response(
 # ── Relay queries ────────────────────────────────────────────────────────────
 
 
+def _secret_for(
+    event: dict[str, Any], secrets_by_lookup: dict[str, PairSecret]
+) -> PairSecret | None:
+    """The secret whose lookup tag *event* carries, tolerating malformed tags."""
+    tags = event.get("tags")
+    for tag in tags if isinstance(tags, list) else []:
+        if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "d":
+            secret = secrets_by_lookup.get(tag[1]) if isinstance(tag[1], str) else None
+            if secret is not None:
+                return secret
+    return None
+
+
 FoundRequest = tuple[TrustedKey, str, PairSecret, str]
 """``(initiator, request_event_id, secret, relay_url)`` for a request that proved the code."""
 
@@ -723,8 +745,7 @@ async def _find_pair_request(
             async with websockets.connect(url) as ws:
                 await ws.send(json.dumps(["REQ", sub_id, filter_]))
                 async for event in _read_until_eose(ws, sub_id):
-                    lookup = next((t[1] for t in event.get("tags", []) if t[:1] == ["d"]), None)
-                    secret = secrets_by_lookup.get(lookup) if isinstance(lookup, str) else None
+                    secret = _secret_for(event, secrets_by_lookup)
                     if secret is None:
                         continue
                     initiator = _authenticate(event, secret.mac_key, "request", "")

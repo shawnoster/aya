@@ -116,7 +116,7 @@ MACHINE A (alice)                RELAY                    MACHINE B (bob)
 
 1. aya pair --peer bob
    │
-2. Generate code: ANCHOR-NORTH-0045
+2. Generate code: ANCHOR-NORTH-BIRCH-0045
    │
 3. Derive lookup tag + MAC key from code
    (scrypt, salted with the UTC day)
@@ -126,8 +126,8 @@ MACHINE A (alice)                RELAY                    MACHINE B (bob)
    MACs its DID + key with code
    │
 6. Display code to user                              7. User enters code
-   "ANCHOR-NORTH-0045"                                  aya pair --code
-                                                        ANCHOR-NORTH-0045
+   "ANCHOR-NORTH-BIRCH-0045"                            aya pair --code
+                                                        ANCHOR-NORTH-BIRCH-0045
                                                         --peer alice
                                                         │
                                  8. Query by ◄────── 9. Derive tag, query

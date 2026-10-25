@@ -74,7 +74,7 @@ aya init --label alice
 # Pair with another machine (initiator)
 aya pair --peer bob --as alice
 # On the other machine (joiner)
-aya pair --code WORD-WORD-1234 --peer alice --as bob
+aya pair --code WORD-WORD-WORD-1234 --peer alice --as bob
 
 # Check status
 aya status

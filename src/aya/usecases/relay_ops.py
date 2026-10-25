@@ -243,7 +243,7 @@ class PollResult:
 
     def rejected(self) -> list[dict[str, str]]:
         """Every packet refused this poll, with why. One list for every surface."""
-        refused = [{"id": pkt.id, "reason": "bad signature"} for pkt in self.bad_signature]
+        refused = [{"id": pkt.id, "reason": "bad_signature"} for pkt in self.bad_signature]
         refused += [{"id": pkt.id, "reason": reason} for pkt, reason in self.misrouted]
         return refused
 
@@ -548,20 +548,27 @@ async def inbox(
     # a packet addressed to someone else is not waiting for this instance.
     # `ingested` is left empty here because include_ingested still wants the
     # ingested ones; they are split out on the next line instead.
-    visible = triage(
+    sorted_ = triage(
         packets,
         ingested=set(),
         dropped=dropped,
         verify=False,
         local_did=local.did,
         sender_keys=sender_keys(profile),
-    ).fresh
+    )
+    visible = sorted_.fresh
     fresh = [pkt for pkt in visible if pkt.id not in ingested]
     shown = visible if include_ingested else fresh
 
     summaries = [packet_summary(profile, pkt, ingested=pkt.id in ingested) for pkt in shown]
     return (
-        PollResult(packets=summaries, instance=label, relays=relay_urls, relay_reachable=reachable),
+        PollResult(
+            packets=summaries,
+            instance=label,
+            relays=relay_urls,
+            relay_reachable=reachable,
+            misrouted=sorted_.misrouted,
+        ),
         shown,
     )
 

@@ -6,7 +6,7 @@ filter was applied in the two ``inbox`` paths and neither ``receive`` path, so
 ``aya drop`` hid a packet from the listing and then let the very next poll
 re-ingest it.
 
-One function, four callers.
+One function, shared by receive and inbox.
 """
 
 from __future__ import annotations
@@ -74,8 +74,9 @@ def triage(
     fresh: list[Packet] = []
     bad: list[Packet] = []
     misrouted: list[tuple[Packet, str]] = []
+    accepted: set[str] = set()
     for packet in packets:
-        if packet.id in dropped or packet.id in ingested:
+        if packet.id in dropped or packet.id in ingested or packet.id in accepted:
             continue
         if verify and not packet.verify_from_did():
             bad.append(packet)
@@ -84,8 +85,14 @@ def triage(
         if reason is not None:
             misrouted.append((packet, reason))
             continue
+        accepted.add(packet.id)
         fresh.append(packet)
     return Triage(fresh=fresh, bad_signature=bad, misrouted=misrouted)
+
+
+# Stable codes: MCP and --json consumers match on these.
+WRONG_RECIPIENT = "wrong_recipient"
+WRONG_SENDER_KEY = "wrong_sender_key"
 
 
 def _misrouted(
@@ -93,12 +100,12 @@ def _misrouted(
 ) -> str | None:
     """Why *packet* must not be accepted here, or None if it may be."""
     if local_did is not None and packet.to_did != local_did:
-        return "addressed to another instance"
+        return WRONG_RECIPIENT
     if sender_keys is None or packet.transport_pubkey is None:
         return None
     known = sender_keys.get(packet.from_did)
     if known is None:
         return None
     if packet.transport_pubkey not in known:
-        return "published by a key that isn't the sender's"
+        return WRONG_SENDER_KEY
     return None

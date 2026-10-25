@@ -249,14 +249,18 @@ class RelayClient:
             packets = asyncio.run(fetch_all())
         """
         logger.debug("Fetching pending packets from %d relay(s)", len(self._relay_urls))
-        seen_ids: set[str] = set()
+        # Keyed on the carrying key too: anyone can republish a plaintext packet
+        # under their own key, and if their copy arrived first and won the
+        # dedup, the receiver would reject it and never see the real one.
+        seen: set[tuple[str, str | None]] = set()
         unreachable: list[str] = []
         self.last_fetch_unreachable = unreachable
         for relay_url in self._relay_urls:
             try:
                 async for packet in self._fetch_from_relay(relay_url, since):
-                    if packet.id not in seen_ids:
-                        seen_ids.add(packet.id)
+                    key = (packet.id, packet.transport_pubkey)
+                    if key not in seen:
+                        seen.add(key)
                         yield packet
             except RelayUnreachableError:
                 unreachable.append(relay_url)
@@ -264,7 +268,7 @@ class RelayClient:
             raise RelayUnreachableError(
                 f"All {len(self._relay_urls)} relay(s) unreachable: {unreachable}"
             )
-        logger.debug("Fetch complete, %d unique packet(s) found", len(seen_ids))
+        logger.debug("Fetch complete, %d unique packet(s) found", len(seen))
 
     async def _fetch_from_relay(
         self,
@@ -383,6 +387,11 @@ class RelayClient:
                     # (base64 NIP-44 payload) → decrypt first.  Checking the leading
                     # character avoids masking parse/validation errors in malformed
                     # JSON packets by misattributing them as decryption failures.
+                    if not raw.get("pubkey"):
+                        logger.warning(
+                            "Skipping event %s: no publisher pubkey", raw.get("id", "?")[:8]
+                        )
+                        continue
                     if content.lstrip().startswith("{"):
                         packet = Packet.from_json(content)
                     else:

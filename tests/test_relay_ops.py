@@ -317,10 +317,8 @@ class TestReceive:
         FakeClient.queued = [pkt]
         result = await receive(p, path, client_factory=FakeClient)
         assert result.packets == []
-        assert result.misrouted == [(pkt, "addressed to another instance")]
-        assert result.envelope()["rejected"] == [
-            {"id": pkt.id, "reason": "addressed to another instance"}
-        ]
+        assert result.misrouted == [(pkt, "wrong_recipient")]
+        assert result.envelope()["rejected"] == [{"id": pkt.id, "reason": "wrong_recipient"}]
         assert p.ingested_ids == []
         assert FakeClient.receipts == []
 
@@ -331,7 +329,7 @@ class TestReceive:
         FakeClient.queued = [pkt]
         result = await receive(p, path, client_factory=FakeClient)
         assert result.packets == []
-        assert result.misrouted == [(pkt, "published by a key that isn't the sender's")]
+        assert result.misrouted == [(pkt, "wrong_sender_key")]
         assert p.ingested_ids == []
 
     async def test_trusted_did_on_its_own_key_is_ingested(self, profile, peer):
@@ -380,7 +378,9 @@ class TestInbox:
         pkt = _incoming(peer, p, "published by someone else")
         pkt.set_transport_pubkey(Identity.generate("mallory").nostr_public_hex)
         FakeClient.queued = [pkt]
-        assert (await inbox(p, client_factory=FakeClient))[0].packets == []
+        result = (await inbox(p, client_factory=FakeClient))[0]
+        assert result.packets == []
+        assert result.envelope()["rejected"] == [{"id": pkt.id, "reason": "wrong_sender_key"}]
 
 
 class TestAckRecipientResolution:

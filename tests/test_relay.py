@@ -366,7 +366,7 @@ class TestFetchPending:
             intent="Remote task",
             content="Context data.",
         )
-        raw_event = {"id": "evt1", "content": p.to_json()}
+        raw_event = {"id": "evt1", "pubkey": "ab" * 32, "content": p.to_json()}
 
         async def fake_read_until_eose(ws, sub_id):
             yield raw_event
@@ -394,7 +394,7 @@ class TestFetchPending:
             content="Stale.",
             expires_at=past,
         )
-        raw_event = {"id": "evt-old", "content": p.to_json()}
+        raw_event = {"id": "evt-old", "pubkey": "ab" * 32, "content": p.to_json()}
 
         async def fake_read_until_eose(ws, sub_id):
             yield raw_event
@@ -457,7 +457,7 @@ class TestFetchPending:
             intent="Partial fetch",
             content="Some data.",
         )
-        raw_event = {"id": "evt-partial", "content": p.to_json()}
+        raw_event = {"id": "evt-partial", "pubkey": "ab" * 32, "content": p.to_json()}
 
         async def fake_read_timeout(ws, sub_id):
             yield raw_event
@@ -545,6 +545,36 @@ class TestFetchPending:
 
         assert [pkt.transport_pubkey for pkt in packets] == ["ab" * 32]
 
+    async def _fetch(self, client: RelayClient, events: list[dict]) -> list[Packet]:
+        async def fake_read_until_eose(ws, sub_id):
+            for event in events:
+                yield event
+
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose):
+            mock_ws = AsyncMock()
+            mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws.__aexit__ = AsyncMock(return_value=False)
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
+                return [pkt async for pkt in client.fetch_pending()]
+
+    async def test_republished_copy_does_not_hide_the_original(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """A copy on a stranger's key, fetched first, must not win the dedup."""
+        p = Packet(from_did=sender.did, to_did=recipient.did, intent="plain", content="x")
+        events = [
+            {"id": "evt-copy", "pubkey": "cd" * 32, "content": p.to_json()},
+            {"id": "evt-real", "pubkey": sender.nostr_public_hex, "content": p.to_json()},
+        ]
+        packets = await self._fetch(client, events)
+        assert [pkt.transport_pubkey for pkt in packets] == ["cd" * 32, sender.nostr_public_hex]
+
+    async def test_plaintext_event_without_pubkey_is_skipped(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        p = Packet(from_did=sender.did, to_did=recipient.did, intent="plain", content="x")
+        assert await self._fetch(client, [{"id": "evt-anon", "content": p.to_json()}]) == []
+
 
 # ── pagination ────────────────────────────────────────────────────────────────
 
@@ -566,7 +596,12 @@ class TestFetchPagination:
                 intent=f"Packet {idx}",
                 content="data",
             )
-            return {"id": f"evt-{idx}", "content": p.to_json(), "created_at": base_ts - idx}
+            return {
+                "id": f"evt-{idx}",
+                "pubkey": "ab" * 32,
+                "content": p.to_json(),
+                "created_at": base_ts - idx,
+            }
 
         page1_events = [_make_event(i) for i in range(_FETCH_PAGE_SIZE)]
         page2_events = [_make_event(_FETCH_PAGE_SIZE)]
@@ -617,7 +652,12 @@ class TestFetchPagination:
             intent="Single packet",
             content="data",
         )
-        raw_event = {"id": "evt-only", "content": p.to_json(), "created_at": 1_700_000_000}
+        raw_event = {
+            "id": "evt-only",
+            "pubkey": "ab" * 32,
+            "content": p.to_json(),
+            "created_at": 1_700_000_000,
+        }
 
         req_count = 0
 
@@ -652,7 +692,7 @@ class TestFetchPagination:
                 intent=f"Packet {idx}",
                 content="data",
             )
-            return {"id": f"evt-{idx}", "content": p.to_json()}
+            return {"id": f"evt-{idx}", "pubkey": "ab" * 32, "content": p.to_json()}
 
         full_page = [_make_event_no_ts(i) for i in range(_FETCH_PAGE_SIZE)]
         req_count = 0
@@ -690,7 +730,12 @@ class TestFetchPagination:
                 intent=f"Packet {idx}",
                 content="data",
             )
-            return {"id": f"evt-{idx}", "content": p.to_json(), "created_at": base_ts}
+            return {
+                "id": f"evt-{idx}",
+                "pubkey": "ab" * 32,
+                "content": p.to_json(),
+                "created_at": base_ts,
+            }
 
         # Both pages return the *same* set of events (identical IDs).
         same_events = [_make_event(i) for i in range(_FETCH_PAGE_SIZE)]
@@ -730,7 +775,12 @@ class TestFetchPagination:
                 intent=f"Packet {idx}",
                 content="data",
             )
-            return {"id": f"evt-{idx}", "content": p.to_json(), "created_at": ts}
+            return {
+                "id": f"evt-{idx}",
+                "pubkey": "ab" * 32,
+                "content": p.to_json(),
+                "created_at": ts,
+            }
 
         # Page 1: _FETCH_PAGE_SIZE events.  The last event has the oldest ts.
         page1_events = [_make_event(i, base_ts - i) for i in range(_FETCH_PAGE_SIZE)]
@@ -999,7 +1049,7 @@ class TestMultiRelayFetch:
         )
 
         async def fake_read_eose(ws, sub_id):
-            yield {"id": "evt1", "content": p.to_json()}
+            yield {"id": "evt1", "pubkey": "ab" * 32, "content": p.to_json()}
 
         multi_client = RelayClient(
             relay_urls=["wss://relay1.example.com", "wss://relay2.example.com"],

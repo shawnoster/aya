@@ -27,6 +27,7 @@ from aya.entities.packet import Packet, human_age
 from aya.usecases import relay_ops
 from aya.usecases.packet_view import extract_body
 from aya.usecases.resolve import label_for_authenticated_sender
+from aya.usecases.triage import WRONG_RECIPIENT, WRONG_SENDER_KEY
 
 
 def _render_send(result: relay_ops.SendResult, *, as_json: bool) -> None:
@@ -109,6 +110,12 @@ def _render_ack(result: relay_ops.AckResult, message: str, *, as_json: bool) -> 
         )
 
 
+_MISROUTED_TEXT = {
+    WRONG_RECIPIENT: "addressed to another instance",
+    WRONG_SENDER_KEY: "published by a key that isn't the sender's",
+}
+
+
 def _render_receive(
     result: relay_ops.PollResult, *, as_json: bool, quiet: bool, auto_ingest: bool
 ) -> None:
@@ -126,7 +133,8 @@ def _render_receive(
             f"(from {packet.from_did[:30]}…) — discarded[/red]"
         )
     for packet, reason in result.misrouted:
-        err.print(f"[red]⚠ Packet {packet.id[:8]} ignored: {reason}[/red]")
+        why = _MISROUTED_TEXT.get(reason, reason)
+        err.print(f"[red]⚠ Packet {packet.id[:8]} ignored: {why}[/red]")
     if not result.relay_reachable:
         err.print(f"[yellow]Could not reach relay — skipping relay fetch.{context}[/yellow]")
         return

@@ -1249,6 +1249,63 @@ class TestScheduleStatusCLI:
         again = runner.invoke(app, args)
         assert json.loads(again.output)["alerts"] == []
 
+    def test_delivered_as_records_the_claiming_instance(self, monkeypatch):
+        """`--as` carries the instance `pending` reported, so the receipt names the claimer."""
+        from aya.scheduler import _alerts_file, load_alerts
+
+        _alerts_file().write_text(
+            json.dumps(
+                {
+                    "alerts": [
+                        {
+                            "id": "cli-as1",
+                            "source_item_id": "s1",
+                            "created_at": "2026-01-01T00:00:00-07:00",
+                            "message": "Reminder due: test",
+                            "details": {},
+                            "seen": False,
+                        }
+                    ]
+                }
+            )
+        )
+        monkeypatch.setattr("aya.scheduler.core.get_instance_id", lambda: "claimer-A")
+        pending = runner.invoke(app, ["schedule", "pending", "--format", "json", "--defer-receipt"])
+        claimer = json.loads(pending.output)["instance_id"]
+        assert claimer == "claimer-A"
+
+        monkeypatch.setattr("aya.scheduler.core.get_instance_id", lambda: "confirmer-B")
+        result = runner.invoke(
+            app, ["schedule", "delivered", "cli-as1", "--as", claimer, "--format", "json"]
+        )
+
+        assert result.exit_code == 0
+        assert load_alerts()[0]["delivered_by"] == "claimer-A"
+
+    def test_delivered_as_overrides_the_default_instance(self):
+        from aya.scheduler import _alerts_file, load_alerts
+
+        _alerts_file().write_text(
+            json.dumps(
+                {
+                    "alerts": [
+                        {
+                            "id": "cli-as2",
+                            "source_item_id": "s1",
+                            "created_at": "2026-01-01T00:00:00-07:00",
+                            "message": "Reminder due: test",
+                            "details": {},
+                            "seen": False,
+                        }
+                    ]
+                }
+            )
+        )
+
+        runner.invoke(app, ["schedule", "delivered", "cli-as2", "--as", "claimer-7"])
+
+        assert load_alerts()[0]["delivered_by"] == "claimer-7"
+
     def test_delivered_unknown_id_exits_nonzero(self):
         result = runner.invoke(app, ["schedule", "delivered", "no-such-alert", "--format", "json"])
         assert result.exit_code == 1

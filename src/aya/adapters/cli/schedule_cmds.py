@@ -445,6 +445,14 @@ def schedule_delivered(
     alert_ids: list[str] = typer.Argument(
         help="Full alert IDs to mark delivered. Prefixes are not matched."
     ),
+    as_: str | None = typer.Option(
+        None,
+        "--as",
+        help=(
+            "Scheduler instance that claimed the alerts, as `pending` reports it in `instance_id`. "
+            "Recorded as `delivered_by`. Defaults to this process."
+        ),
+    ),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
@@ -455,7 +463,7 @@ def schedule_delivered(
     """
     format_ = resolve_format(format_)
     requested = set(alert_ids)
-    missing = mark_alerts_delivered(requested)
+    missing = mark_alerts_delivered(requested, as_)
     delivered = sorted(requested - missing)
     if format_ == OutputFormat.JSON:
         _output_json({"delivered": delivered, "missing": sorted(missing)})

@@ -1212,6 +1212,111 @@ class TestScheduleStatusCLI:
         assert "alerts" in data
         assert "session_crons" in data
 
+    def test_pending_defer_receipt_then_delivered_stops_repeats(self):
+        """Confirming a deferred claim with `delivered` stops the alert returning after expiry."""
+        from aya.scheduler import _alerts_file, load_alerts
+        from aya.scheduler.storage import _claims_dir
+
+        _alerts_file().write_text(
+            json.dumps(
+                {
+                    "alerts": [
+                        {
+                            "id": "cli-a1",
+                            "source_item_id": "s1",
+                            "created_at": "2026-01-01T00:00:00-07:00",
+                            "message": "Reminder due: test",
+                            "details": {},
+                            "seen": False,
+                        }
+                    ]
+                }
+            )
+        )
+        args = ["schedule", "pending", "--format", "json", "--skip-delivered", "--defer-receipt"]
+
+        first = runner.invoke(app, args)
+        assert first.exit_code == 0
+        assert [a["id"] for a in json.loads(first.output)["alerts"]] == ["cli-a1"]
+        assert "delivered_at" not in load_alerts()[0]
+
+        confirmed = runner.invoke(app, ["schedule", "delivered", "cli-a1", "--format", "json"])
+        assert confirmed.exit_code == 0
+        assert json.loads(confirmed.output) == {"delivered": ["cli-a1"], "missing": []}
+
+        for claim in _claims_dir().glob("*.claimed"):
+            claim.unlink()
+        again = runner.invoke(app, args)
+        assert json.loads(again.output)["alerts"] == []
+
+    def test_delivered_as_records_the_claiming_instance(self, monkeypatch):
+        """`--as` carries the instance `pending` reported, so the receipt names the claimer."""
+        from aya.scheduler import _alerts_file, load_alerts
+
+        _alerts_file().write_text(
+            json.dumps(
+                {
+                    "alerts": [
+                        {
+                            "id": "cli-as1",
+                            "source_item_id": "s1",
+                            "created_at": "2026-01-01T00:00:00-07:00",
+                            "message": "Reminder due: test",
+                            "details": {},
+                            "seen": False,
+                        }
+                    ]
+                }
+            )
+        )
+        monkeypatch.setattr("aya.scheduler.core.get_instance_id", lambda: "claimer-A")
+        pending = runner.invoke(app, ["schedule", "pending", "--format", "json", "--defer-receipt"])
+        claimer = json.loads(pending.output)["instance_id"]
+        assert claimer == "claimer-A"
+
+        monkeypatch.setattr("aya.scheduler.core.get_instance_id", lambda: "confirmer-B")
+        result = runner.invoke(
+            app, ["schedule", "delivered", "cli-as1", "--as", claimer, "--format", "json"]
+        )
+
+        assert result.exit_code == 0
+        assert load_alerts()[0]["delivered_by"] == "claimer-A"
+
+    def test_delivered_as_overrides_the_default_instance(self):
+        from aya.scheduler import _alerts_file, load_alerts
+
+        _alerts_file().write_text(
+            json.dumps(
+                {
+                    "alerts": [
+                        {
+                            "id": "cli-as2",
+                            "source_item_id": "s1",
+                            "created_at": "2026-01-01T00:00:00-07:00",
+                            "message": "Reminder due: test",
+                            "details": {},
+                            "seen": False,
+                        }
+                    ]
+                }
+            )
+        )
+
+        runner.invoke(app, ["schedule", "delivered", "cli-as2", "--as", "claimer-7"])
+
+        assert load_alerts()[0]["delivered_by"] == "claimer-7"
+
+    def test_delivered_unknown_id_exits_nonzero(self):
+        result = runner.invoke(app, ["schedule", "delivered", "no-such-alert", "--format", "json"])
+        assert result.exit_code == 1
+        assert json.loads(result.output) == {"delivered": [], "missing": ["no-such-alert"]}
+
+    def test_delivered_text_prints_no_checkmark_when_nothing_matched(self):
+        result = runner.invoke(app, ["schedule", "delivered", "no-such-alert", "--format", "text"])
+        assert result.exit_code == 1
+        assert "✓" not in result.output
+        assert "no-such-alert not found" in result.output
+
     def test_pending_json_long_prompt_no_wrapping(self, tmp_path, monkeypatch):
         """Regression: Rich console.print() wraps at 80 cols, injecting literal
         newlines inside JSON string values.  console.out() must be used instead.

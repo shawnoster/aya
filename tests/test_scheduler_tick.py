@@ -366,6 +366,94 @@ class TestDeliveryReceipts:
         assert receipt["delivered_by"] == "session-a"
 
 
+def _write_alert(alert_id: str) -> None:
+    from aya.scheduler import _alerts_file
+
+    _alerts_file().write_text(
+        json.dumps(
+            {
+                "alerts": [
+                    {
+                        "id": alert_id,
+                        "source_item_id": "s1",
+                        "created_at": datetime.now(UTC).isoformat(),
+                        "message": "Reminder due: check the PR",
+                        "details": {},
+                        "seen": False,
+                    },
+                ]
+            }
+        )
+    )
+
+
+def _expire_claims() -> None:
+    from aya.scheduler.storage import _claims_dir
+
+    for claim in _claims_dir().glob("*.claimed"):
+        claim.unlink()
+
+
+class TestRepeatedPendingCallers:
+    """Behavior of `pending` for a caller that runs every turn."""
+
+    def test_without_skip_delivered_an_alert_returns_when_its_claim_expires(self):
+        """The default suits a once-per-session caller and re-offers delivered alerts."""
+        _write_alert("d1")
+        assert [a["id"] for a in get_pending("oc-1")["alerts"]] == ["d1"]
+        _expire_claims()
+        assert [a["id"] for a in get_pending("oc-2")["alerts"]] == ["d1"]
+
+    def test_skip_delivered_stops_the_repeat(self):
+        _write_alert("d1")
+        assert len(get_pending("oc-1", skip_delivered=True)["alerts"]) == 1
+        _expire_claims()
+        assert get_pending("oc-2", skip_delivered=True)["alerts"] == []
+
+    def test_deferred_receipt_leaves_the_alert_unstamped(self):
+        _write_alert("d1")
+        get_pending("oc-1", skip_delivered=True, stamp_receipt=False)
+        alert = next(a for a in load_alerts() if a["id"] == "d1")
+        assert "delivered_at" not in alert
+
+    def test_an_unconfirmed_alert_is_offered_again_after_its_claim_expires(self):
+        """An unconfirmed alert returns once its claim expires."""
+        _write_alert("d1")
+        first = get_pending("oc-1", skip_delivered=True, stamp_receipt=False)
+        assert len(first["alerts"]) == 1
+        assert get_pending("oc-2", skip_delivered=True, stamp_receipt=False)["alerts"] == []
+        _expire_claims()
+        retry = get_pending("oc-3", skip_delivered=True, stamp_receipt=False)
+        assert [a["id"] for a in retry["alerts"]] == ["d1"]
+
+    def test_a_confirmed_alert_is_not_offered_again(self):
+        from aya.scheduler import mark_alerts_delivered
+
+        _write_alert("d1")
+        get_pending("oc-1", skip_delivered=True, stamp_receipt=False)
+        assert mark_alerts_delivered({"d1"}, "oc-1") == set()
+        _expire_claims()
+        assert get_pending("oc-2", skip_delivered=True, stamp_receipt=False)["alerts"] == []
+        alert = next(a for a in load_alerts() if a["id"] == "d1")
+        assert alert["delivered_by"] == "oc-1"
+
+    def test_mark_delivered_reports_unknown_ids_and_stamps_the_rest(self):
+        from aya.scheduler import mark_alerts_delivered
+
+        _write_alert("d1")
+        assert mark_alerts_delivered({"d1", "nope"}, "oc-1") == {"nope"}
+        alert = next(a for a in load_alerts() if a["id"] == "d1")
+        assert alert["delivered_by"] == "oc-1"
+
+    def test_mark_delivered_does_not_prefix_match(self):
+        from aya.scheduler import mark_alerts_delivered
+
+        _write_alert("d1-full-id")
+        assert mark_alerts_delivered({"d1"}, "oc-1") == {"d1"}
+        alert = next(a for a in load_alerts() if a["id"] == "d1-full-id")
+        assert "delivered_at" not in alert
+
+
 # ── Phase 5C: Alert expiry ───────────────────────────────────────────────────
 
 

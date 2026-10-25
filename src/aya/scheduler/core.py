@@ -541,8 +541,9 @@ def claim_alerts_for_delivery(
     *,
     min_severity: AlertSeverity = SEVERITY_ACTIONABLE,
     skip_delivered: bool = False,
+    stamp_receipt: bool = True,
 ) -> list[AlertItem]:
-    """Claim unseen alerts for this instance and stamp a delivery receipt.
+    """Claims unseen alerts for this instance and, unless told otherwise, stamps a delivery receipt.
 
     One owner of the claim-and-stamp bookkeeping, shared by the SessionStart
     path (:func:`get_pending`) and the PostToolUse hook. Claiming is what stops
@@ -558,6 +559,11 @@ def claim_alerts_for_delivery(
             tool call must not re-announce, and claims expire after
             ``_CLAIM_TTL_SECONDS``, so the receipt — not the claim — is the only
             durable gate available to it.
+        stamp_receipt: When false, claims without stamping. The caller confirms
+            delivery with :func:`mark_alerts_delivered`. An alert left
+            unconfirmed returns once its claim expires, so delivery is
+            at-least-once: a confirmation slower than ``_CLAIM_TTL_SECONDS``
+            can repeat the alert.
 
     Returns:
         The alerts claimed by this call, in the order they were found.
@@ -583,22 +589,46 @@ def claim_alerts_for_delivery(
         instance_id,
     )
 
-    if claimed_ids:
-        now = clock.now(_get_local_tz())
-        with _file_lock():
-            alerts = _load_alerts_unlocked()
-            for a in alerts:
-                if a["id"] in claimed_ids:
-                    a["delivered_at"] = now.isoformat()
-                    a["delivered_by"] = instance_id
-            _atomic_write(_alerts_file(), _alerts_data(alerts))
+    if claimed_ids and stamp_receipt:
+        mark_alerts_delivered(claimed_ids, instance_id)
 
     return deliverable
+
+
+def mark_alerts_delivered(alert_ids: set[str], instance_id: str | None = None) -> set[str]:
+    """Stamps a delivery receipt on each alert in ``alert_ids``.
+
+    Matches full IDs only. A caller confirming delivery holds the IDs it was
+    given, so a prefix match could stamp an alert the caller never showed.
+
+    Args:
+        alert_ids: Full IDs of the alerts to stamp.
+        instance_id: Delivering instance (default: auto-detect).
+
+    Returns:
+        The IDs that matched no alert. The rest are still stamped.
+    """
+    instance_id = instance_id or get_instance_id()
+    now = clock.now(_get_local_tz())
+    with _file_lock():
+        alerts = _load_alerts_unlocked()
+        found: set[str] = set()
+        for a in alerts:
+            if a["id"] in alert_ids:
+                a["delivered_at"] = now.isoformat()
+                a["delivered_by"] = instance_id
+                found.add(a["id"])
+        if found:
+            _atomic_write(_alerts_file(), _alerts_data(alerts))
+    return alert_ids - found
 
 
 def get_pending(
     instance_id: str | None = None,
     min_severity: AlertSeverity = SEVERITY_ACTIONABLE,
+    *,
+    skip_delivered: bool = False,
+    stamp_receipt: bool = True,
 ) -> PendingResult:
     """Get pending items for a session — alerts to deliver + session crons to register.
 
@@ -611,6 +641,10 @@ def get_pending(
         instance_id: Override instance identifier (default: auto-detect).
         min_severity: Minimum severity to include. ``"actionable"`` (default)
             returns only actionable alerts. ``"heartbeat"`` returns everything.
+        skip_delivered: When true, omits alerts that already carry a receipt.
+            See :func:`claim_alerts_for_delivery`.
+        stamp_receipt: When false, claims alerts without stamping a receipt.
+            Confirm delivery later with :func:`mark_alerts_delivered`.
 
     Returns:
         {
@@ -623,7 +657,12 @@ def get_pending(
     """
     instance_id = instance_id or get_instance_id()
     logger.debug("pending: checking for instance=%s, min_severity=%s", instance_id, min_severity)
-    deliverable = claim_alerts_for_delivery(instance_id, min_severity=min_severity)
+    deliverable = claim_alerts_for_delivery(
+        instance_id,
+        min_severity=min_severity,
+        skip_delivered=skip_delivered,
+        stamp_receipt=stamp_receipt,
+    )
 
     session_crons, suppressed_crons = get_session_crons()
     logger.debug(

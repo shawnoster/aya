@@ -228,7 +228,9 @@ class RelayClient:
     ) -> AsyncIterator[Packet]:
         """Yield packets addressed to this instance's pubkey, querying all relays. **ASYNC.**
 
-        Results are deduplicated by packet ID across relays.  When *since* is
+        Results are deduplicated by (packet ID, publishing key) across relays:
+        a copy republished under another key is passed on for the receiver to
+        judge, so it cannot displace the original.  When *since* is
         omitted a default look-back window of ``_DEFAULT_FETCH_WINDOW_DAYS``
         (matching the packet TTL) is applied so the scan is bounded to the
         live-packet window.  Pass an explicit *since* to override that lower

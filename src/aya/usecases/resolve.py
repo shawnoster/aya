@@ -109,15 +109,16 @@ def sender_keys(profile: Profile) -> dict[str, set[str]]:
 
     A set, not a single key: a peer re-paired under a new label can leave the
     same DID recorded twice with different keys, and packets on either are
-    genuinely from that peer.
+    genuinely from that peer. Lowercased: a key typed in uppercase into
+    ``aya trust`` still matches.
     """
     keys: dict[str, set[str]] = {}
     for key in profile.trusted_keys.values():
         if key.nostr_pubkey:
-            keys.setdefault(key.did, set()).add(key.nostr_pubkey)
+            keys.setdefault(key.did, set()).add(key.nostr_pubkey.lower())
     for inst in profile.instances.values():
         if inst.nostr_public_hex:
-            keys.setdefault(inst.did, set()).add(inst.nostr_public_hex)
+            keys.setdefault(inst.did, set()).add(inst.nostr_public_hex.lower())
     return keys
 
 

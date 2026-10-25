@@ -127,7 +127,8 @@ _TOOLS: list[types.Tool] = [
         description=(
             "Poll the relay, auto-ingest trusted packets, and return summaries. "
             "`rejected` lists packets refused as {id, reason}, reason one of "
-            "bad_signature, wrong_recipient or wrong_sender_key."
+            "bad_signature, wrong_recipient, wrong_sender_key or duplicate_id. "
+            "Two summaries can share an id when different senders used it."
         ),
         input_schema={
             "type": "object",

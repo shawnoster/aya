@@ -377,6 +377,27 @@ class TestReceive:
         assert result.envelope()["rejected"] == []
         assert result.packets[0]["ingested"] is True
 
+    async def test_second_packet_under_an_ingested_id_is_refused(self, profile, peer):
+        """Bodies are stored by id; a second author's packet must not overwrite the first."""
+        p, path = profile
+        real = _incoming(peer, p, "first")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        other = Identity.generate("other")
+        p.trusted_keys["other"] = TrustedKey(
+            did=other.did, label="other", nostr_pubkey=other.nostr_public_hex
+        )
+        clash = Packet(
+            id=real.id, from_did=other.did, to_did=real.to_did, intent="second", content="x"
+        ).sign(other)
+        clash.set_transport_pubkey(other.nostr_public_hex)
+        FakeClient.queued = [real, clash]
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert [s["intent"] for s in result.packets if s["ingested"]] == ["first"]
+        assert result.envelope()["rejected"] == [{"id": real.id, "reason": "duplicate_id"}]
+        assert [e["from_did"] for e in p.ingested_ids] == [peer.did]
+
     async def test_envelope_names_instance_and_relays(self, profile):
         p, path = profile
         result = await receive(p, path, client_factory=FakeClient)

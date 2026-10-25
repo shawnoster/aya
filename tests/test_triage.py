@@ -141,6 +141,17 @@ class TestMisrouted:
         result = triage([first, second], ingested=set(), dropped=set())
         assert result.fresh == [first]
 
+    def test_key_case_does_not_matter(self, sender: Identity):
+        pkt = _packet(sender, "typed in uppercase")
+        pkt.set_transport_pubkey(sender.nostr_public_hex.upper())
+        result = triage(
+            [pkt],
+            ingested=set(),
+            dropped=set(),
+            sender_keys={sender.did: {sender.nostr_public_hex}},
+        )
+        assert result.fresh == [pkt]
+
     def test_unknown_sender_is_left_to_the_trust_check(self, sender: Identity):
         """No known key to compare against; trust decides what happens next."""
         pkt = _packet(sender, "stranger")

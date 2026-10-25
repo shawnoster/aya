@@ -79,7 +79,8 @@ class Packet(BaseModel):
         return self._transport_pubkey
 
     def set_transport_pubkey(self, pubkey: str | None) -> None:
-        self._transport_pubkey = pubkey or None
+        # Hex is case-insensitive; compare it in one case.
+        self._transport_pubkey = pubkey.lower() if pubkey else None
 
     @model_validator(mode="after")
     def set_default_expiry(self) -> Packet:

@@ -27,7 +27,7 @@ from aya.entities.packet import Packet, human_age
 from aya.usecases import relay_ops
 from aya.usecases.packet_view import extract_body
 from aya.usecases.resolve import label_for_authenticated_sender
-from aya.usecases.triage import WRONG_RECIPIENT, WRONG_SENDER_KEY
+from aya.usecases.triage import DUPLICATE_ID, WRONG_RECIPIENT, WRONG_SENDER_KEY
 
 
 def _render_send(result: relay_ops.SendResult, *, as_json: bool) -> None:
@@ -113,6 +113,7 @@ def _render_ack(result: relay_ops.AckResult, message: str, *, as_json: bool) -> 
 _MISROUTED_TEXT = {
     WRONG_RECIPIENT: "addressed to another instance",
     WRONG_SENDER_KEY: "published by a key that isn't the sender's",
+    DUPLICATE_ID: "reuses the id of a packet already received this poll",
 }
 
 

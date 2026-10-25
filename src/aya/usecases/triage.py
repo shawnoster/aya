@@ -41,6 +41,7 @@ class Triage:
 BAD_SIGNATURE = "bad_signature"
 WRONG_RECIPIENT = "wrong_recipient"
 WRONG_SENDER_KEY = "wrong_sender_key"
+DUPLICATE_ID = "duplicate_id"
 
 
 def triage(

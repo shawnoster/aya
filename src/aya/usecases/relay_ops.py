@@ -46,7 +46,7 @@ from aya.usecases.resolve import (
     resolve_relays,
     sender_keys,
 )
-from aya.usecases.triage import BAD_SIGNATURE, triage
+from aya.usecases.triage import BAD_SIGNATURE, DUPLICATE_ID, triage
 
 logger = logging.getLogger(__name__)
 
@@ -617,7 +617,16 @@ async def receive(
 
     summaries: list[dict[str, Any]] = []
     client: RelayClient | None = None
+    misrouted = list(sorted_packets.misrouted)
+    # Packet bodies and the ledger are keyed by id alone, so a second packet
+    # under an id already ingested this poll would overwrite the first one's
+    # body. Ids are visible on the relay; refuse the second rather than lose
+    # the first.
+    ingested_now: set[str] = set()
     for packet in sorted_packets.fresh:
+        if packet.id in ingested_now:
+            misrouted.append((packet, DUPLICATE_ID))
+            continue
         trusted = profile.is_trusted(packet.from_did)
         decision = decide(packet, trusted)
 
@@ -637,6 +646,7 @@ async def receive(
         profile.ingested_ids.append(
             {"id": packet.id, "ingested_at": now_iso, "from_did": packet.from_did}
         )
+        ingested_now.add(packet.id)
         summaries.append(_summary(packet, ingested=True))
 
         # A receipt used to be sent only from the interactive-confirm branch,
@@ -663,7 +673,7 @@ async def receive(
         relays=relay_urls,
         relay_reachable=reachable,
         bad_signature=sorted_packets.bad_signature,
-        misrouted=sorted_packets.misrouted,
+        misrouted=misrouted,
     )
 
 

@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v2.3.0 (2026-10-25)
+
+### Bug Fixes
+
+- **scheduler**: Address review findings on the deferred-receipt change
+  ([#375](https://github.com/shawnoster/aya/pull/375),
+  [`818c995`](https://github.com/shawnoster/aya/commit/818c9950aeeb87b50c216bedf013029ef7b3a322))
+
+### Features
+
+- **scheduler**: Let every-turn callers skip delivered alerts and confirm delivery
+  ([#375](https://github.com/shawnoster/aya/pull/375),
+  [`818c995`](https://github.com/shawnoster/aya/commit/818c9950aeeb87b50c216bedf013029ef7b3a322))
+
+- **scheduler**: Record the claiming instance on delivered with --as
+  ([#375](https://github.com/shawnoster/aya/pull/375),
+  [`818c995`](https://github.com/shawnoster/aya/commit/818c9950aeeb87b50c216bedf013029ef7b3a322))
+
+
 ## v2.2.3 (2026-10-25)
 
 ### Bug Fixes

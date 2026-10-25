@@ -242,10 +242,13 @@ class PollResult:
     misrouted: list[tuple[Packet, str]] = field(default_factory=list)
 
     def rejected(self) -> list[dict[str, str]]:
-        """Every packet refused this poll, with why. One list for every surface."""
-        refused = [{"id": pkt.id, "reason": BAD_SIGNATURE} for pkt in self.bad_signature]
-        refused += [{"id": pkt.id, "reason": reason} for pkt, reason in self.misrouted]
-        return refused
+        """Every packet refused this poll, with why. One list for every surface.
+
+        `from` is included because an id alone does not identify a packet:
+        a refused duplicate shares its id with the packet that was delivered.
+        """
+        refused = [(pkt, BAD_SIGNATURE) for pkt in self.bad_signature] + self.misrouted
+        return [{"id": pkt.id, "from": pkt.from_did, "reason": why} for pkt, why in refused]
 
     def envelope(self) -> dict[str, Any]:
         """The wire shape both surfaces return."""
@@ -623,7 +626,10 @@ async def receive(
     # body. Ids are visible on the relay; refuse the second rather than lose
     # the first.
     ingested_now: set[str] = set()
-    for packet in sorted_packets.fresh:
+    # Trusted senders first, so a stranger's packet can't claim a shared id
+    # ahead of the real one when the user accepts everything.
+    ordered = sorted(sorted_packets.fresh, key=lambda pkt: not profile.is_trusted(pkt.from_did))
+    for packet in ordered:
         if packet.id in ingested_now:
             misrouted.append((packet, DUPLICATE_ID))
             continue

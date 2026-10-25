@@ -30,8 +30,9 @@ class Triage:
     """Failed verification. Surface the IDs; never ingest."""
 
     misrouted: list[tuple[Packet, str]] = field(default_factory=list)
-    """Validly signed, but addressed to someone else or carried by a key that
-    is not the sender's, each with the reason. Surface them; never ingest."""
+    """Validly signed but refused, each with its reason code: addressed to
+    someone else, or carried by a key that is not the sender's. (Receive adds
+    duplicate ids to the same list.) Surface them; never ingest."""
 
     def __bool__(self) -> bool:
         return bool(self.fresh or self.bad_signature or self.misrouted)

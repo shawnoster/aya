@@ -318,7 +318,9 @@ class TestReceive:
         result = await receive(p, path, client_factory=FakeClient)
         assert result.packets == []
         assert result.misrouted == [(pkt, "wrong_recipient")]
-        assert result.envelope()["rejected"] == [{"id": pkt.id, "reason": "wrong_recipient"}]
+        assert result.envelope()["rejected"] == [
+            {"id": pkt.id, "from": peer.did, "reason": "wrong_recipient"}
+        ]
         assert p.ingested_ids == []
         assert FakeClient.receipts == []
 
@@ -364,7 +366,9 @@ class TestReceive:
         pkt.intent = "tampered after signing"
         FakeClient.queued = [pkt]
         result = await receive(p, path, client_factory=FakeClient)
-        assert result.envelope()["rejected"] == [{"id": pkt.id, "reason": "bad_signature"}]
+        assert result.envelope()["rejected"] == [
+            {"id": pkt.id, "from": peer.did, "reason": "bad_signature"}
+        ]
 
     async def test_rejected_copy_of_a_delivered_packet_is_not_reported(self, profile, peer):
         p, path = profile
@@ -395,8 +399,28 @@ class TestReceive:
         result = await receive(p, path, client_factory=FakeClient)
 
         assert [s["intent"] for s in result.packets if s["ingested"]] == ["first"]
-        assert result.envelope()["rejected"] == [{"id": real.id, "reason": "duplicate_id"}]
+        assert result.envelope()["rejected"] == [
+            {"id": real.id, "from": other.did, "reason": "duplicate_id"}
+        ]
         assert [e["from_did"] for e in p.ingested_ids] == [peer.did]
+
+    async def test_trusted_packet_wins_a_shared_id_even_when_fetched_second(self, profile, peer):
+        p, path = profile
+        real = _incoming(peer, p, "from the peer")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        stranger = Identity.generate("stranger")
+        squatter = Packet(
+            id=real.id, from_did=stranger.did, to_did=real.to_did, intent="squat", content="x"
+        ).sign(stranger)
+        squatter.set_transport_pubkey(stranger.nostr_public_hex)
+        FakeClient.queued = [squatter, real]
+
+        result = await receive(
+            p, path, client_factory=FakeClient, decide=lambda pkt, t: Decision.INGEST
+        )
+
+        assert [e["from_did"] for e in p.ingested_ids] == [peer.did]
+        assert result.envelope()["rejected"][0]["from"] == stranger.did
 
     async def test_envelope_names_instance_and_relays(self, profile):
         p, path = profile
@@ -438,7 +462,9 @@ class TestInbox:
         FakeClient.queued = [pkt]
         result = (await inbox(p, client_factory=FakeClient))[0]
         assert result.packets == []
-        assert result.envelope()["rejected"] == [{"id": pkt.id, "reason": "wrong_sender_key"}]
+        assert result.envelope()["rejected"] == [
+            {"id": pkt.id, "from": peer.did, "reason": "wrong_sender_key"}
+        ]
 
 
 class TestAckRecipientResolution:

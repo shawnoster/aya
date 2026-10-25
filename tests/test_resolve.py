@@ -101,6 +101,10 @@ class TestSenderKeys:
         )
         assert sender_keys(profile)[beacon.did] == {beacon.nostr_pubkey, "ee" * 32}
 
+    def test_uppercase_key_is_stored_lowercase(self):
+        key = TrustedKey(did="did:key:zX", label="x", nostr_pubkey="AB" * 32)
+        assert key.nostr_pubkey == "ab" * 32
+
     def test_peer_without_transport_key_is_absent(self, profile: Profile):
         other = Identity.generate("other")
         profile.trusted_keys["other"] = TrustedKey(did=other.did, label="other")

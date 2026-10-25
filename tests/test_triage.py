@@ -129,7 +129,9 @@ class TestMisrouted:
             sender_keys={sender.did: {sender.nostr_public_hex}},
         )
         assert result.fresh == [real]
-        assert result.misrouted == [(copy, "wrong_sender_key")]
+        # The copy is noise once the real one arrived; reporting its id would
+        # make the delivered packet look rejected.
+        assert result.misrouted == []
 
     def test_two_good_copies_are_accepted_once(self, sender: Identity):
         first = _packet(sender, "same packet")

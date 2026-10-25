@@ -340,6 +340,43 @@ class TestReceive:
         result = await receive(p, path, client_factory=FakeClient)
         assert result.packets[0]["ingested"] is True
 
+    async def test_stranger_reusing_the_id_does_not_hide_the_real_packet(self, profile, peer):
+        """A packet id is copyable: a stranger signing their own packet under it,
+        fetched first, must not shadow the peer's."""
+        p, path = profile
+        real = _incoming(peer, p, "the real one")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        mallory = Identity.generate("mallory")
+        forged = Packet(
+            id=real.id, from_did=mallory.did, to_did=real.to_did, intent="decoy", content="x"
+        ).sign(mallory)
+        forged.set_transport_pubkey(mallory.nostr_public_hex)
+        FakeClient.queued = [forged, real]
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert any(e["id"] == real.id for e in p.ingested_ids)
+        assert [s["intent"] for s in result.packets if s["ingested"]] == ["the real one"]
+
+    async def test_bad_signature_is_listed_in_rejected(self, profile, peer):
+        p, path = profile
+        pkt = _incoming(peer, p, "tampered")
+        pkt.intent = "tampered after signing"
+        FakeClient.queued = [pkt]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.envelope()["rejected"] == [{"id": pkt.id, "reason": "bad_signature"}]
+
+    async def test_rejected_copy_of_a_delivered_packet_is_not_reported(self, profile, peer):
+        p, path = profile
+        real = _incoming(peer, p, "delivered")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        copy = real.model_copy()
+        copy.set_transport_pubkey(Identity.generate("mallory").nostr_public_hex)
+        FakeClient.queued = [copy, real]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.envelope()["rejected"] == []
+        assert result.packets[0]["ingested"] is True
+
     async def test_envelope_names_instance_and_relays(self, profile):
         p, path = profile
         result = await receive(p, path, client_factory=FakeClient)

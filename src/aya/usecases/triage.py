@@ -37,6 +37,12 @@ class Triage:
         return bool(self.fresh or self.bad_signature or self.misrouted)
 
 
+# Stable rejection codes: MCP and --json consumers match on these.
+BAD_SIGNATURE = "bad_signature"
+WRONG_RECIPIENT = "wrong_recipient"
+WRONG_SENDER_KEY = "wrong_sender_key"
+
+
 def triage(
     packets: list[Packet],
     *,
@@ -74,9 +80,13 @@ def triage(
     fresh: list[Packet] = []
     bad: list[Packet] = []
     misrouted: list[tuple[Packet, str]] = []
-    accepted: set[str] = set()
+    # Keyed on the author too: a packet id is just a string anyone can copy,
+    # so a stranger's packet reusing it must not shadow the real one.
+    accepted: set[tuple[str, str]] = set()
     for packet in packets:
-        if packet.id in dropped or packet.id in ingested or packet.id in accepted:
+        if packet.id in dropped or packet.id in ingested:
+            continue
+        if (packet.id, packet.from_did) in accepted:
             continue
         if verify and not packet.verify_from_did():
             bad.append(packet)
@@ -85,14 +95,16 @@ def triage(
         if reason is not None:
             misrouted.append((packet, reason))
             continue
-        accepted.add(packet.id)
+        accepted.add((packet.id, packet.from_did))
         fresh.append(packet)
-    return Triage(fresh=fresh, bad_signature=bad, misrouted=misrouted)
-
-
-# Stable codes: MCP and --json consumers match on these.
-WRONG_RECIPIENT = "wrong_recipient"
-WRONG_SENDER_KEY = "wrong_sender_key"
+    # A rejected copy of a packet that also arrived intact is noise, and
+    # reporting its id would make the delivered packet look rejected.
+    delivered = {packet.id for packet in fresh}
+    return Triage(
+        fresh=fresh,
+        bad_signature=[pkt for pkt in bad if pkt.id not in delivered],
+        misrouted=[(pkt, why) for pkt, why in misrouted if pkt.id not in delivered],
+    )
 
 
 def _misrouted(

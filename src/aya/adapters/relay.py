@@ -395,16 +395,8 @@ class RelayClient:
                     if content.lstrip().startswith("{"):
                         packet = Packet.from_json(content)
                     else:
-                        # Attempt NIP-44 decryption using the sender's Nostr pubkey
-                        # from the Nostr event envelope.
-                        sender_pub = raw.get("pubkey", "")
-                        if not sender_pub:
-                            logger.warning(
-                                "Skipping event %s: content is not JSON and "
-                                "no sender pubkey in envelope for decryption",
-                                raw.get("id", "?")[:8],
-                            )
-                            continue
+                        # NIP-44 decryption with the publisher's key from the envelope.
+                        sender_pub = raw["pubkey"]
                         try:
                             plaintext = nip44_decrypt(content, self._private_key_hex, sender_pub)
                         except ValueError as crypto_exc:

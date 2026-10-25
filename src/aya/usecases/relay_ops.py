@@ -46,7 +46,7 @@ from aya.usecases.resolve import (
     resolve_relays,
     sender_keys,
 )
-from aya.usecases.triage import triage
+from aya.usecases.triage import BAD_SIGNATURE, triage
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +243,7 @@ class PollResult:
 
     def rejected(self) -> list[dict[str, str]]:
         """Every packet refused this poll, with why. One list for every surface."""
-        refused = [{"id": pkt.id, "reason": "bad_signature"} for pkt in self.bad_signature]
+        refused = [{"id": pkt.id, "reason": BAD_SIGNATURE} for pkt in self.bad_signature]
         refused += [{"id": pkt.id, "reason": reason} for pkt, reason in self.misrouted]
         return refused
 
@@ -567,7 +567,8 @@ async def inbox(
             instance=label,
             relays=relay_urls,
             relay_reachable=reachable,
-            misrouted=sorted_.misrouted,
+            # Copies of packets already ingested are not news here either.
+            misrouted=[(pkt, why) for pkt, why in sorted_.misrouted if pkt.id not in ingested],
         ),
         shown,
     )

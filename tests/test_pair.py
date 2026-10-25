@@ -319,6 +319,29 @@ class TestPairingAuthentication:
         assert result is not None
         assert result.trusted.did == home.did
 
+    async def test_deeply_nested_junk_does_not_stop_the_poll(self, work, home):
+        secret = _secret()
+        request = _build_pair_request(work, work.label, secret)
+        real = _build_pair_response(
+            home, home.label, work.nostr_public_hex, request["id"], secret.mac_key
+        )
+        nested = {**real, "content": "[" * 20000 + "]" * 20000}
+        not_a_dict_id = {**real, "id": {"x": 1}}
+
+        result = await self._poll(
+            work, request["id"], secret.mac_key, [nested, not_a_dict_id, real]
+        )
+
+        assert result is not None
+        assert result.trusted.did == home.did
+
+    def test_key_derivation_failure_is_a_pairing_error(self, monkeypatch):
+        from aya.usecases.pair import PairingError
+
+        monkeypatch.setattr("aya.usecases.pair._KDF_MAXMEM", 1024)
+        with pytest.raises(PairingError, match="128 MiB"):
+            derive_pair_secret("TEST-CODE-WORD-0000")
+
     async def test_request_mac_is_not_accepted_as_a_response(self, work):
         secret = _secret()
         request = _build_pair_request(work, work.label, secret)
@@ -329,10 +352,12 @@ class TestPairingAuthentication:
         secret = _secret()
         real = _build_pair_request(work, work.label, secret)
         broken = {**real, "tags": [["d"], "not-a-list", ["d", secret.lookup]]}
+        not_an_object = ["just", "a", "list"]
         broken["content"] = json.dumps({"did": "x", "label": "x", "mac": "é"})
 
         with patch(
-            "aya.usecases.pair.websockets.connect", return_value=_answering_ws([broken, real])
+            "aya.usecases.pair.websockets.connect",
+            return_value=_answering_ws([not_an_object, broken, real]),
         ):
             found = await _find_pair_request("wss://relay.test", {secret.lookup: secret})
 

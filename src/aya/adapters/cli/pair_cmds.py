@@ -133,7 +133,10 @@ def pair(
     else:
         # ── Initiator mode ───────────────────────────────────────────
         pairing_code = generate_code()
-        secret = derive_pair_secret(pairing_code)
+        try:
+            secret = derive_pair_secret(pairing_code)
+        except PairingError as exc:
+            _emit_error(ErrorCode.PAIR_FAILED, str(exc), {})
 
         # Publish the request — embed our own label so the joiner knows what to call us
         if format_ != OutputFormat.JSON:

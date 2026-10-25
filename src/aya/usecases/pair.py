@@ -388,14 +388,18 @@ def _authenticate(event: dict[str, Any], key: bytes, role: str, ref: str) -> Tru
         content = json.loads(event["content"])
         did, label, mac = content["did"], content["label"], content["mac"]
         pubkey = event["pubkey"]
-        if not all(isinstance(v, str) for v in (did, label, mac, pubkey)):
+        # The id is checked here too: the joiner answers it once trusted.
+        if not all(isinstance(v, str) for v in (did, label, mac, pubkey, event["id"])):
             raise TypeError("non-string field")
         expected = _pair_mac(key, role, did, label, pubkey, ref)
         # Bytes, not str: compare_digest raises on non-ASCII strings.
         if hmac.compare_digest(mac.encode(), expected.encode()):
             return TrustedKey(did=did, label=label, nostr_pubkey=pubkey)
-    except (KeyError, TypeError, ValueError, AttributeError):
-        pass
+    except Exception as exc:  # noqa: BLE001 — a pure predicate; malformed is just "no"
+        # Broad on purpose: deeply nested JSON raises RecursionError, and an
+        # exception escaping here would end the whole relay's search.
+        logger.debug("Ignored a malformed pairing %s: %s", role, type(exc).__name__)
+        return None
     # Debug, not warning: a flood of junk would otherwise flood the log.
     logger.debug("Ignored a pairing %s that did not prove the code", role)
     return None
@@ -579,6 +583,7 @@ async def join_pairing(
     # The request may have been made on the other side of a UTC midnight.
     now = clock.now(UTC).timestamp()
     # And a couple of minutes ahead, in case this clock runs behind theirs.
+    # At most two distinct days, so at most two scrypt runs near midnight.
     days = {_day(now - PAIR_TTL_SECONDS), _day(now), _day(now + 120)}
     secrets_by_lookup = {s.lookup: s for s in (derive_pair_secret(code, d) for d in days)}
 
@@ -707,7 +712,7 @@ def _secret_for(
     event: dict[str, Any], secrets_by_lookup: dict[str, PairSecret]
 ) -> PairSecret | None:
     """The secret whose lookup tag *event* carries, tolerating malformed tags."""
-    tags = event.get("tags")
+    tags = event.get("tags") if isinstance(event, dict) else None
     for tag in tags if isinstance(tags, list) else []:
         if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "d":
             secret = secrets_by_lookup.get(tag[1]) if isinstance(tag[1], str) else None

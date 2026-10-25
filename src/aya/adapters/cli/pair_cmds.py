@@ -141,7 +141,12 @@ def pair(
         # Publish the request — embed our own label so the joiner knows what to call us
         if format_ != OutputFormat.JSON:
             console.print("[dim]Publishing pairing request…[/dim]")
-        request_event_id = asyncio.run(publish_pair_request(local, local.label, secret, relay_urls))
+        try:
+            request_event_id = asyncio.run(
+                publish_pair_request(local, local.label, secret, relay_urls)
+            )
+        except PairingError as exc:
+            _emit_error(ErrorCode.PAIR_FAILED, str(exc), {})
 
         # Show the code — user reads this aloud or types it on the other machine
         if format_ == OutputFormat.JSON:

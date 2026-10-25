@@ -395,7 +395,7 @@ def _expire_claims() -> None:
 
 
 class TestRepeatedPendingCallers:
-    """A caller that runs `pending` every turn, like the OpenCode plugin."""
+    """Behavior of `pending` for a caller that runs every turn."""
 
     def test_without_skip_delivered_an_alert_returns_when_its_claim_expires(self):
         """The default suits a once-per-session caller and re-offers delivered alerts."""
@@ -417,7 +417,7 @@ class TestRepeatedPendingCallers:
         assert "delivered_at" not in alert
 
     def test_an_unconfirmed_alert_is_offered_again_after_its_claim_expires(self):
-        """A delivery that failed before confirmation is retried, not lost."""
+        """An unconfirmed alert returns once its claim expires."""
         _write_alert("d1")
         first = get_pending("oc-1", skip_delivered=True, stamp_receipt=False)
         assert len(first["alerts"]) == 1

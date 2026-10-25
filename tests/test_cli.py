@@ -1212,8 +1212,8 @@ class TestScheduleStatusCLI:
         assert "alerts" in data
         assert "session_crons" in data
 
-    def test_pending_defer_receipt_then_delivered_is_the_plugin_flow(self):
-        """`pending --defer-receipt` claims; `delivered` confirms; nothing repeats."""
+    def test_pending_defer_receipt_then_delivered_stops_repeats(self):
+        """Confirming a deferred claim with `delivered` stops the alert returning after expiry."""
         from aya.scheduler import _alerts_file, load_alerts
         from aya.scheduler.storage import _claims_dir
 
@@ -1253,6 +1253,12 @@ class TestScheduleStatusCLI:
         result = runner.invoke(app, ["schedule", "delivered", "no-such-alert", "--format", "json"])
         assert result.exit_code == 1
         assert json.loads(result.output) == {"delivered": [], "missing": ["no-such-alert"]}
+
+    def test_delivered_text_prints_no_checkmark_when_nothing_matched(self):
+        result = runner.invoke(app, ["schedule", "delivered", "no-such-alert", "--format", "text"])
+        assert result.exit_code == 1
+        assert "✓" not in result.output
+        assert "no-such-alert not found" in result.output
 
     def test_pending_json_long_prompt_no_wrapping(self, tmp_path, monkeypatch):
         """Regression: Rich console.print() wraps at 80 cols, injecting literal

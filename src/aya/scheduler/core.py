@@ -543,7 +543,7 @@ def claim_alerts_for_delivery(
     skip_delivered: bool = False,
     stamp_receipt: bool = True,
 ) -> list[AlertItem]:
-    """Claim unseen alerts for this instance and stamp a delivery receipt.
+    """Claims unseen alerts for this instance and, unless told otherwise, stamps a delivery receipt.
 
     One owner of the claim-and-stamp bookkeeping, shared by the SessionStart
     path (:func:`get_pending`) and the PostToolUse hook. Claiming is what stops
@@ -559,10 +559,11 @@ def claim_alerts_for_delivery(
             tool call must not re-announce, and claims expire after
             ``_CLAIM_TTL_SECONDS``, so the receipt — not the claim — is the only
             durable gate available to it.
-        stamp_receipt: When false, claim without stamping. The caller confirms
-            delivery later with :func:`mark_alerts_delivered`; until it does,
-            the claim's TTL is all that holds the alert, so a delivery that
-            fails is retried once the claim expires.
+        stamp_receipt: When false, claims without stamping. The caller confirms
+            delivery with :func:`mark_alerts_delivered`. An alert left
+            unconfirmed returns once its claim expires, so delivery is
+            at-least-once: a confirmation slower than ``_CLAIM_TTL_SECONDS``
+            can repeat the alert.
 
     Returns:
         The alerts claimed by this call, in the order they were found.
@@ -595,13 +596,17 @@ def claim_alerts_for_delivery(
 
 
 def mark_alerts_delivered(alert_ids: set[str], instance_id: str | None = None) -> set[str]:
-    """Stamp a delivery receipt on each alert in ``alert_ids``.
+    """Stamps a delivery receipt on each alert in ``alert_ids``.
 
-    Matches full IDs only: a caller confirming delivery holds the IDs it was
-    given, so a prefix match could only stamp an alert it never showed.
+    Matches full IDs only. A caller confirming delivery holds the IDs it was
+    given, so a prefix match could stamp an alert the caller never showed.
+
+    Args:
+        alert_ids: Full IDs of the alerts to stamp.
+        instance_id: Delivering instance (default: auto-detect).
 
     Returns:
-        The IDs that matched no alert. Stamping still applies to the rest.
+        The IDs that matched no alert. The rest are still stamped.
     """
     instance_id = instance_id or get_instance_id()
     now = clock.now(_get_local_tz())
@@ -636,10 +641,10 @@ def get_pending(
         instance_id: Override instance identifier (default: auto-detect).
         min_severity: Minimum severity to include. ``"actionable"`` (default)
             returns only actionable alerts. ``"heartbeat"`` returns everything.
-        skip_delivered: Passed to :func:`claim_alerts_for_delivery`. A caller
-            that runs more than once per session sets this, or every alert
-            returns each time its claim expires.
-        stamp_receipt: Passed to :func:`claim_alerts_for_delivery`.
+        skip_delivered: When true, omits alerts that already carry a receipt.
+            See :func:`claim_alerts_for_delivery`.
+        stamp_receipt: When false, claims alerts without stamping a receipt.
+            Confirm delivery later with :func:`mark_alerts_delivered`.
 
     Returns:
         {

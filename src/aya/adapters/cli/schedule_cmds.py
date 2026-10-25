@@ -397,14 +397,17 @@ def schedule_pending(
     skip_delivered: bool = typer.Option(
         False,
         "--skip-delivered",
-        help="Leave out alerts already delivered to any session. For callers that run every turn.",
+        help=(
+            "Omit alerts already marked delivered by any session. "
+            "Use this when calling `pending` repeatedly within one session."
+        ),
     ),
     defer_receipt: bool = typer.Option(
         False,
         "--defer-receipt",
         help=(
-            "Claim alerts without marking them delivered; confirm with `aya schedule delivered`. "
-            "Unconfirmed alerts return once their claim expires."
+            "Claim alerts without marking them delivered. `aya schedule delivered` confirms them, "
+            "and an unconfirmed alert is offered again after its claim expires (5 minutes)."
         ),
     ),
 ) -> None:
@@ -439,12 +442,17 @@ def schedule_pending(
 
 @schedule_app.command("delivered")
 def schedule_delivered(
-    alert_ids: list[str] = typer.Argument(help="Full alert IDs to mark delivered"),
+    alert_ids: list[str] = typer.Argument(
+        help="Full alert IDs to mark delivered. Prefixes are not matched."
+    ),
     format_: OutputFormat = typer.Option(
         OutputFormat.AUTO, "--format", "-f", help="Output format: auto (default), text, or json"
     ),
 ) -> None:
-    """Mark alerts delivered — the confirmation step after `pending --defer-receipt`."""
+    """Mark alerts as delivered, once they have been shown after `pending --defer-receipt`.
+
+    Exits 1 if any ID matches no alert. IDs that do match are still marked.
+    """
     format_ = resolve_format(format_)
     requested = set(alert_ids)
     missing = mark_alerts_delivered(requested)
@@ -452,7 +460,8 @@ def schedule_delivered(
     if format_ == OutputFormat.JSON:
         _output_json({"delivered": delivered, "missing": sorted(missing)})
     else:
-        console.print(f"[green]✓[/green] Marked {len(delivered)} alert(s) delivered")
+        if delivered:
+            console.print(f"[green]✓[/green] Marked {len(delivered)} alert(s) delivered")
         for alert_id in sorted(missing):
             err.print(f"[red]Alert {alert_id} not found.[/red]")
     if missing:

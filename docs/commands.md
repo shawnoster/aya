@@ -87,7 +87,8 @@ that has only been listed. Run `aya receive --auto-ingest` first.
 | `aya schedule uninstall` | Remove scheduler integrations |
 | `aya schedule status` | Scheduler overview — watches, reminders, deliveries |
 | `aya schedule tick` | Run one scheduler cycle, polling watches and expiring alerts (the crontab entry calls this) |
-| `aya schedule pending` | Show unclaimed alerts and session crons (the SessionStart hook reads this) |
+| `aya schedule pending` | Show unclaimed alerts and session crons (the SessionStart hook reads this). `--skip-delivered` omits alerts already marked delivered. `--defer-receipt` claims without marking them delivered |
+| `aya schedule delivered <id>...` | Mark alerts delivered after `pending --defer-receipt`. Takes full IDs only and exits 1 if any ID is unknown |
 | `aya schedule activity` | Record user activity, resetting the idle back-off timer |
 | `aya schedule is-idle` | Check whether the session is currently idle |
 

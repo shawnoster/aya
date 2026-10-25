@@ -2,6 +2,48 @@
 
 <!-- version list -->
 
+## v2.2.3 (2026-10-25)
+
+### Bug Fixes
+
+- **opencode**: Remove the dead V1 OpenCode plugin
+  ([#372](https://github.com/shawnoster/aya/pull/372),
+  [`7663c71`](https://github.com/shawnoster/aya/commit/7663c71001e9332d95ba8b26da376abea4a4d51c))
+
+### Chores
+
+- **deps**: Bump astral-sh/setup-uv from 10.0.1 to 10.3.0
+  ([#364](https://github.com/shawnoster/aya/pull/364),
+  [`2a7e4c0`](https://github.com/shawnoster/aya/commit/2a7e4c036be5fe759847d1491c93b1ae6eaff198))
+
+- **deps**: Bump mcp from 2.0.0 to 2.1.1 ([#359](https://github.com/shawnoster/aya/pull/359),
+  [`dc003bc`](https://github.com/shawnoster/aya/commit/dc003bc126818da1bfa6ccfe3a137ba567b4ab34))
+
+- **deps**: Bump mcp from 2.1.1 to 2.3.0 ([#369](https://github.com/shawnoster/aya/pull/369),
+  [`87e2f9b`](https://github.com/shawnoster/aya/commit/87e2f9bfc6ded83d9821c8f1088e2485fd5ef056))
+
+- **deps**: Bump typer from 0.27.1 to 0.27.3 ([#370](https://github.com/shawnoster/aya/pull/370),
+  [`1194400`](https://github.com/shawnoster/aya/commit/119440041a5c457aeb9457d916e656c0e5973d15))
+
+- **deps-dev**: Bump pre-commit from 4.6.2 to 4.7.0
+  ([#367](https://github.com/shawnoster/aya/pull/367),
+  [`a383e78`](https://github.com/shawnoster/aya/commit/a383e7855a26bd54b152fa4f7d7684b0a5dd58ee))
+
+- **deps-dev**: Bump pylint from 4.0.7 to 4.1.3 ([#368](https://github.com/shawnoster/aya/pull/368),
+  [`1a496cb`](https://github.com/shawnoster/aya/commit/1a496cb01ffec425828232bcb13c9f7bdbdfc315))
+
+- **deps-dev**: Bump ruff from 0.16.4 to 0.16.5 ([#360](https://github.com/shawnoster/aya/pull/360),
+  [`e9fb75b`](https://github.com/shawnoster/aya/commit/e9fb75b4be37a8367feaf5b51c72d9ad045c9e11))
+
+- **opencode**: Address review findings on the V1 plugin removal
+  ([#372](https://github.com/shawnoster/aya/pull/372),
+  [`7663c71`](https://github.com/shawnoster/aya/commit/7663c71001e9332d95ba8b26da376abea4a4d51c))
+
+- **opencode**: Remove the dead V1 OpenCode plugin
+  ([#372](https://github.com/shawnoster/aya/pull/372),
+  [`7663c71`](https://github.com/shawnoster/aya/commit/7663c71001e9332d95ba8b26da376abea4a4d51c))
+
+
 ## v2.2.2 (2026-10-14)
 
 ### Bug Fixes

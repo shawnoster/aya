@@ -44,9 +44,10 @@ _MAX_RETRIES_FETCH = 3
 # `until` cursor until the relay returns fewer events than this size.
 _FETCH_PAGE_SIZE = 200
 # Last-resort backstop only; the cursor rule in _fetch_from_relay is what ends
-# paging. Someone posting about limit x 1000 events in the window (200k, or 50k
-# on a relay capped at 50) could still push older packets past it; that is
-# volume spam, logged when hit, and the authors-filter fetch (#390) covers it.
+# paging. Someone posting about limit x 500 events in the window (100k, or 25k
+# on a relay capped at 50; each block of `limit` at one second costs two pages)
+# could still push older packets past it. That is volume spam, logged when hit,
+# and the authors-filter fetch (#390) covers it.
 _MAX_FETCH_PAGES = 1000
 # Default look-back window used when no `since` is specified.  Matches the
 # default packet TTL (7 days) so no live packet can fall outside the window.

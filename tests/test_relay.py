@@ -786,6 +786,22 @@ class TestFetchPagination:
 
         assert sorted(pkt.intent for pkt in packets) == ["a", "b"]
 
+    async def test_an_event_exactly_at_since_is_fetched(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        since_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [
+            _plain_event(sender, recipient, "inside", since_ts + 5),
+            _plain_event(sender, recipient, "edge", since_ts),
+            _plain_event(sender, recipient, "outside", since_ts - 1),
+        ]
+        relay = FakeRelay(events)
+        with relay.serving():
+            since = datetime.fromtimestamp(since_ts, UTC)
+            packets = [pkt async for pkt in client.fetch_pending(since=since)]
+
+        assert sorted(pkt.intent for pkt in packets) == ["edge", "inside"]
+
     async def test_page_order_does_not_matter(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
@@ -1383,7 +1399,7 @@ class TestHostileRelayInput:
         assert [pkt.intent for pkt in packets] == ["real"]
 
     async def test_endless_unverifiable_pages_stop_at_the_cap(
-        self, client: RelayClient, monkeypatch
+        self, client: RelayClient, monkeypatch, caplog
     ):
         """A relay inventing ever-older valid-looking events still stops."""
         monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
@@ -1408,3 +1424,4 @@ class TestHostileRelayInput:
             assert [pkt async for pkt in client.fetch_pending()] == []
 
         assert calls == 5
+        assert "stopped after 5 pages" in caplog.text

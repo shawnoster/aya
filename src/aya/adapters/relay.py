@@ -47,7 +47,7 @@ _FETCH_PAGE_SIZE = 200
 # paging. Someone posting about limit x 500 events in the window (100k, or 25k
 # on a relay capped at 50; each block of `limit` at one second costs two pages)
 # could still push older packets past it. That is volume spam, logged when hit,
-# and the known-senders query in fetch_pending is immune to it.
+# and the known-senders query in fetch_pending is unaffected by strangers' volume.
 _MAX_FETCH_PAGES = 1000
 # Default look-back window used when no `since` is specified.  Matches the
 # default packet TTL (7 days) so no live packet can fall outside the window.
@@ -591,6 +591,12 @@ async def _read_until_eose(
                 case ["EVENT", sid, dict() as event] if sid == sub_id:
                     yield event
                 case ["EOSE", sid] if sid == sub_id:
+                    return
+                case ["CLOSED", sid, *reason] if sid == sub_id:
+                    # The relay refused or ended the subscription (a filter it
+                    # won't serve, a rate limit). Say so rather than wait out
+                    # the EOSE timeout and pass it off as an ordinary page.
+                    logger.warning("Relay closed subscription %s: %s", sub_id, reason)
                     return
                 case ["NOTICE", notice]:
                     logger.debug("Relay notice: %s", notice)

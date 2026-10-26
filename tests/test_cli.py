@@ -1415,6 +1415,8 @@ class TestReceive:
         assert fetch_calls[0][0] == ()
         assert "since" not in fetch_calls[0][1]
         assert sender.nostr_public_hex in fetch_calls[0][1]["authors"]
+        # Local instances count as known senders too (self-sends between them).
+        assert p.instances["default"].nostr_public_hex in fetch_calls[0][1]["authors"]
 
     def test_skips_already_ingested_packets(
         self, profile_with_sender: Path, sender: Identity

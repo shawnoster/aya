@@ -1494,3 +1494,40 @@ class TestKnownSendersFirst:
             packets = [pkt async for pkt in client.fetch_pending(authors=[sender.nostr_public_hex])]
 
         assert [pkt.intent for pkt in packets] == ["real"]
+
+    async def test_a_strangers_packet_still_arrives_through_the_open_query(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ):
+        """First contact: a sender not in `authors` is still fetched."""
+        ts = int(datetime.now(UTC).timestamp()) - 3600
+        stranger = Identity.generate("stranger")
+        p = Packet(from_did=stranger.did, to_did=recipient.did, intent="hello", content="x")
+        event = {
+            "id": "evt-hello",
+            "pubkey": stranger.nostr_public_hex,
+            "content": p.to_json(),
+            "created_at": ts,
+        }
+        relay = FakeRelay([event, self._real(sender, recipient, ts - 1)])
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending(authors=[sender.nostr_public_hex])]
+
+        assert sorted(pkt.intent for pkt in packets) == ["hello", "real"]
+
+
+class TestClosedSubscription:
+    async def test_closed_ends_the_page_with_a_warning(self, caplog):
+        frames = [json.dumps(["CLOSED", "sub", "error: too many authors"])]
+
+        class FakeWS:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not frames:
+                    await asyncio.sleep(3600)  # would wait out the EOSE timeout
+                return frames.pop(0)
+
+        events = [e async for e in _read_until_eose(FakeWS(), "sub", eose_timeout=5)]
+        assert events == []
+        assert "too many authors" in caplog.text

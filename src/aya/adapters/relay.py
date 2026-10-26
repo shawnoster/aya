@@ -43,9 +43,10 @@ _MAX_RETRIES_FETCH = 3
 # Fetch pagination — events per REQ batch.  Pagination continues with an
 # `until` cursor until the relay returns fewer events than this size.
 _FETCH_PAGE_SIZE = 200
-# A relay that keeps returning the same unverifiable events would otherwise
-# page forever. 50 x 200 events is far beyond a week of real traffic.
-_MAX_FETCH_PAGES = 50
+# Last-resort backstop only; the progress rule in _fetch_from_relay is what
+# ends paging. A cap that real spam could reach would let anyone who can post
+# to the relay push genuine packets past it, so it is set far beyond that.
+_MAX_FETCH_PAGES = 1000
 # Default look-back window used when no `since` is specified.  Matches the
 # default packet TTL (7 days) so no live packet can fall outside the window.
 _DEFAULT_FETCH_WINDOW_DAYS = 7
@@ -361,7 +362,6 @@ class RelayClient:
             # and count truly new events (guards against infinite loops when many
             # events share the same created_at at the page boundary).
             oldest_ts: int | None = None
-            new_event_count = 0
             for raw in page_events:
                 raw_ts = raw.get("created_at")
                 # `type is int`, not isinstance: JSON true is a bool, and a bool
@@ -373,7 +373,6 @@ class RelayClient:
                 # otherwise raise here and end the fetch for every relay.
                 if isinstance(event_id, str) and event_id in seen_event_ids:
                     continue  # already yielded via inclusive cursor overlap
-                new_event_count += 1
                 # After the cursor bookkeeping, so forged events still count
                 # toward the page and can't cut pagination short.
                 if not verify_event(raw):
@@ -426,18 +425,19 @@ class RelayClient:
                 except Exception as exc:  # noqa: BLE001 — one bad event must not end the poll
                     logger.warning("Skipping malformed event: %s", exc)
 
-            # Stop paginating if the relay is exhausted (partial page), if we
-            # have no timestamp cursor to advance, or if no new events were seen
-            # (inclusive cursor already covered the remaining events at oldest_ts).
-            if len(page_events) < _FETCH_PAGE_SIZE or oldest_ts is None or new_event_count == 0:
+            # Stop if the relay is exhausted (partial page), there is no cursor,
+            # or the cursor didn't move back in time: re-asking with the same
+            # `until` returns the same page, whoever filled it.
+            if len(page_events) < _FETCH_PAGE_SIZE or oldest_ts is None:
+                break
+            if until is not None and oldest_ts >= until:
                 break
 
             until = oldest_ts  # inclusive: re-fetch the boundary timestamp
             logger.debug(
-                "Relay %s: fetched %d events (%d new), advancing cursor to until=%d",
+                "Relay %s: fetched %d events, advancing cursor to until=%d",
                 relay_url,
                 len(page_events),
-                new_event_count,
                 until,
             )
         else:

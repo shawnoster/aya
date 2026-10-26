@@ -1276,18 +1276,81 @@ class TestHostileRelayInput:
 
         assert [pkt.intent for pkt in packets] == ["real"]
 
-    async def test_endless_unverifiable_pages_stop_at_the_cap(
-        self, client: RelayClient, monkeypatch
-    ):
+    async def test_replayed_unverifiable_events_stop_paging(self, client: RelayClient, monkeypatch):
+        """Junk at one timestamp is neither new verified data nor a moving cursor."""
         monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
-        monkeypatch.setattr("aya.adapters.relay._MAX_FETCH_PAGES", 5)
         calls = 0
 
         async def fake_read_until_eose(ws, sub_id):
             nonlocal calls
             calls += 1
-            yield {"id": 1, "created_at": 1_700_000_000}
-            yield {"id": 2, "created_at": 1_700_000_000}
+            yield {"id": "a" * 64, "created_at": 1_700_000_000}
+            yield {"id": "b" * 64, "created_at": 1_700_000_000}
+
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        with (
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+        ):
+            assert [pkt async for pkt in client.fetch_pending()] == []
+
+        assert calls == 2  # the first page, then one re-fetch that made no progress
+
+    async def test_more_signed_spam_than_the_old_cap_does_not_hide_a_packet(
+        self, client: RelayClient, sender: Identity, recipient: Identity, monkeypatch
+    ):
+        """Anyone can post signed events; enough of them must not push a real one out."""
+        monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
+        mallory = Identity.generate("mallory")
+        base_ts = 1_700_000_000
+        spam = [_signed_event(mallory, f"spam {i}", base_ts - i) for i in range(120)]
+        real = Packet(from_did=sender.did, to_did=recipient.did, intent="real", content="x")
+        events = [*spam, _signed_event(sender, real.to_json(), base_ts - 500)]
+
+        async def fake_read_until_eose(ws, sub_id):
+            # Honour the cursor like a relay: newest first, at or before `until`.
+            until = cursor["until"]
+            page = [e for e in events if until is None or e["created_at"] <= until][:2]
+            for event in page:
+                yield event
+
+        cursor: dict = {"until": None}
+
+        async def record(data):
+            msg = json.loads(data)
+            if msg[0] == "REQ":
+                cursor["until"] = msg[2].get("until")
+
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        mock_ws.send = AsyncMock(side_effect=record)
+        with (
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+        ):
+            since = datetime.fromtimestamp(base_ts - 10_000, UTC)
+            packets = [pkt async for pkt in client.fetch_pending(since=since)]
+
+        assert [pkt.intent for pkt in packets] == ["real"]
+
+    async def test_endless_unverifiable_pages_stop_at_the_cap(
+        self, client: RelayClient, monkeypatch
+    ):
+        """A relay inventing ever-older valid-looking events still stops."""
+        monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
+        monkeypatch.setattr("aya.adapters.relay._MAX_FETCH_PAGES", 5)
+        monkeypatch.setattr("aya.adapters.relay.verify_event", lambda event: True)
+        calls = 0
+
+        async def fake_read_until_eose(ws, sub_id):
+            nonlocal calls
+            calls += 1
+            for i in range(2):
+                ts = int(datetime.now(UTC).timestamp()) - calls * 10 - i
+                yield {"id": f"{calls}-{i}", "created_at": ts, "content": "{}"}
 
         mock_ws = AsyncMock()
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)

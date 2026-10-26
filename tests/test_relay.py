@@ -642,7 +642,7 @@ class TestFetchPagination:
     async def test_paginates_when_full_page_returned(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """A full page asks again, starting a second before its oldest event."""
+        """A page spanning seconds asks again from its oldest second, inclusive."""
         base_ts = int(datetime.now(UTC).timestamp()) - 3600
         events = [
             _plain_event(sender, recipient, f"p{i}", base_ts - i)
@@ -653,9 +653,10 @@ class TestFetchPagination:
             packets = [pkt async for pkt in client.fetch_pending()]
 
         assert len(packets) == _FETCH_PAGE_SIZE + 1
-        assert len(relay.filters) == 3  # full page, the last event, then empty
         assert "until" not in relay.filters[0]
-        assert relay.filters[1]["until"] == base_ts - (_FETCH_PAGE_SIZE - 1) - 1
+        assert relay.filters[1]["until"] == base_ts - (_FETCH_PAGE_SIZE - 1)
+        # Then the last event's second, a step past it, and the empty end.
+        assert len(relay.filters) == 4
 
     async def test_small_inbox_takes_two_requests(
         self, client: RelayClient, sender: Identity, recipient: Identity
@@ -670,7 +671,7 @@ class TestFetchPagination:
         assert [pkt.intent for pkt in packets] == ["only"]
         assert len(relay.filters) == 2
 
-    async def test_stops_when_no_created_at_in_full_page(
+    async def test_stops_when_a_page_has_no_timestamps(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
         """A full page with no `created_at` fields stops pagination gracefully."""
@@ -746,6 +747,42 @@ class TestFetchPagination:
 
         assert {pkt.intent for pkt in packets} == {"p0", "p2", "p3", "p4", "p5"}
 
+    async def test_a_page_boundary_inside_one_second_loses_nothing(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """Two honest packets in one second, split by a page boundary."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i) for i in range(4)]
+        events.append(_plain_event(sender, recipient, "twin", base_ts - 3))
+        relay = FakeRelay(events, cap=4)  # p3 ("evt-p3") sorts before "evt-twin"
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert sorted(pkt.intent for pkt in packets) == ["p0", "p1", "p2", "p3", "twin"]
+
+    async def test_page_order_does_not_matter(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """The cursor uses the page's oldest timestamp, not its last event."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i) for i in range(9)]
+        relay = FakeRelay(events, cap=3)
+        original = relay._read
+
+        async def oldest_first(ws, sub_id):
+            page = [event async for event in original(ws, sub_id)]
+            for event in reversed(page):
+                yield event
+
+        relay._read = oldest_first
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert len(packets) == 9
+        # Two seconds of progress per page (one overlaps), then the end: a cursor
+        # read off the last event would crawl one second per page instead.
+        assert len(relay.filters) == 6
+
     async def test_a_relay_that_caps_its_limit_is_paged_fully(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
@@ -758,8 +795,8 @@ class TestFetchPagination:
 
         assert len(packets) == 120
 
-    async def test_dedup_boundary_event_across_pages(
-        self, client: RelayClient, sender: Identity, recipient: Identity
+    async def test_a_relay_that_repeats_events_and_ignores_until(
+        self, client: RelayClient, sender: Identity, recipient: Identity, caplog
     ) -> None:
         """A relay that repeats an event, then ignores `until`: no duplicate, and stop."""
         base_ts = 1_700_000_000
@@ -782,7 +819,7 @@ class TestFetchPagination:
         page1_events = [_make_event(i, base_ts - i) for i in range(_FETCH_PAGE_SIZE)]
         boundary_event = page1_events[-1]  # oldest event on page 1
 
-        # Page 2: starts with the *same* boundary event (inclusive cursor overlap),
+        # Page 2: repeats the oldest event of page 1,
         # then one genuinely new event.
         new_event = _make_event(_FETCH_PAGE_SIZE, base_ts - _FETCH_PAGE_SIZE)
         page2_events = [boundary_event, new_event]
@@ -808,10 +845,11 @@ class TestFetchPagination:
             packets = [pkt async for pkt in client.fetch_pending()]
 
         # Total unique events: _FETCH_PAGE_SIZE (page 1) + 1 new (page 2).
-        # The boundary event must NOT be yielded twice.
+        # The repeated event must NOT be yielded twice.
         assert len(packets) == _FETCH_PAGE_SIZE + 1
-        # Page 3 repeats page 2, all newer than `until`: the relay ignored it.
+        # Page 3 repeats page 2, newer than `until`: the relay ignored it.
         assert call_count == 3
+        assert "ignored the until cursor" in caplog.text
 
 
 # ── publish ───────────────────────────────────────────────────────────────────
@@ -1268,7 +1306,9 @@ class TestHostileRelayInput:
 
         assert [pkt.intent for pkt in packets] == ["real"]
 
-    async def test_replayed_unverifiable_events_stop_paging(self, client: RelayClient, monkeypatch):
+    async def test_unverifiable_events_at_one_second_end_paging(
+        self, client: RelayClient, monkeypatch
+    ):
         """Junk at one second: the cursor moves past it and paging ends."""
         monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
         ts = int(datetime.now(UTC).timestamp()) - 3600

@@ -24,6 +24,7 @@ from aya.adapters.relay import (
     _is_rate_limited,
     _read_until_eose,
     _sign_hex,
+    verify_event,
 )
 from aya.entities.identity import Identity, TrustedKey
 
@@ -543,6 +544,8 @@ async def _poll_single_relay(
             try:
                 eose_timeout = max(1.0, deadline - clock.now(UTC).timestamp())
                 async for event in _read_until_eose(ws, sub_id, eose_timeout=eose_timeout):
+                    if not verify_event(event):
+                        continue
                     peer = _authenticate(event, mac_key, "response", request_event_id)
                     if peer is not None:
                         await ws.send(json.dumps(["CLOSE", sub_id]))
@@ -750,6 +753,8 @@ async def _find_pair_request(
             async with websockets.connect(url) as ws:
                 await ws.send(json.dumps(["REQ", sub_id, filter_]))
                 async for event in _read_until_eose(ws, sub_id):
+                    if not verify_event(event):
+                        continue
                     secret = _secret_for(event, secrets_by_lookup)
                     if secret is None:
                         continue

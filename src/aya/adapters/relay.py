@@ -13,6 +13,7 @@ from typing import Any
 
 import websockets
 from coincurve import PrivateKey as Secp256k1PrivateKey
+from coincurve import PublicKeyXOnly
 from websockets.asyncio.client import ClientConnection
 
 from aya.adapters import clock
@@ -42,6 +43,10 @@ _MAX_RETRIES_FETCH = 3
 # Fetch pagination — events per REQ batch.  Pagination continues with an
 # `until` cursor until the relay returns fewer events than this size.
 _FETCH_PAGE_SIZE = 200
+# Last-resort backstop only; the progress rule in _fetch_from_relay is what
+# ends paging. A cap that real spam could reach would let anyone who can post
+# to the relay push genuine packets past it, so it is set far beyond that.
+_MAX_FETCH_PAGES = 1000
 # Default look-back window used when no `since` is specified.  Matches the
 # default packet TTL (7 days) so no live packet can fall outside the window.
 _DEFAULT_FETCH_WINDOW_DAYS = 7
@@ -301,7 +306,7 @@ class RelayClient:
         until: int | None = None
         seen_event_ids: set[str] = set()  # intra-relay dedup for inclusive cursor
 
-        while True:
+        for _page in range(_MAX_FETCH_PAGES):
             filter_: dict[str, Any] = {
                 "kinds": [AYA_KIND],
                 "#p": [self.public_key_hex],
@@ -353,21 +358,27 @@ class RelayClient:
             if not fetch_ok:
                 raise RelayUnreachableError(relay_url)
 
-            # Process events, track the oldest timestamp for cursor advancement,
-            # and count truly new events (guards against infinite loops when many
-            # events share the same created_at at the page boundary).
+            # Process events and track the oldest timestamp for the cursor.
             oldest_ts: int | None = None
-            new_event_count = 0
             for raw in page_events:
                 raw_ts = raw.get("created_at")
-                if isinstance(raw_ts, int) and (oldest_ts is None or raw_ts < oldest_ts):
+                # `type is int`, not isinstance: JSON true is a bool, and a bool
+                # cursor would jump the page window back to 1970.
+                if type(raw_ts) is int and (oldest_ts is None or raw_ts < oldest_ts):
                     oldest_ts = raw_ts
-                event_id: str | None = raw.get("id")
-                if event_id is not None:
-                    if event_id in seen_event_ids:
-                        continue  # already yielded via inclusive cursor overlap
-                    seen_event_ids.add(event_id)
-                new_event_count += 1
+                event_id = raw.get("id")
+                # Only string ids dedup: an unhashable id (a list, say) would
+                # otherwise raise here and end the fetch for every relay.
+                if isinstance(event_id, str) and event_id in seen_event_ids:
+                    continue  # already yielded via inclusive cursor overlap
+                # After the cursor bookkeeping, so forged events still count
+                # toward the page and can't cut pagination short.
+                if not verify_event(raw):
+                    logger.debug("Skipping an event with a bad id or signature")
+                    continue
+                # Only verified ids claim a slot: a fake carrying a real event's
+                # id must not make the real one look already seen.
+                seen_event_ids.add(raw["id"])
                 try:
                     # Skip pairing events — same kind (5999) but not
                     # Packet-shaped. Constants live in relay.py to avoid
@@ -389,11 +400,6 @@ class RelayClient:
                     # (base64 NIP-44 payload) → decrypt first.  Checking the leading
                     # character avoids masking parse/validation errors in malformed
                     # JSON packets by misattributing them as decryption failures.
-                    if not raw.get("pubkey"):
-                        logger.warning(
-                            "Skipping event %s: no publisher pubkey", raw.get("id", "?")[:8]
-                        )
-                        continue
                     if content.lstrip().startswith("{"):
                         packet = Packet.from_json(content)
                     else:
@@ -404,7 +410,7 @@ class RelayClient:
                         except ValueError as crypto_exc:
                             logger.warning(
                                 "Skipping event %s: NIP-44 decryption failed — %s",
-                                raw.get("id", "?")[:8],
+                                raw["id"][:8],  # a string: verify_event checked it
                                 crypto_exc,
                             )
                             continue
@@ -417,20 +423,23 @@ class RelayClient:
                 except Exception as exc:  # noqa: BLE001 — one bad event must not end the poll
                     logger.warning("Skipping malformed event: %s", exc)
 
-            # Stop paginating if the relay is exhausted (partial page), if we
-            # have no timestamp cursor to advance, or if no new events were seen
-            # (inclusive cursor already covered the remaining events at oldest_ts).
-            if len(page_events) < _FETCH_PAGE_SIZE or oldest_ts is None or new_event_count == 0:
+            # Stop if the relay is exhausted (partial page), there is no cursor,
+            # or the cursor didn't move back in time: re-asking with the same
+            # `until` returns the same page, whoever filled it.
+            if len(page_events) < _FETCH_PAGE_SIZE or oldest_ts is None:
+                break
+            if until is not None and oldest_ts >= until:
                 break
 
             until = oldest_ts  # inclusive: re-fetch the boundary timestamp
             logger.debug(
-                "Relay %s: fetched %d events (%d new), advancing cursor to until=%d",
+                "Relay %s: fetched %d events, advancing cursor to until=%d",
                 relay_url,
                 len(page_events),
-                new_event_count,
                 until,
             )
+        else:
+            logger.warning("Relay %s: stopped after %d pages", relay_url, _MAX_FETCH_PAGES)
 
     async def send_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> None:
         """Publish a read receipt for the given packet to all configured relays. **ASYNC.**
@@ -536,9 +545,15 @@ async def _read_until_eose(
     """
     async with asyncio.timeout(eose_timeout):
         async for raw_msg in ws:
-            msg = json.loads(raw_msg)
+            # One malformed frame (or JSON nested deep enough to blow the
+            # recursion limit) must not end the subscription.
+            try:
+                msg = json.loads(raw_msg)
+            except Exception:  # noqa: BLE001 — skip the frame, keep reading
+                logger.debug("Skipping unparseable relay message")
+                continue
             match msg:
-                case ["EVENT", sid, event] if sid == sub_id:
+                case ["EVENT", sid, dict() as event] if sid == sub_id:
                     yield event
                 case ["EOSE", sid] if sid == sub_id:
                     return
@@ -562,6 +577,28 @@ def _compute_event_id(
         ensure_ascii=False,
     )
     return hashlib.sha256(serialised.encode()).hexdigest()
+
+
+def verify_event(event: dict[str, Any]) -> bool:
+    """True if *event*'s id matches its content and its signature is the pubkey's.
+
+    Without this, the pubkey on an event is whatever the relay says it is. With
+    it, a relay can still withhold events but cannot forge or alter them.
+    """
+    try:
+        expected = _compute_event_id(
+            pubkey=event["pubkey"],
+            created_at=event["created_at"],
+            kind=event["kind"],
+            tags=event["tags"],
+            content=event["content"],
+        )
+        if event["id"] != expected:
+            return False
+        key = PublicKeyXOnly(bytes.fromhex(event["pubkey"]))
+        return bool(key.verify(bytes.fromhex(event["sig"]), bytes.fromhex(expected)))
+    except Exception:  # noqa: BLE001 — anything malformed is simply unverified
+        return False
 
 
 def _sign_hex(event_id_hex: str, private_key_hex: str) -> str:

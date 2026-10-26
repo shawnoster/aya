@@ -74,10 +74,8 @@ def triage(
     transport key recorded (built in memory rather than read from a relay) are
     not checked; the relay adapter always records one.
 
-    The transport key is what the relay reported. For encrypted packets that
-    is sound, because decryption fails under any other key. For plaintext
-    packets it is only as honest as the relay until event signatures are
-    verified on fetch.
+    The transport key is trustworthy because the relay adapter verifies each
+    event's id and signature before it builds a packet from it.
     """
     fresh: list[Packet] = []
     bad: list[Packet] = []

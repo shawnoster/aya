@@ -43,9 +43,10 @@ _MAX_RETRIES_FETCH = 3
 # Fetch pagination — events per REQ batch.  Pagination continues with an
 # `until` cursor until the relay returns fewer events than this size.
 _FETCH_PAGE_SIZE = 200
-# Last-resort backstop only; the progress rule in _fetch_from_relay is what
-# ends paging. A cap that real spam could reach would let anyone who can post
-# to the relay push genuine packets past it, so it is set far beyond that.
+# Last-resort backstop only; the cursor rule in _fetch_from_relay is what ends
+# paging. Someone posting about limit x 1000 events in the window (200k, or 50k
+# on a relay capped at 50) could still push older packets past it; that is
+# volume spam, logged when hit, and the authors-filter fetch (#390) covers it.
 _MAX_FETCH_PAGES = 1000
 # Default look-back window used when no `since` is specified.  Matches the
 # default packet TTL (7 days) so no live packet can fall outside the window.
@@ -438,16 +439,16 @@ class RelayClient:
                 logger.warning("Relay %s ignored the until cursor; stopping", relay_url)
                 break
             # Either branch moves the cursor strictly back in time, so paging
-            # always ends: a page spanning seconds has oldest < newest <= until.
-            if newest_ts is not None and newest_ts > oldest_ts:  # noqa: SIM108 — two cases, two comments
-                # The page spans several seconds: re-ask from its oldest second
-                # (inclusive), so a page boundary that split two events sharing
-                # that second doesn't lose one. Repeats are dropped as seen.
+            # always ends.
+            if until is None or oldest_ts < until:  # noqa: SIM108 — two cases, two comments
+                # Re-ask from the page's oldest second, inclusive: a page boundary
+                # (or events the relay dropped after applying `limit`) may have
+                # split that second. Repeats are dropped as seen.
                 until = oldest_ts
             else:
-                # The whole page is one second: re-asking there would return it
-                # again (anyone can post such a block), so step past it. Any
-                # further events at exactly that second are skipped.
+                # Already asked from this second and got only this second back:
+                # a page-long block there (anyone can post one). Step past it;
+                # any further events at exactly that second are skipped.
                 until = oldest_ts - 1
             logger.debug(
                 "Relay %s: fetched %d events, advancing cursor to until=%d",

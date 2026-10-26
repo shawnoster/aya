@@ -658,10 +658,10 @@ class TestFetchPagination:
         # Then the last event's second, a step past it, and the empty end.
         assert len(relay.filters) == 4
 
-    async def test_small_inbox_takes_two_requests(
+    async def test_small_inbox_takes_three_requests(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """A short first page can't be told from a relay's cap, so ask once more."""
+        """A short page isn't the end, and a one-second page is re-asked once."""
         relay = FakeRelay(
             [_plain_event(sender, recipient, "only", int(datetime.now(UTC).timestamp()) - 3600)]
         )
@@ -669,7 +669,7 @@ class TestFetchPagination:
             packets = [pkt async for pkt in client.fetch_pending()]
 
         assert [pkt.intent for pkt in packets] == ["only"]
-        assert len(relay.filters) == 2
+        assert len(relay.filters) == 3  # the page, its second again, then empty
 
     async def test_stops_when_a_page_has_no_timestamps(
         self, client: RelayClient, sender: Identity, recipient: Identity
@@ -759,6 +759,32 @@ class TestFetchPagination:
             packets = [pkt async for pkt in client.fetch_pending()]
 
         assert sorted(pkt.intent for pkt in packets) == ["p0", "p1", "p2", "p3", "twin"]
+
+    async def test_events_dropped_after_limit_do_not_split_a_second(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """A page that shrinks to one second because the relay dropped newer
+        expired events after applying `limit` must not step past that second."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [
+            _plain_event(sender, recipient, "exp1", base_ts),
+            _plain_event(sender, recipient, "exp2", base_ts - 1),
+            _plain_event(sender, recipient, "a", base_ts - 10),
+            _plain_event(sender, recipient, "b", base_ts - 10),
+        ]
+        relay = FakeRelay(events, cap=3)
+        original = relay._read
+
+        async def drops_expired(ws, sub_id):
+            async for event in original(ws, sub_id):
+                if not event["id"].startswith("evt-exp"):
+                    yield event
+
+        relay._read = drops_expired
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert sorted(pkt.intent for pkt in packets) == ["a", "b"]
 
     async def test_page_order_does_not_matter(
         self, client: RelayClient, sender: Identity, recipient: Identity
@@ -1316,7 +1342,7 @@ class TestHostileRelayInput:
         with relay.serving():
             assert [pkt async for pkt in client.fetch_pending()] == []
 
-        assert len(relay.filters) == 2  # the junk page, then an empty one before it
+        assert len(relay.filters) == 3  # the junk page, its second again, then empty
 
     async def test_more_signed_spam_than_the_old_cap_does_not_hide_a_packet(
         self, client: RelayClient, sender: Identity, recipient: Identity, monkeypatch

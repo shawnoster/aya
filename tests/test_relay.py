@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -582,109 +583,95 @@ class TestFetchPending:
 # ── pagination ────────────────────────────────────────────────────────────────
 
 
+class FakeRelay:
+    """Serves events the way a relay does: newest first, honouring `until`,
+    `since` and the smaller of the filter's limit and its own cap."""
+
+    def __init__(self, events: list[dict], cap: int | None = None):
+        # NIP-01 order: newest first, and the lowest id first within a second.
+        self.events = sorted(events, key=lambda e: (-e["created_at"], e["id"]))
+        self.cap = cap
+        self.filters: list[dict] = []
+
+    async def _send(self, data):
+        msg = json.loads(data)
+        if msg[0] == "REQ":
+            self.filters.append(msg[2])
+
+    async def _read(self, ws, sub_id):
+        f = self.filters[-1]
+        limit = f["limit"] if self.cap is None else min(f["limit"], self.cap)
+        page = [
+            e for e in self.events if f.get("since", 0) <= e["created_at"] <= f.get("until", 2**62)
+        ]
+        for event in page[:limit]:
+            yield event
+
+    def serving(self):
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        mock_ws.send = AsyncMock(side_effect=self._send)
+        stack = ExitStack()
+        stack.enter_context(patch("aya.adapters.relay._read_until_eose", side_effect=self._read))
+        stack.enter_context(patch("aya.adapters.relay.websockets.connect", return_value=mock_ws))
+        return stack
+
+
+async def _aenumerate(items):
+    i = 0
+    async for item in items:
+        yield i, item
+        i += 1
+
+
+def _plain_event(sender: Identity, recipient: Identity, intent: str, created_at: int) -> dict:
+    p = Packet(from_did=sender.did, to_did=recipient.did, intent=intent, content="data")
+    return {
+        "id": f"evt-{intent}",
+        "pubkey": "ab" * 32,
+        "content": p.to_json(),
+        "created_at": created_at,
+    }
+
+
 @pytest.mark.usefixtures("trust_events")
 class TestFetchPagination:
-    """fetch_pending paginates via `until` when a full page is returned."""
+    """fetch_pending pages back in time via `until` until a page comes back empty."""
 
     async def test_paginates_when_full_page_returned(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """A full first page triggers a second REQ with an `until` cursor."""
-        base_ts = 1_700_000_000
-
-        # Build _FETCH_PAGE_SIZE events for page 1, then 1 event for page 2.
-        def _make_event(idx: int) -> dict:
-            p = Packet(
-                from_did=sender.did,
-                to_did=recipient.did,
-                intent=f"Packet {idx}",
-                content="data",
-            )
-            return {
-                "id": f"evt-{idx}",
-                "pubkey": "ab" * 32,
-                "content": p.to_json(),
-                "created_at": base_ts - idx,
-            }
-
-        page1_events = [_make_event(i) for i in range(_FETCH_PAGE_SIZE)]
-        page2_events = [_make_event(_FETCH_PAGE_SIZE)]
-
-        call_count = 0
-        sent_filters: list[dict] = []
-
-        async def fake_read_until_eose(ws, sub_id):
-            nonlocal call_count
-            events = page1_events if call_count == 0 else page2_events
-            call_count += 1
-            for evt in events:
-                yield evt
-
-        async def fake_ws_send(data):
-            msg = json.loads(data)
-            if msg[0] == "REQ":
-                sent_filters.append(msg[2])
-
-        mock_ws = AsyncMock()
-        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
-        mock_ws.__aexit__ = AsyncMock(return_value=False)
-        mock_ws.send = AsyncMock(side_effect=fake_ws_send)
-
-        with (
-            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
-        ):
+        """A page spanning seconds asks again from its oldest second, inclusive."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [
+            _plain_event(sender, recipient, f"p{i}", base_ts - i)
+            for i in range(_FETCH_PAGE_SIZE + 1)
+        ]
+        relay = FakeRelay(events)
+        with relay.serving():
             packets = [pkt async for pkt in client.fetch_pending()]
 
-        # All packets from both pages should be yielded.
         assert len(packets) == _FETCH_PAGE_SIZE + 1
+        assert "until" not in relay.filters[0]
+        assert relay.filters[1]["until"] == base_ts - (_FETCH_PAGE_SIZE - 1)
+        # Then the last event's second, a step past it, and the empty end.
+        assert len(relay.filters) == 4
 
-        # Two REQ filters should have been sent.
-        assert len(sent_filters) == 2
-
-        # Second REQ must carry an inclusive `until` cursor (oldest_ts of page 1).
-        oldest_page1_ts = base_ts - (_FETCH_PAGE_SIZE - 1)
-        assert sent_filters[1].get("until") == oldest_page1_ts
-
-    async def test_stops_after_partial_page(
+    async def test_small_inbox_takes_three_requests(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """A partial page (< _FETCH_PAGE_SIZE events) stops pagination."""
-        p = Packet(
-            from_did=sender.did,
-            to_did=recipient.did,
-            intent="Single packet",
-            content="data",
+        """A short page isn't the end, and a one-second page is re-asked once."""
+        relay = FakeRelay(
+            [_plain_event(sender, recipient, "only", int(datetime.now(UTC).timestamp()) - 3600)]
         )
-        raw_event = {
-            "id": "evt-only",
-            "pubkey": "ab" * 32,
-            "content": p.to_json(),
-            "created_at": 1_700_000_000,
-        }
-
-        req_count = 0
-
-        async def fake_read_until_eose(ws, sub_id):
-            nonlocal req_count
-            req_count += 1
-            yield raw_event
-
-        mock_ws = AsyncMock()
-        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
-        mock_ws.__aexit__ = AsyncMock(return_value=False)
-
-        with (
-            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
-        ):
+        with relay.serving():
             packets = [pkt async for pkt in client.fetch_pending()]
 
-        assert len(packets) == 1
-        # Only one REQ should have been issued (no pagination needed).
-        assert req_count == 1
+        assert [pkt.intent for pkt in packets] == ["only"]
+        assert len(relay.filters) == 3  # the page, its second again, then empty
 
-    async def test_stops_when_no_created_at_in_full_page(
+    async def test_stops_when_a_page_has_no_timestamps(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
         """A full page with no `created_at` fields stops pagination gracefully."""
@@ -721,55 +708,139 @@ class TestFetchPagination:
         # Only one REQ: no cursor to advance when created_at is absent.
         assert req_count == 1
 
-    async def test_no_progress_guard_stops_pagination(
+    async def test_a_same_second_block_does_not_hide_older_packets(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """Pagination stops when a full page doesn't move the cursor back in time."""
-        base_ts = 1_700_000_000
-
-        def _make_event(idx: int) -> dict:
-            p = Packet(
-                from_did=sender.did,
-                to_did=recipient.did,
-                intent=f"Packet {idx}",
-                content="data",
-            )
-            return {
-                "id": f"evt-{idx}",
-                "pubkey": "ab" * 32,
-                "content": p.to_json(),
-                "created_at": base_ts,
-            }
-
-        # Both pages return the *same* set of events (identical IDs).
-        same_events = [_make_event(i) for i in range(_FETCH_PAGE_SIZE)]
-        req_count = 0
-
-        async def fake_read_until_eose(ws, sub_id):
-            nonlocal req_count
-            req_count += 1
-            for evt in same_events:
-                yield evt
-
-        mock_ws = AsyncMock()
-        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
-        mock_ws.__aexit__ = AsyncMock(return_value=False)
-
-        with (
-            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
-        ):
+        """#387: a full page of events sharing one second, anywhere in the window."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        newer = [_plain_event(sender, recipient, f"new{i}", base_ts - i) for i in range(5)]
+        block = [
+            _plain_event(sender, recipient, f"spam{i}", base_ts - 100)
+            for i in range(_FETCH_PAGE_SIZE)
+        ]
+        older = _plain_event(sender, recipient, "older", base_ts - 200)
+        relay = FakeRelay([*newer, *block, older])
+        with relay.serving():
             packets = [pkt async for pkt in client.fetch_pending()]
 
-        # Only the first page's packets should be yielded (no duplicates).
-        assert len(packets) == _FETCH_PAGE_SIZE
-        # After seeing no-progress on page 2, pagination must stop (2 REQs total).
-        assert req_count == 2
+        assert "older" in [pkt.intent for pkt in packets]
 
-    async def test_dedup_boundary_event_across_pages(
+    async def test_a_short_page_before_the_end_is_not_the_end(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """Boundary event in both pages is deduped by the inclusive cursor."""
+        """Relays drop expired or deleted events after applying `limit`."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i) for i in range(6)]
+        relay = FakeRelay(events, cap=3)
+        original = relay._read
+
+        async def drops_one_on_the_first_page(ws, sub_id):
+            first = len(relay.filters) == 1
+            async for i, event in _aenumerate(original(ws, sub_id)):
+                if first and i == 1:
+                    continue  # expired after the limit was applied
+                yield event
+
+        relay._read = drops_one_on_the_first_page
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert {pkt.intent for pkt in packets} == {"p0", "p2", "p3", "p4", "p5"}
+
+    async def test_a_page_boundary_inside_one_second_loses_nothing(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """Two honest packets in one second, split by a page boundary."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i) for i in range(4)]
+        events.append(_plain_event(sender, recipient, "twin", base_ts - 3))
+        relay = FakeRelay(events, cap=4)  # p3 ("evt-p3") sorts before "evt-twin"
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert sorted(pkt.intent for pkt in packets) == ["p0", "p1", "p2", "p3", "twin"]
+
+    async def test_events_dropped_after_limit_do_not_split_a_second(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """A page that shrinks to one second because the relay dropped newer
+        expired events after applying `limit` must not step past that second."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [
+            _plain_event(sender, recipient, "exp1", base_ts),
+            _plain_event(sender, recipient, "exp2", base_ts - 1),
+            _plain_event(sender, recipient, "a", base_ts - 10),
+            _plain_event(sender, recipient, "b", base_ts - 10),
+        ]
+        relay = FakeRelay(events, cap=3)
+        original = relay._read
+
+        async def drops_expired(ws, sub_id):
+            async for event in original(ws, sub_id):
+                if not event["id"].startswith("evt-exp"):
+                    yield event
+
+        relay._read = drops_expired
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert sorted(pkt.intent for pkt in packets) == ["a", "b"]
+
+    async def test_an_event_exactly_at_since_is_fetched(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        since_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [
+            _plain_event(sender, recipient, "inside", since_ts + 5),
+            _plain_event(sender, recipient, "edge", since_ts),
+            _plain_event(sender, recipient, "outside", since_ts - 1),
+        ]
+        relay = FakeRelay(events)
+        with relay.serving():
+            since = datetime.fromtimestamp(since_ts, UTC)
+            packets = [pkt async for pkt in client.fetch_pending(since=since)]
+
+        assert sorted(pkt.intent for pkt in packets) == ["edge", "inside"]
+
+    async def test_page_order_does_not_matter(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """The cursor uses the page's oldest timestamp, not its last event."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i) for i in range(9)]
+        relay = FakeRelay(events, cap=3)
+        original = relay._read
+
+        async def oldest_first(ws, sub_id):
+            page = [event async for event in original(ws, sub_id)]
+            for event in reversed(page):
+                yield event
+
+        relay._read = oldest_first
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert len(packets) == 9
+        # Two seconds of progress per page (one overlaps), then the end: a cursor
+        # read off the last event would crawl one second per page instead.
+        assert len(relay.filters) == 6
+
+    async def test_a_relay_that_caps_its_limit_is_paged_fully(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """#388: pages of 50 from a relay capped at 50 are not 'partial'."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i) for i in range(120)]
+        relay = FakeRelay(events, cap=50)
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert len(packets) == 120
+
+    async def test_a_relay_that_repeats_events_and_ignores_until(
+        self, client: RelayClient, sender: Identity, recipient: Identity, caplog
+    ) -> None:
+        """A relay that repeats an event, then ignores `until`: no duplicate, and stop."""
         base_ts = 1_700_000_000
 
         def _make_event(idx: int, ts: int) -> dict:
@@ -790,7 +861,7 @@ class TestFetchPagination:
         page1_events = [_make_event(i, base_ts - i) for i in range(_FETCH_PAGE_SIZE)]
         boundary_event = page1_events[-1]  # oldest event on page 1
 
-        # Page 2: starts with the *same* boundary event (inclusive cursor overlap),
+        # Page 2: repeats the oldest event of page 1,
         # then one genuinely new event.
         new_event = _make_event(_FETCH_PAGE_SIZE, base_ts - _FETCH_PAGE_SIZE)
         page2_events = [boundary_event, new_event]
@@ -816,10 +887,11 @@ class TestFetchPagination:
             packets = [pkt async for pkt in client.fetch_pending()]
 
         # Total unique events: _FETCH_PAGE_SIZE (page 1) + 1 new (page 2).
-        # The boundary event must NOT be yielded twice.
+        # The repeated event must NOT be yielded twice.
         assert len(packets) == _FETCH_PAGE_SIZE + 1
-        # Two REQs issued (page 1 full -> paginate, page 2 partial -> stop).
-        assert call_count == 2
+        # Page 3 repeats page 2, newer than `until`: the relay ignored it.
+        assert call_count == 3
+        assert "ignored the until cursor" in caplog.text
 
 
 # ── publish ───────────────────────────────────────────────────────────────────
@@ -1276,27 +1348,17 @@ class TestHostileRelayInput:
 
         assert [pkt.intent for pkt in packets] == ["real"]
 
-    async def test_replayed_unverifiable_events_stop_paging(self, client: RelayClient, monkeypatch):
-        """Junk at one timestamp is neither new verified data nor a moving cursor."""
+    async def test_unverifiable_events_at_one_second_end_paging(
+        self, client: RelayClient, monkeypatch
+    ):
+        """Junk at one second: the cursor moves past it and paging ends."""
         monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
-        calls = 0
-
-        async def fake_read_until_eose(ws, sub_id):
-            nonlocal calls
-            calls += 1
-            yield {"id": "a" * 64, "created_at": 1_700_000_000}
-            yield {"id": "b" * 64, "created_at": 1_700_000_000}
-
-        mock_ws = AsyncMock()
-        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
-        mock_ws.__aexit__ = AsyncMock(return_value=False)
-        with (
-            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
-            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
-        ):
+        ts = int(datetime.now(UTC).timestamp()) - 3600
+        relay = FakeRelay([{"id": "a" * 64, "created_at": ts}, {"id": "b" * 64, "created_at": ts}])
+        with relay.serving():
             assert [pkt async for pkt in client.fetch_pending()] == []
 
-        assert calls == 2  # the first page, then one re-fetch that made no progress
+        assert len(relay.filters) == 3  # the junk page, its second again, then empty
 
     async def test_more_signed_spam_than_the_old_cap_does_not_hide_a_packet(
         self, client: RelayClient, sender: Identity, recipient: Identity, monkeypatch
@@ -1337,7 +1399,7 @@ class TestHostileRelayInput:
         assert [pkt.intent for pkt in packets] == ["real"]
 
     async def test_endless_unverifiable_pages_stop_at_the_cap(
-        self, client: RelayClient, monkeypatch
+        self, client: RelayClient, monkeypatch, caplog
     ):
         """A relay inventing ever-older valid-looking events still stops."""
         monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
@@ -1362,3 +1424,4 @@ class TestHostileRelayInput:
             assert [pkt async for pkt in client.fetch_pending()] == []
 
         assert calls == 5
+        assert "stopped after 5 pages" in caplog.text

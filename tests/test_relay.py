@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -587,7 +588,8 @@ class FakeRelay:
     `since` and the smaller of the filter's limit and its own cap."""
 
     def __init__(self, events: list[dict], cap: int | None = None):
-        self.events = sorted(events, key=lambda e: e.get("created_at", 0), reverse=True)
+        # NIP-01 order: newest first, and the lowest id first within a second.
+        self.events = sorted(events, key=lambda e: (-e["created_at"], e["id"]))
         self.cap = cap
         self.filters: list[dict] = []
 
@@ -600,16 +602,12 @@ class FakeRelay:
         f = self.filters[-1]
         limit = f["limit"] if self.cap is None else min(f["limit"], self.cap)
         page = [
-            e
-            for e in self.events
-            if f.get("since", 0) <= e.get("created_at", 0) <= f.get("until", 2**62)
+            e for e in self.events if f.get("since", 0) <= e["created_at"] <= f.get("until", 2**62)
         ]
         for event in page[:limit]:
             yield event
 
     def serving(self):
-        from contextlib import ExitStack
-
         mock_ws = AsyncMock()
         mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
         mock_ws.__aexit__ = AsyncMock(return_value=False)
@@ -618,6 +616,13 @@ class FakeRelay:
         stack.enter_context(patch("aya.adapters.relay._read_until_eose", side_effect=self._read))
         stack.enter_context(patch("aya.adapters.relay.websockets.connect", return_value=mock_ws))
         return stack
+
+
+async def _aenumerate(items):
+    i = 0
+    async for item in items:
+        yield i, item
+        i += 1
 
 
 def _plain_event(sender: Identity, recipient: Identity, intent: str, created_at: int) -> dict:
@@ -632,7 +637,7 @@ def _plain_event(sender: Identity, recipient: Identity, intent: str, created_at:
 
 @pytest.mark.usefixtures("trust_events")
 class TestFetchPagination:
-    """fetch_pending paginates via `until` when a full page is returned."""
+    """fetch_pending pages back in time via `until` until a page comes back empty."""
 
     async def test_paginates_when_full_page_returned(
         self, client: RelayClient, sender: Identity, recipient: Identity
@@ -648,7 +653,7 @@ class TestFetchPagination:
             packets = [pkt async for pkt in client.fetch_pending()]
 
         assert len(packets) == _FETCH_PAGE_SIZE + 1
-        assert len(relay.filters) == 2
+        assert len(relay.filters) == 3  # full page, the last event, then empty
         assert "until" not in relay.filters[0]
         assert relay.filters[1]["until"] == base_ts - (_FETCH_PAGE_SIZE - 1) - 1
 
@@ -719,6 +724,28 @@ class TestFetchPagination:
 
         assert "older" in [pkt.intent for pkt in packets]
 
+    async def test_a_short_page_before_the_end_is_not_the_end(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        """Relays drop expired or deleted events after applying `limit`."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i) for i in range(6)]
+        relay = FakeRelay(events, cap=3)
+        original = relay._read
+
+        async def drops_one_on_the_first_page(ws, sub_id):
+            first = len(relay.filters) == 1
+            async for i, event in _aenumerate(original(ws, sub_id)):
+                if first and i == 1:
+                    continue  # expired after the limit was applied
+                yield event
+
+        relay._read = drops_one_on_the_first_page
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert {pkt.intent for pkt in packets} == {"p0", "p2", "p3", "p4", "p5"}
+
     async def test_a_relay_that_caps_its_limit_is_paged_fully(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
@@ -734,7 +761,7 @@ class TestFetchPagination:
     async def test_dedup_boundary_event_across_pages(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """Boundary event in both pages is deduped by the inclusive cursor."""
+        """A relay that repeats an event, then ignores `until`: no duplicate, and stop."""
         base_ts = 1_700_000_000
 
         def _make_event(idx: int, ts: int) -> dict:
@@ -783,8 +810,8 @@ class TestFetchPagination:
         # Total unique events: _FETCH_PAGE_SIZE (page 1) + 1 new (page 2).
         # The boundary event must NOT be yielded twice.
         assert len(packets) == _FETCH_PAGE_SIZE + 1
-        # Two REQs issued (page 1 full -> paginate, page 2 partial -> stop).
-        assert call_count == 2
+        # Page 3 repeats page 2, all newer than `until`: the relay ignored it.
+        assert call_count == 3
 
 
 # ── publish ───────────────────────────────────────────────────────────────────

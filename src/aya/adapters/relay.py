@@ -284,15 +284,16 @@ class RelayClient:
     ) -> AsyncIterator[Packet]:
         """Fetch all matching packets from a single relay, paginating via `until`.
 
-        Sends REQ filters with ``limit=_FETCH_PAGE_SIZE``.  After each page,
-        if the relay returned a full page the cursor advances to
-        ``oldest_seen_ts`` (inclusive) and another REQ is issued.  Pagination
-        stops when:
+        Sends REQ filters with ``limit=_FETCH_PAGE_SIZE``. After each page the
+        cursor moves to one second before the page's oldest event and another
+        REQ is issued. Paging stops on an empty page (or one with no usable
+        timestamp), when the relay ignores ``until``, or at the
+        ``_MAX_FETCH_PAGES`` backstop. A short page is not the end: relays cap
+        ``limit`` and drop expired or deleted events after applying it.
 
-        * the page is smaller than ``_FETCH_PAGE_SIZE`` (relay exhausted), or
-        * no ``created_at`` timestamp is available to advance the cursor, or
-        * no new event IDs were seen in the last page (no progress — guards
-          against infinite loops when many events share the same timestamp).
+        Known limit: events sharing one second can't be paged within that
+        second using since/until/limit. Someone who posts a page's worth of
+        events at a real packet's second, with lower ids, can push it out.
 
         When *since* is omitted a default look-back window of
         ``_DEFAULT_FETCH_WINDOW_DAYS`` is applied (matching the packet TTL) so
@@ -304,11 +305,7 @@ class RelayClient:
             since if since is not None else (now - timedelta(days=_DEFAULT_FETCH_WINDOW_DAYS))
         )
         until: int | None = None
-        seen_event_ids: set[str] = set()  # a relay that ignores `until` may repeat events
-        # The biggest page this relay has returned. Many relays cap `limit`
-        # below what we ask for, so "fewer than _FETCH_PAGE_SIZE" can't mean
-        # "the end"; a page smaller than the relay's own largest does.
-        largest_page = 0
+        seen_event_ids: set[str] = set()  # a relay may repeat an event across pages
 
         for _page in range(_MAX_FETCH_PAGES):
             filter_: dict[str, Any] = {
@@ -374,7 +371,7 @@ class RelayClient:
                 # Only string ids dedup: an unhashable id (a list, say) would
                 # otherwise raise here and end the fetch for every relay.
                 if isinstance(event_id, str) and event_id in seen_event_ids:
-                    continue  # already yielded via inclusive cursor overlap
+                    continue  # already yielded from an earlier page
                 # After the cursor bookkeeping, so forged events still count
                 # toward the page and can't cut pagination short.
                 if not verify_event(raw):
@@ -427,9 +424,8 @@ class RelayClient:
                 except Exception as exc:  # noqa: BLE001 — one bad event must not end the poll
                     logger.warning("Skipping malformed event: %s", exc)
 
-            largest_page = max(largest_page, len(page_events))
-            if oldest_ts is None or len(page_events) < largest_page:
-                break  # empty, or smaller than this relay's pages: the end
+            if oldest_ts is None:
+                break  # empty: nothing older is left
 
             # Exclusive cursor: the next page starts a second before this one's
             # oldest event, so it always moves back in time. Re-asking at the
@@ -438,7 +434,8 @@ class RelayClient:
             # page boundary splits events sharing one second, the rest of that
             # second is skipped.
             if until is not None and oldest_ts > until:
-                oldest_ts = until  # a relay ignoring `until`; still move back
+                logger.warning("Relay %s ignored the until cursor; stopping", relay_url)
+                break
             until = oldest_ts - 1
             logger.debug(
                 "Relay %s: fetched %d events, advancing cursor to until=%d",

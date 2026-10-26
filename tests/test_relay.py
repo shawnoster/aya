@@ -20,11 +20,19 @@ from aya.adapters.relay import (
     _compute_event_id,
     _read_until_eose,
     _sign_hex,
+    verify_event,
 )
 from aya.entities.identity import Identity
 from aya.entities.packet import Packet
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def trust_events(monkeypatch):
+    """For tests about fetch mechanics (paging, dedup, decryption) built on
+    hand-written events: signature checks have their own tests below."""
+    monkeypatch.setattr("aya.adapters.relay.verify_event", lambda event: True)
 
 
 @pytest.fixture
@@ -355,6 +363,7 @@ class TestReadUntilEose:
 # ── fetch_pending ─────────────────────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("trust_events")
 class TestFetchPending:
     async def test_yields_valid_packets(
         self, client: RelayClient, sender: Identity, recipient: Identity
@@ -569,16 +578,11 @@ class TestFetchPending:
         packets = await self._fetch(client, events)
         assert [pkt.transport_pubkey for pkt in packets] == ["cd" * 32, sender.nostr_public_hex]
 
-    async def test_plaintext_event_without_pubkey_is_skipped(
-        self, client: RelayClient, sender: Identity, recipient: Identity
-    ) -> None:
-        p = Packet(from_did=sender.did, to_did=recipient.did, intent="plain", content="x")
-        assert await self._fetch(client, [{"id": "evt-anon", "content": p.to_json()}]) == []
-
 
 # ── pagination ────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("trust_events")
 class TestFetchPagination:
     """fetch_pending paginates via `until` when a full page is returned."""
 
@@ -1036,6 +1040,7 @@ class TestMultiRelayPublish:
 # ── Multi-relay fetch ─────────────────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("trust_events")
 class TestMultiRelayFetch:
     async def test_fetch_deduplicates_across_relays(
         self, sender: Identity, recipient: Identity
@@ -1079,3 +1084,124 @@ class TestMultiRelayFetch:
             nostr_public_hex=sender.nostr_public_hex,
         )
         assert c._relay_urls == ["wss://relay.example.com"]
+
+
+# ── event verification ────────────────────────────────────────────────────────
+
+
+def _signed_event(identity: Identity, content: str, created_at: int = 1_700_000_000) -> dict:
+    tags = [["p", "00" * 32]]
+    event_id = _compute_event_id(identity.nostr_public_hex, created_at, AYA_KIND, tags, content)
+    return {
+        "id": event_id,
+        "pubkey": identity.nostr_public_hex,
+        "created_at": created_at,
+        "kind": AYA_KIND,
+        "tags": tags,
+        "content": content,
+        "sig": _sign_hex(event_id, identity.nostr_private_hex),
+    }
+
+
+class TestVerifyEvent:
+    def test_genuine_event_verifies(self, sender: Identity):
+        assert verify_event(_signed_event(sender, "hello")) is True
+
+    def test_relay_cannot_swap_the_pubkey(self, sender: Identity, recipient: Identity):
+        """The attack this closes: a relay reporting someone else as publisher."""
+        event = {**_signed_event(sender, "hello"), "pubkey": recipient.nostr_public_hex}
+        assert verify_event(event) is False
+
+    def test_altered_content_fails(self, sender: Identity):
+        event = {**_signed_event(sender, "hello"), "content": "goodbye"}
+        assert verify_event(event) is False
+
+    def test_id_recomputed_but_not_resigned_fails(self, sender: Identity, recipient: Identity):
+        event = _signed_event(sender, "hello")
+        event["pubkey"] = recipient.nostr_public_hex
+        event["id"] = _compute_event_id(
+            event["pubkey"], event["created_at"], event["kind"], event["tags"], event["content"]
+        )
+        assert verify_event(event) is False
+
+    @pytest.mark.parametrize("junk", [{}, {"id": 1}, {"sig": "zz", "pubkey": "not hex"}])
+    def test_malformed_events_are_unverified_not_errors(self, junk):
+        assert verify_event(junk) is False
+
+
+class TestFetchVerifiesEvents:
+    async def test_forged_event_is_skipped_and_genuine_one_kept(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ):
+        real = Packet(from_did=sender.did, to_did=recipient.did, intent="real", content="x")
+        forged = Packet(from_did=sender.did, to_did=recipient.did, intent="forged", content="y")
+        genuine = _signed_event(sender, real.to_json())
+        swapped = {**_signed_event(recipient, forged.to_json()), "pubkey": sender.nostr_public_hex}
+
+        async def fake_read_until_eose(ws, sub_id):
+            yield swapped
+            yield genuine
+
+        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose):
+            mock_ws = AsyncMock()
+            mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+            mock_ws.__aexit__ = AsyncMock(return_value=False)
+            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
+                packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert [pkt.intent for pkt in packets] == ["real"]
+        assert packets[0].transport_pubkey == sender.nostr_public_hex
+
+
+class TestHostileRelayInput:
+    async def test_bad_frames_are_skipped_not_fatal(self, sender: Identity):
+        good = _signed_event(sender, "hello")
+        frames = [
+            "not json at all",
+            "[" * 20000 + "]" * 20000,  # deep enough to raise RecursionError
+            json.dumps(["EVENT", "sub", ["not", "an", "object"]]),
+            json.dumps(["EVENT", "sub", good]),
+            json.dumps(["EOSE", "sub"]),
+        ]
+
+        class FakeWS:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if frames:
+                    return frames.pop(0)
+                raise StopAsyncIteration
+
+        events = [event async for event in _read_until_eose(FakeWS(), "sub")]
+        assert events == [good]
+
+    async def test_forged_events_still_count_toward_the_page(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ):
+        """A full page of forgeries must not stop pagination before the real packet."""
+        mallory = Identity.generate("mallory")
+        base_ts = 1_700_000_000
+        forged = [
+            {**_signed_event(mallory, f"junk {i}", base_ts - i), "sig": "00" * 64}
+            for i in range(_FETCH_PAGE_SIZE)
+        ]
+        real = Packet(from_did=sender.did, to_did=recipient.did, intent="older", content="x")
+        page2 = [_signed_event(sender, real.to_json(), base_ts - _FETCH_PAGE_SIZE)]
+        pages = [forged, page2, []]
+
+        async def fake_read_until_eose(ws, sub_id):
+            for event in pages.pop(0) if pages else []:
+                yield event
+
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        with (
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+        ):
+            since = datetime.fromtimestamp(base_ts - 10_000, UTC)
+            packets = [pkt async for pkt in client.fetch_pending(since=since)]
+
+        assert [pkt.intent for pkt in packets] == ["older"]

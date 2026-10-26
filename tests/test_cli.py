@@ -1393,7 +1393,8 @@ class TestReceive:
     def test_fetch_pending_called_without_since(
         self, profile_with_sender: Path, sender: Identity
     ) -> None:
-        """receive must call fetch_pending() with no since argument."""
+        """receive must call fetch_pending() with no since argument, asking for
+        known senders (the trusted peer's key) first."""
         p = load_profile(profile_with_sender)
         packet = self._signed_packet(sender, p.instances["default"].did)
 
@@ -1411,7 +1412,9 @@ class TestReceive:
             )
 
         assert len(fetch_calls) == 1
-        assert fetch_calls[0] == ((), {})  # called with no positional or keyword args
+        assert fetch_calls[0][0] == ()
+        assert "since" not in fetch_calls[0][1]
+        assert sender.nostr_public_hex in fetch_calls[0][1]["authors"]
 
     def test_skips_already_ingested_packets(
         self, profile_with_sender: Path, sender: Identity

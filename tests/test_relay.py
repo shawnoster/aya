@@ -601,9 +601,13 @@ class FakeRelay:
     async def _read(self, ws, sub_id):
         f = self.filters[-1]
         limit = f["limit"] if self.cap is None else min(f["limit"], self.cap)
-        page = [
-            e for e in self.events if f.get("since", 0) <= e["created_at"] <= f.get("until", 2**62)
-        ]
+        page = []
+        for e in self.events:
+            if not f.get("since", 0) <= e["created_at"] <= f.get("until", 2**62):
+                continue
+            if "authors" in f and e.get("pubkey") not in f["authors"]:
+                continue
+            page.append(e)
         for event in page[:limit]:
             yield event
 
@@ -1425,3 +1429,68 @@ class TestHostileRelayInput:
 
         assert calls == 5
         assert "stopped after 5 pages" in caplog.text
+
+
+@pytest.mark.usefixtures("trust_events")
+class TestKnownSendersFirst:
+    """#390: strangers posting to the inbox can't crowd out a known sender."""
+
+    def _block_at(self, recipient: Identity, ts: int, count: int) -> list[dict]:
+        mallory = Identity.generate("mallory")
+        block = []
+        for i in range(count):
+            p = Packet(from_did=mallory.did, to_did=recipient.did, intent=f"s{i}", content="x")
+            # "evt-0..." ids sort before the real packet's "evt-real".
+            block.append(
+                {
+                    "id": f"evt-0{i:03d}",
+                    "pubkey": mallory.nostr_public_hex,
+                    "content": p.to_json(),
+                    "created_at": ts,
+                }
+            )
+        return block
+
+    def _real(self, sender: Identity, recipient: Identity, ts: int) -> dict:
+        p = Packet(from_did=sender.did, to_did=recipient.did, intent="real", content="x")
+        return {
+            "id": "evt-real",
+            "pubkey": sender.nostr_public_hex,
+            "content": p.to_json(),
+            "created_at": ts,
+        }
+
+    async def test_a_block_at_the_real_packets_second_no_longer_hides_it(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ):
+        ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [*self._block_at(recipient, ts, 5), self._real(sender, recipient, ts)]
+        relay = FakeRelay(events, cap=5)
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending(authors=[sender.nostr_public_hex])]
+
+        assert "real" in [pkt.intent for pkt in packets]
+        assert relay.filters[0]["authors"] == [sender.nostr_public_hex]
+        assert any("authors" not in f for f in relay.filters)  # the open query still runs
+
+    async def test_without_authors_the_block_still_wins(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ):
+        """Documents why the authors query exists: the open query alone loses it."""
+        ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [*self._block_at(recipient, ts, 5), self._real(sender, recipient, ts)]
+        relay = FakeRelay(events, cap=5)
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert "real" not in [pkt.intent for pkt in packets]
+
+    async def test_a_packet_found_by_both_queries_is_yielded_once(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ):
+        ts = int(datetime.now(UTC).timestamp()) - 3600
+        relay = FakeRelay([self._real(sender, recipient, ts)])
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending(authors=[sender.nostr_public_hex])]
+
+        assert [pkt.intent for pkt in packets] == ["real"]

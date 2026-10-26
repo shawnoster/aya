@@ -45,7 +45,7 @@ class FakeClient:
             {"url": u, "ok": True, "error": None} for u in relay_urls
         ]
 
-    async def fetch_pending(self):
+    async def fetch_pending(self, authors=None):
         if type(self).fetch_raises:
             raise OSError("relay down")
         for pkt in type(self).queued:

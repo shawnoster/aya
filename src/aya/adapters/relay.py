@@ -47,7 +47,7 @@ _FETCH_PAGE_SIZE = 200
 # paging. Someone posting about limit x 500 events in the window (100k, or 25k
 # on a relay capped at 50; each block of `limit` at one second costs two pages)
 # could still push older packets past it. That is volume spam, logged when hit,
-# and the authors-filter fetch (#390) covers it.
+# and the known-senders query in fetch_pending is immune to it.
 _MAX_FETCH_PAGES = 1000
 # Default look-back window used when no `since` is specified.  Matches the
 # default packet TTL (7 days) so no live packet can fall outside the window.
@@ -232,6 +232,7 @@ class RelayClient:
     async def fetch_pending(
         self,
         since: datetime | None = None,
+        authors: list[str] | None = None,
     ) -> AsyncIterator[Packet]:
         """Yield packets addressed to this instance's pubkey, querying all relays. **ASYNC.**
 
@@ -242,6 +243,12 @@ class RelayClient:
         (matching the packet TTL) is applied so the scan is bounded to the
         live-packet window.  Pass an explicit *since* to override that lower
         bound.
+
+        *authors* are the Nostr keys of known senders. When given, each relay
+        is asked for those first, in their own paging, so strangers posting
+        to this inbox can't take the page slots a known sender's packet needs
+        (a block at its exact second, or sheer volume). The open inbox query
+        still follows, for first contact and senders not yet known.
 
         Usage::
 
@@ -265,12 +272,14 @@ class RelayClient:
         unreachable: list[str] = []
         self.last_fetch_unreachable = unreachable
         for relay_url in self._relay_urls:
+            queries = [authors, None] if authors else [None]
             try:
-                async for packet in self._fetch_from_relay(relay_url, since):
-                    key = (packet.id, packet.transport_pubkey)
-                    if key not in seen:
-                        seen.add(key)
-                        yield packet
+                for query_authors in queries:
+                    async for packet in self._fetch_from_relay(relay_url, since, query_authors):
+                        key = (packet.id, packet.transport_pubkey)
+                        if key not in seen:
+                            seen.add(key)
+                            yield packet
             except RelayUnreachableError:
                 unreachable.append(relay_url)
         if unreachable and len(unreachable) == len(self._relay_urls):
@@ -283,6 +292,7 @@ class RelayClient:
         self,
         relay_url: str,
         since: datetime | None,
+        authors: list[str] | None = None,
     ) -> AsyncIterator[Packet]:
         """Fetch all matching packets from a single relay, paginating via `until`.
 
@@ -296,7 +306,10 @@ class RelayClient:
 
         Known limit: events sharing one second can't be paged within that
         second using since/until/limit. Someone who posts a page's worth of
-        events at a real packet's second, with lower ids, can push it out.
+        events at a real packet's second, with lower ids, can push it out of
+        this query. ``fetch_pending`` therefore asks for known senders under
+        an ``authors`` filter first, where strangers' events can't appear; the
+        limit remains only for senders not yet known.
 
         When *since* is omitted a default look-back window of
         ``_DEFAULT_FETCH_WINDOW_DAYS`` is applied (matching the packet TTL) so
@@ -319,8 +332,11 @@ class RelayClient:
             }
             if until is not None:
                 filter_["until"] = until
+            if authors:
+                filter_["authors"] = authors
 
-            sub_id = f"aya-{now.timestamp():.0f}-{until or 'first'}"
+            scope = "known" if authors else "open"
+            sub_id = f"aya-{scope}-{now.timestamp():.0f}-{until or 'first'}"
 
             # Collect the raw events for this page so we can
             # determine the oldest timestamp before deciding whether to paginate.

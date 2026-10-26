@@ -13,6 +13,7 @@ from aya.usecases.resolve import (
     resolve_instance,
     resolve_recipient,
     resolve_relays,
+    sender_keys,
 )
 
 
@@ -83,6 +84,31 @@ class TestNostrPubkey:
         )
         with pytest.raises(NoNostrPubkeyError, match="aya pair"):
             nostr_pubkey_for(profile, "did:key:zNOKEY")
+
+
+class TestSenderKeys:
+    def test_trusted_peers_and_own_instances(self, profile: Profile):
+        keys = sender_keys(profile)
+        beacon = profile.trusted_keys["beacon"]
+        harbor = profile.instances["harbor"]
+        assert keys[beacon.did] == {beacon.nostr_pubkey}
+        assert keys[harbor.did] == {harbor.nostr_public_hex}
+
+    def test_same_did_under_two_labels_keeps_both_keys(self, profile: Profile):
+        beacon = profile.trusted_keys["beacon"]
+        profile.trusted_keys["beacon-new"] = TrustedKey(
+            did=beacon.did, label="beacon-new", nostr_pubkey="ee" * 32
+        )
+        assert sender_keys(profile)[beacon.did] == {beacon.nostr_pubkey, "ee" * 32}
+
+    def test_uppercase_key_is_stored_lowercase(self):
+        key = TrustedKey(did="did:key:zX", label="x", nostr_pubkey="AB" * 32)
+        assert key.nostr_pubkey == "ab" * 32
+
+    def test_peer_without_transport_key_is_absent(self, profile: Profile):
+        other = Identity.generate("other")
+        profile.trusted_keys["other"] = TrustedKey(did=other.did, label="other")
+        assert other.did not in sender_keys(profile)
 
 
 class TestInstanceAndRelays:

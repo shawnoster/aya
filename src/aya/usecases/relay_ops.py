@@ -44,8 +44,9 @@ from aya.usecases.resolve import (
     resolve_instance,
     resolve_recipient,
     resolve_relays,
+    sender_keys,
 )
-from aya.usecases.triage import triage
+from aya.usecases.triage import BAD_SIGNATURE, DUPLICATE_ID, triage
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +239,16 @@ class PollResult:
     relays: list[str] = field(default_factory=list)
     relay_reachable: bool = True
     bad_signature: list[Packet] = field(default_factory=list)
+    misrouted: list[tuple[Packet, str]] = field(default_factory=list)
+
+    def rejected(self) -> list[dict[str, str]]:
+        """Every packet refused this poll, with why. One list for every surface.
+
+        `from` is included because an id alone does not identify a packet:
+        a refused duplicate shares its id with the packet that was delivered.
+        """
+        refused = [(pkt, BAD_SIGNATURE) for pkt in self.bad_signature] + self.misrouted
+        return [{"id": pkt.id, "from": pkt.from_did, "reason": why} for pkt, why in refused]
 
     def envelope(self) -> dict[str, Any]:
         """The wire shape both surfaces return."""
@@ -246,6 +257,7 @@ class PollResult:
             "instance": self.instance,
             "relays": list(self.relays),
             "relay_reachable": self.relay_reachable,
+            "rejected": self.rejected(),
         }
 
 
@@ -529,19 +541,38 @@ async def inbox(
     Returns ``(result, packets)`` — the envelope plus the Packet objects, so a
     surface can render richer detail than the summary dicts carry.
     """
-    _local, label, relay_urls, packets, reachable, _reached = await _fetch(
+    local, label, relay_urls, packets, reachable, _reached = await _fetch(
         profile, instance, relay, client_factory
     )
     dropped = set(profile.dropped_ids)
     ingested = {e["id"] for e in profile.ingested_ids}
 
-    visible = [pkt for pkt in packets if pkt.id not in dropped]
-    fresh = triage(visible, ingested=ingested, dropped=dropped, verify=False).fresh
+    # Misrouted packets are hidden from the listing as well as from receive:
+    # a packet addressed to someone else is not waiting for this instance.
+    # `ingested` is left empty here because include_ingested still wants the
+    # ingested ones; they are split out on the next line instead.
+    sorted_ = triage(
+        packets,
+        ingested=set(),
+        dropped=dropped,
+        verify=False,
+        local_did=local.did,
+        sender_keys=sender_keys(profile),
+    )
+    visible = sorted_.fresh
+    fresh = [pkt for pkt in visible if pkt.id not in ingested]
     shown = visible if include_ingested else fresh
 
     summaries = [packet_summary(profile, pkt, ingested=pkt.id in ingested) for pkt in shown]
     return (
-        PollResult(packets=summaries, instance=label, relays=relay_urls, relay_reachable=reachable),
+        PollResult(
+            packets=summaries,
+            instance=label,
+            relays=relay_urls,
+            relay_reachable=reachable,
+            # Copies of packets already ingested are not news here either.
+            misrouted=[(pkt, why) for pkt, why in sorted_.misrouted if pkt.id not in ingested],
+        ),
         shown,
     )
 
@@ -580,6 +611,8 @@ async def receive(
         packets,
         ingested={e["id"] for e in profile.ingested_ids},
         dropped=set(profile.dropped_ids),
+        local_did=local.did,
+        sender_keys=sender_keys(profile),
     )
 
     if on_fresh is not None and sorted_packets.fresh:
@@ -587,7 +620,23 @@ async def receive(
 
     summaries: list[dict[str, Any]] = []
     client: RelayClient | None = None
-    for packet in sorted_packets.fresh:
+    misrouted = list(sorted_packets.misrouted)
+    # Packet bodies and the ledger are keyed by id alone, so a second packet
+    # under an id already ingested this poll would overwrite the first one's
+    # body. Ids are visible on the relay; refuse the second rather than lose
+    # the first.
+    ingested_now: set[str] = set()
+    # Trusted senders first, so a stranger's packet can't claim a shared id
+    # ahead of the real one when the user accepts everything.
+    ordered = sorted(sorted_packets.fresh, key=lambda pkt: not profile.is_trusted(pkt.from_did))
+    for packet in ordered:
+        if packet.id in ingested_now:
+            misrouted.append((packet, DUPLICATE_ID))
+            continue
+        # Claimed on the first attempt, not on success: if the first packet
+        # fails to persist, a later one must not take the id and push it out
+        # of the id-keyed ledger for good. The first retries next poll.
+        ingested_now.add(packet.id)
         trusted = profile.is_trusted(packet.from_did)
         decision = decide(packet, trusted)
 
@@ -633,6 +682,7 @@ async def receive(
         relays=relay_urls,
         relay_reachable=reachable,
         bad_signature=sorted_packets.bad_signature,
+        misrouted=misrouted,
     )
 
 

@@ -6,11 +6,12 @@ filter was applied in the two ``inbox`` paths and neither ``receive`` path, so
 ``aya drop`` hid a packet from the listing and then let the very next poll
 re-ingest it.
 
-One function, four callers.
+One function, shared by receive and inbox.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from aya.entities.packet import Packet
@@ -28,8 +29,20 @@ class Triage:
     bad_signature: list[Packet] = field(default_factory=list)
     """Failed verification. Surface the IDs; never ingest."""
 
+    misrouted: list[tuple[Packet, str]] = field(default_factory=list)
+    """Validly signed but refused, each with its reason code: addressed to
+    someone else, or carried by a key that is not the sender's. (Receive adds
+    duplicate ids to the same list.) Surface them; never ingest."""
+
     def __bool__(self) -> bool:
-        return bool(self.fresh or self.bad_signature)
+        return bool(self.fresh or self.bad_signature or self.misrouted)
+
+
+# Stable rejection codes: MCP and --json consumers match on these.
+BAD_SIGNATURE = "bad_signature"
+WRONG_RECIPIENT = "wrong_recipient"
+WRONG_SENDER_KEY = "wrong_sender_key"
+DUPLICATE_ID = "duplicate_id"
 
 
 def triage(
@@ -38,6 +51,8 @@ def triage(
     ingested: set[str],
     dropped: set[str],
     verify: bool = True,
+    local_did: str | None = None,
+    sender_keys: Mapping[str, set[str]] | None = None,
 ) -> Triage:
     """Split *packets* into actionable and rejected.
 
@@ -47,14 +62,64 @@ def triage(
 
     *verify* is False for listing-only callers (``inbox``), which show what is
     waiting without asserting it is trustworthy.
+
+    *local_did* rejects packets addressed to anyone else. A signature proves who
+    wrote a packet, not who it was for, so without this any peer could re-send
+    a packet meant for a third party and have it accepted from the original
+    author.
+
+    *sender_keys* maps a DID to the Nostr keys known for it. A packet from a
+    known DID that arrived on any other key is rejected: the signature still
+    holds, but someone other than the sender published it. Packets with no
+    transport key recorded (built in memory rather than read from a relay) are
+    not checked; the relay adapter always records one.
+
+    The transport key is what the relay reported. For encrypted packets that
+    is sound, because decryption fails under any other key. For plaintext
+    packets it is only as honest as the relay until event signatures are
+    verified on fetch.
     """
     fresh: list[Packet] = []
     bad: list[Packet] = []
+    misrouted: list[tuple[Packet, str]] = []
+    # Keyed on the author too: a packet id is just a string anyone can copy,
+    # so a stranger's packet reusing it must not shadow the real one.
+    accepted: set[tuple[str, str]] = set()
     for packet in packets:
         if packet.id in dropped or packet.id in ingested:
+            continue
+        if (packet.id, packet.from_did) in accepted:
             continue
         if verify and not packet.verify_from_did():
             bad.append(packet)
             continue
+        reason = _misrouted(packet, local_did, sender_keys)
+        if reason is not None:
+            misrouted.append((packet, reason))
+            continue
+        accepted.add((packet.id, packet.from_did))
         fresh.append(packet)
-    return Triage(fresh=fresh, bad_signature=bad)
+    # A rejected copy of a packet that also arrived intact is noise, and
+    # reporting its id would make the delivered packet look rejected.
+    delivered = {packet.id for packet in fresh}
+    return Triage(
+        fresh=fresh,
+        bad_signature=[pkt for pkt in bad if pkt.id not in delivered],
+        misrouted=[(pkt, why) for pkt, why in misrouted if pkt.id not in delivered],
+    )
+
+
+def _misrouted(
+    packet: Packet, local_did: str | None, sender_keys: Mapping[str, set[str]] | None
+) -> str | None:
+    """Why *packet* must not be accepted here, or None if it may be."""
+    if local_did is not None and packet.to_did != local_did:
+        return WRONG_RECIPIENT
+    if sender_keys is None or packet.transport_pubkey is None:
+        return None
+    known = sender_keys.get(packet.from_did)
+    if known is None:
+        return None
+    if packet.transport_pubkey not in known:
+        return WRONG_SENDER_KEY
+    return None

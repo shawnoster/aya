@@ -228,7 +228,9 @@ class RelayClient:
     ) -> AsyncIterator[Packet]:
         """Yield packets addressed to this instance's pubkey, querying all relays. **ASYNC.**
 
-        Results are deduplicated by packet ID across relays.  When *since* is
+        Results are deduplicated by (packet ID, publishing key) across relays:
+        a copy republished under another key is passed on for the receiver to
+        judge, so it cannot displace the original.  When *since* is
         omitted a default look-back window of ``_DEFAULT_FETCH_WINDOW_DAYS``
         (matching the packet TTL) is applied so the scan is bounded to the
         live-packet window.  Pass an explicit *since* to override that lower
@@ -249,14 +251,18 @@ class RelayClient:
             packets = asyncio.run(fetch_all())
         """
         logger.debug("Fetching pending packets from %d relay(s)", len(self._relay_urls))
-        seen_ids: set[str] = set()
+        # Keyed on the carrying key too: anyone can republish a plaintext packet
+        # under their own key, and if their copy arrived first and won the
+        # dedup, the receiver would reject it and never see the real one.
+        seen: set[tuple[str, str | None]] = set()
         unreachable: list[str] = []
         self.last_fetch_unreachable = unreachable
         for relay_url in self._relay_urls:
             try:
                 async for packet in self._fetch_from_relay(relay_url, since):
-                    if packet.id not in seen_ids:
-                        seen_ids.add(packet.id)
+                    key = (packet.id, packet.transport_pubkey)
+                    if key not in seen:
+                        seen.add(key)
                         yield packet
             except RelayUnreachableError:
                 unreachable.append(relay_url)
@@ -264,7 +270,7 @@ class RelayClient:
             raise RelayUnreachableError(
                 f"All {len(self._relay_urls)} relay(s) unreachable: {unreachable}"
             )
-        logger.debug("Fetch complete, %d unique packet(s) found", len(seen_ids))
+        logger.debug("Fetch complete, %d unique packet(s) found", len(seen))
 
     async def _fetch_from_relay(
         self,
@@ -383,19 +389,16 @@ class RelayClient:
                     # (base64 NIP-44 payload) → decrypt first.  Checking the leading
                     # character avoids masking parse/validation errors in malformed
                     # JSON packets by misattributing them as decryption failures.
+                    if not raw.get("pubkey"):
+                        logger.warning(
+                            "Skipping event %s: no publisher pubkey", raw.get("id", "?")[:8]
+                        )
+                        continue
                     if content.lstrip().startswith("{"):
                         packet = Packet.from_json(content)
                     else:
-                        # Attempt NIP-44 decryption using the sender's Nostr pubkey
-                        # from the Nostr event envelope.
-                        sender_pub = raw.get("pubkey", "")
-                        if not sender_pub:
-                            logger.warning(
-                                "Skipping event %s: content is not JSON and "
-                                "no sender pubkey in envelope for decryption",
-                                raw.get("id", "?")[:8],
-                            )
-                            continue
+                        # NIP-44 decryption with the publisher's key from the envelope.
+                        sender_pub = raw["pubkey"]
                         try:
                             plaintext = nip44_decrypt(content, self._private_key_hex, sender_pub)
                         except ValueError as crypto_exc:
@@ -406,6 +409,9 @@ class RelayClient:
                             )
                             continue
                         packet = Packet.from_json(plaintext)
+                    # Both paths: the receiver checks this against the key it
+                    # knows for the packet's sender, plaintext or not.
+                    packet.set_transport_pubkey(raw.get("pubkey"))
                     if not packet.is_expired():
                         yield packet
                 except Exception as exc:  # noqa: BLE001 — one bad event must not end the poll

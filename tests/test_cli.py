@@ -3388,6 +3388,29 @@ class TestDrop:
         data = json.loads(result.output)
         assert data["dropped"] == packet.id
 
+    def test_drop_prefix_is_not_ambiguous_when_a_copy_exists(
+        self, profile_with_sender: Path, sender: Identity
+    ) -> None:
+        """The adapter yields one copy per carrying key; same id is one match."""
+        p = load_profile(profile_with_sender)
+        packet = self._signed_packet(sender, p.instances["default"].did)
+        copy = packet.model_copy()
+        copy.set_transport_pubkey("cd" * 32)
+
+        async def mock_fetch(*args, **kwargs):
+            yield copy
+            yield packet
+
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = mock_fetch
+            result = runner.invoke(
+                app,
+                ["drop", packet.id[:10], "--profile", str(profile_with_sender), "--format", "json"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["dropped"] == packet.id
+
     def test_drop_packet_not_found_errors(self, profile_with_sender: Path) -> None:
         async def mock_fetch(*args, **kwargs):
             if False:  # pragma: no cover

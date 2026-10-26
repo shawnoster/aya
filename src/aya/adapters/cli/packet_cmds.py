@@ -180,12 +180,14 @@ def drop(
             # ID or a different --relay.
             relay_urls = [relay] if relay else p.default_relays
             client = _relay.RelayClient(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
-            relay_matches: list[str] = []
+            # A set: the relay adapter yields one copy per carrying key, and a
+            # stranger's republished copy must not make a full id "ambiguous".
+            relay_matches: set[str] = set()
             try:
                 async with asyncio.timeout(_RELAY_FETCH_TIMEOUT_SECONDS):
                     async for pkt in client.fetch_pending():
                         if pkt.id.startswith(packet_id):
-                            relay_matches.append(pkt.id)
+                            relay_matches.add(pkt.id)
                             if len(relay_matches) > 1:
                                 break  # ambiguous — stop early
             except TimeoutError:
@@ -227,7 +229,7 @@ def drop(
                     {"packet_id": packet_id, "matches": len(relay_matches)},
                 )
 
-            full_id = relay_matches[0]
+            full_id = next(iter(relay_matches))
 
         already_dropped = full_id in p.dropped_ids
         if not already_dropped:

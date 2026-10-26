@@ -99,6 +99,12 @@ class TrustedKey:
     label: str  # "home", "friend:alice", etc.
     nostr_pubkey: str | None = None
 
+    def __post_init__(self) -> None:
+        # Hex is case-insensitive but relay tag filters are not: store one case
+        # so p-tags, receipts and sender checks all agree.
+        if self.nostr_pubkey:
+            self.nostr_pubkey = self.nostr_pubkey.lower()
+
 
 _DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"]
 

@@ -305,6 +305,143 @@ class TestReceive:
         assert result.packets[0]["ingested"] is False
         assert p.ingested_ids == []
 
+    async def test_replayed_packet_for_a_third_party_is_not_ingested(self, profile, peer):
+        """The review's proof of concept: a trusted peer signs a packet for carol,
+        carol re-sends it to us, and it used to be ingested as trusted from the peer."""
+        p, path = profile
+        carol = Identity.generate("carol")
+        pkt = Packet(from_did=peer.did, to_did=carol.did, intent="for carol", content="x").sign(
+            peer
+        )
+        pkt.set_transport_pubkey(carol.nostr_public_hex)
+        FakeClient.queued = [pkt]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.packets == []
+        assert result.misrouted == [(pkt, "wrong_recipient")]
+        assert result.envelope()["rejected"] == [
+            {"id": pkt.id, "from": peer.did, "reason": "wrong_recipient"}
+        ]
+        assert p.ingested_ids == []
+        assert FakeClient.receipts == []
+
+    async def test_trusted_did_on_a_stranger_key_is_not_ingested(self, profile, peer):
+        p, path = profile
+        pkt = _incoming(peer, p, "published by someone else")
+        pkt.set_transport_pubkey(Identity.generate("mallory").nostr_public_hex)
+        FakeClient.queued = [pkt]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.packets == []
+        assert result.misrouted == [(pkt, "wrong_sender_key")]
+        assert p.ingested_ids == []
+
+    async def test_trusted_did_on_its_own_key_is_ingested(self, profile, peer):
+        p, path = profile
+        pkt = _incoming(peer, p, "straight from the peer")
+        pkt.set_transport_pubkey(peer.nostr_public_hex)
+        FakeClient.queued = [pkt]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.packets[0]["ingested"] is True
+
+    async def test_stranger_reusing_the_id_does_not_hide_the_real_packet(self, profile, peer):
+        """A packet id is copyable: a stranger signing their own packet under it,
+        fetched first, must not shadow the peer's."""
+        p, path = profile
+        real = _incoming(peer, p, "the real one")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        mallory = Identity.generate("mallory")
+        forged = Packet(
+            id=real.id, from_did=mallory.did, to_did=real.to_did, intent="decoy", content="x"
+        ).sign(mallory)
+        forged.set_transport_pubkey(mallory.nostr_public_hex)
+        FakeClient.queued = [forged, real]
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert any(e["id"] == real.id for e in p.ingested_ids)
+        assert [s["intent"] for s in result.packets if s["ingested"]] == ["the real one"]
+
+    async def test_bad_signature_is_listed_in_rejected(self, profile, peer):
+        p, path = profile
+        pkt = _incoming(peer, p, "tampered")
+        pkt.intent = "tampered after signing"
+        FakeClient.queued = [pkt]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.envelope()["rejected"] == [
+            {"id": pkt.id, "from": peer.did, "reason": "bad_signature"}
+        ]
+
+    async def test_rejected_copy_of_a_delivered_packet_is_not_reported(self, profile, peer):
+        p, path = profile
+        real = _incoming(peer, p, "delivered")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        copy = real.model_copy()
+        copy.set_transport_pubkey(Identity.generate("mallory").nostr_public_hex)
+        FakeClient.queued = [copy, real]
+        result = await receive(p, path, client_factory=FakeClient)
+        assert result.envelope()["rejected"] == []
+        assert result.packets[0]["ingested"] is True
+
+    async def test_second_packet_under_an_ingested_id_is_refused(self, profile, peer):
+        """Bodies are stored by id; a second author's packet must not overwrite the first."""
+        p, path = profile
+        real = _incoming(peer, p, "first")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        other = Identity.generate("other")
+        p.trusted_keys["other"] = TrustedKey(
+            did=other.did, label="other", nostr_pubkey=other.nostr_public_hex
+        )
+        clash = Packet(
+            id=real.id, from_did=other.did, to_did=real.to_did, intent="second", content="x"
+        ).sign(other)
+        clash.set_transport_pubkey(other.nostr_public_hex)
+        FakeClient.queued = [real, clash]
+
+        result = await receive(p, path, client_factory=FakeClient)
+
+        assert [s["intent"] for s in result.packets if s["ingested"]] == ["first"]
+        assert result.envelope()["rejected"] == [
+            {"id": real.id, "from": other.did, "reason": "duplicate_id"}
+        ]
+        assert [e["from_did"] for e in p.ingested_ids] == [peer.did]
+
+    async def test_trusted_packet_wins_a_shared_id_even_when_fetched_second(self, profile, peer):
+        p, path = profile
+        real = _incoming(peer, p, "from the peer")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        stranger = Identity.generate("stranger")
+        squatter = Packet(
+            id=real.id, from_did=stranger.did, to_did=real.to_did, intent="squat", content="x"
+        ).sign(stranger)
+        squatter.set_transport_pubkey(stranger.nostr_public_hex)
+        FakeClient.queued = [squatter, real]
+
+        result = await receive(
+            p, path, client_factory=FakeClient, decide=lambda pkt, t: Decision.INGEST
+        )
+
+        assert [e["from_did"] for e in p.ingested_ids] == [peer.did]
+        assert result.envelope()["rejected"][0]["from"] == stranger.did
+
+    async def test_failed_persist_still_holds_the_id(self, profile, peer, monkeypatch):
+        """A squatter must not take the id while the real packet retries."""
+        p, path = profile
+        real = _incoming(peer, p, "from the peer")
+        real.set_transport_pubkey(peer.nostr_public_hex)
+        stranger = Identity.generate("stranger")
+        squatter = Packet(
+            id=real.id, from_did=stranger.did, to_did=real.to_did, intent="squat", content="x"
+        ).sign(stranger)
+        squatter.set_transport_pubkey(stranger.nostr_public_hex)
+        FakeClient.queued = [real, squatter]
+        monkeypatch.setattr("aya.usecases.relay_ops.ingest_packet", lambda pkt: False)
+
+        result = await receive(
+            p, path, client_factory=FakeClient, decide=lambda pkt, t: Decision.INGEST
+        )
+
+        assert p.ingested_ids == []
+        assert result.envelope()["rejected"][0]["reason"] == "duplicate_id"
+
     async def test_envelope_names_instance_and_relays(self, profile):
         p, path = profile
         result = await receive(p, path, client_factory=FakeClient)
@@ -329,6 +466,25 @@ class TestInbox:
         FakeClient.queued = [pkt]
         assert (await inbox(p, client_factory=FakeClient))[0].packets == []
         assert (await inbox(p, include_ingested=True, client_factory=FakeClient))[0].packets == []
+
+    async def test_packet_for_another_instance_is_not_listed(self, profile, peer):
+        p, _path = profile
+        pkt = Packet(
+            from_did=peer.did, to_did=Identity.generate("carol").did, intent="x", content="x"
+        ).sign(peer)
+        FakeClient.queued = [pkt]
+        assert (await inbox(p, client_factory=FakeClient))[0].packets == []
+
+    async def test_packet_on_a_stranger_key_is_not_listed(self, profile, peer):
+        p, _path = profile
+        pkt = _incoming(peer, p, "published by someone else")
+        pkt.set_transport_pubkey(Identity.generate("mallory").nostr_public_hex)
+        FakeClient.queued = [pkt]
+        result = (await inbox(p, client_factory=FakeClient))[0]
+        assert result.packets == []
+        assert result.envelope()["rejected"] == [
+            {"id": pkt.id, "from": peer.did, "reason": "wrong_sender_key"}
+        ]
 
 
 class TestAckRecipientResolution:

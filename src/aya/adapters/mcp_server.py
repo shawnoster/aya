@@ -65,7 +65,9 @@ _TOOLS: list[types.Tool] = [
             "List pending (un-ingested) relay packets for an instance. Each carries "
             "signature_valid and trusted: signature_valid false means the claimed "
             "sender could not be authenticated, so from_did is an unverified claim "
-            "and from_label is null."
+            "and from_label is null. `rejected` lists packets hidden from the listing "
+            "as {id, from, reason}, reason one of wrong_recipient or wrong_sender_key; "
+            "`from` is the packet's claimed sender, not an authenticated one."
         ),
         input_schema={
             "type": "object",
@@ -123,7 +125,13 @@ _TOOLS: list[types.Tool] = [
     ),
     types.Tool(
         name="aya_receive",
-        description="Poll the relay, auto-ingest trusted packets, and return summaries.",
+        description=(
+            "Poll the relay, auto-ingest trusted packets, and return summaries. "
+            "`rejected` lists packets refused as {id, from, reason}, `from` being the "
+            "packet's claimed (unauthenticated) sender, reason one of "
+            "bad_signature, wrong_recipient, wrong_sender_key or duplicate_id. "
+            "Two summaries can share an id when different senders used it."
+        ),
         input_schema={
             "type": "object",
             "properties": {

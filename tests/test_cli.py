@@ -20,6 +20,7 @@ from aya.adapters.profile_store import load_profile, save_profile
 from aya.entities.identity import Identity, Profile, TrustedKey
 from aya.entities.packet import Packet
 from aya.scheduler import add_reminder
+from aya.usecases.pair import PairSecret
 
 runner = CliRunner()
 
@@ -273,7 +274,10 @@ class TestPair:
 
         with (
             patch("aya.adapters.cli.pair_cmds.generate_code", return_value="TEST-CODE-0001"),
-            patch("aya.adapters.cli.pair_cmds.hash_code", return_value="deadbeef"),
+            patch(
+                "aya.adapters.cli.pair_cmds.derive_pair_secret",
+                return_value=PairSecret(lookup="deadbeef", mac_key=b"k"),
+            ),
             patch("aya.adapters.cli.pair_cmds.publish_pair_request", return_value="req_event_id"),
             patch(
                 "aya.adapters.cli.pair_cmds.poll_for_pair_response",

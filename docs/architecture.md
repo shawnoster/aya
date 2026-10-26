@@ -116,30 +116,35 @@ MACHINE A (alice)                RELAY                    MACHINE B (bob)
 
 1. aya pair --peer bob
    │
-2. Generate code: ANCHOR-NORTH-0045
+2. Generate code: ANCHOR-NORTH-BIRCH-0045
    │
-3. Hash code (SHA-256)
+3. Derive lookup tag + MAC key from code
+   (scrypt, salted with the UTC day)
    │
 4. Publish pair-request ────────► 5. Stored with
-   (kind 5999, tag: as-pair-req)     code hash tag
+   (kind 5999, tag: as-pair-req)     lookup tag
+   MACs its DID + key with code
    │
 6. Display code to user                              7. User enters code
-   "ANCHOR-NORTH-0045"                                  aya pair --code
-                                                        ANCHOR-NORTH-0045
+   "ANCHOR-NORTH-BIRCH-0045"                            aya pair --code
+                                                        ANCHOR-NORTH-BIRCH-0045
                                                         --peer alice
                                                         │
-                                 8. Query by ◄────── 9. Hash code, query
-                                    code hash           for matching request
+                                 8. Query by ◄────── 9. Derive tag, query
+                                    lookup tag          for matching request
                                         │
-                                        └──────────► 10. Found! Extract
+                                        └──────────► 10. Skip any request whose
+                                                         MAC fails; extract
                                                          alice's DID + pubkey
                                                          │
                                  11. Stored ◄─────── 12. Publish pair-response
                                                          (kind 5999, tag:
-                                                          as-pair-resp)
+                                                          as-pair-resp), MACed
+                                                          with the code
 13. Poll finds response ◄───────
     │
-14. Extract bob's DID + pubkey
+14. Ignore responses whose MAC fails;
+    extract bob's DID + pubkey
     │
 15. Both instances now trust              16. Both instances now trust
     each other                                each other

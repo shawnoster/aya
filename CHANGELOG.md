@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.3.2 (2026-10-26)
+
+### Bug Fixes
+
+- **relay**: Verify event ids and signatures, and skip bad frames
+  ([#386](https://github.com/shawnoster/aya/pull/386),
+  [`7d7f85d`](https://github.com/shawnoster/aya/commit/7d7f85d055b0b4a1e1f1d9fa4ea9364bf986e065))
+
+
 ## v2.3.1 (2026-10-26)
 
 ### Bug Fixes

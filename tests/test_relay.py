@@ -1205,3 +1205,24 @@ class TestHostileRelayInput:
             packets = [pkt async for pkt in client.fetch_pending(since=since)]
 
         assert [pkt.intent for pkt in packets] == ["older"]
+
+    async def test_unhashable_event_id_does_not_end_the_fetch(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ):
+        real = Packet(from_did=sender.did, to_did=recipient.did, intent="real", content="x")
+        junk = {"id": ["x"], "created_at": 1_700_000_001}
+
+        async def fake_read_until_eose(ws, sub_id):
+            yield junk
+            yield _signed_event(sender, real.to_json())
+
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        with (
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+        ):
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert [pkt.intent for pkt in packets] == ["real"]

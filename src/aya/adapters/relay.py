@@ -361,10 +361,14 @@ class RelayClient:
             new_event_count = 0
             for raw in page_events:
                 raw_ts = raw.get("created_at")
-                if isinstance(raw_ts, int) and (oldest_ts is None or raw_ts < oldest_ts):
+                # `type is int`, not isinstance: JSON true is a bool, and a bool
+                # cursor would jump the page window back to 1970.
+                if type(raw_ts) is int and (oldest_ts is None or raw_ts < oldest_ts):
                     oldest_ts = raw_ts
-                event_id: str | None = raw.get("id")
-                if event_id is not None:
+                event_id = raw.get("id")
+                # Only string ids dedup: an unhashable id (a list, say) would
+                # otherwise raise here and end the fetch for every relay.
+                if isinstance(event_id, str):
                     if event_id in seen_event_ids:
                         continue  # already yielded via inclusive cursor overlap
                     seen_event_ids.add(event_id)

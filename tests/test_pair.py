@@ -342,6 +342,30 @@ class TestPairingAuthentication:
         with pytest.raises(PairingError, match="128 MiB"):
             derive_pair_secret("TEST-CODE-WORD-0000")
 
+    async def test_initiator_skips_a_response_with_a_bad_signature(self, work, home):
+        """Valid MAC, broken event signature: the relay altered or forged it."""
+        secret = _secret()
+        request = _build_pair_request(work, work.label, secret)
+        real = _build_pair_response(
+            home, home.label, work.nostr_public_hex, request["id"], secret.mac_key
+        )
+        forged = {**real, "sig": "00" * 64}
+        assert await self._poll(work, request["id"], secret.mac_key, [forged]) is None
+
+    async def test_joiner_skips_a_request_with_a_tampered_id(self, work):
+        """The joiner answers the request's id, so it must be the real one."""
+        secret = _secret()
+        real = _build_pair_request(work, work.label, secret)
+        tampered = {**real, "id": "ff" * 32}
+
+        with patch(
+            "aya.usecases.pair.websockets.connect", return_value=_answering_ws([tampered, real])
+        ):
+            found = await _find_pair_request("wss://relay.test", {secret.lookup: secret})
+
+        assert found is not None
+        assert found[1] == real["id"]
+
     async def test_request_mac_is_not_accepted_as_a_response(self, work):
         secret = _secret()
         request = _build_pair_request(work, work.label, secret)

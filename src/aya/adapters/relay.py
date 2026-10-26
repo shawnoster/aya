@@ -304,7 +304,11 @@ class RelayClient:
             since if since is not None else (now - timedelta(days=_DEFAULT_FETCH_WINDOW_DAYS))
         )
         until: int | None = None
-        seen_event_ids: set[str] = set()  # intra-relay dedup for inclusive cursor
+        seen_event_ids: set[str] = set()  # a relay that ignores `until` may repeat events
+        # The biggest page this relay has returned. Many relays cap `limit`
+        # below what we ask for, so "fewer than _FETCH_PAGE_SIZE" can't mean
+        # "the end"; a page smaller than the relay's own largest does.
+        largest_page = 0
 
         for _page in range(_MAX_FETCH_PAGES):
             filter_: dict[str, Any] = {
@@ -423,15 +427,19 @@ class RelayClient:
                 except Exception as exc:  # noqa: BLE001 — one bad event must not end the poll
                     logger.warning("Skipping malformed event: %s", exc)
 
-            # Stop if the relay is exhausted (partial page), there is no cursor,
-            # or the cursor didn't move back in time: re-asking with the same
-            # `until` returns the same page, whoever filled it.
-            if len(page_events) < _FETCH_PAGE_SIZE or oldest_ts is None:
-                break
-            if until is not None and oldest_ts >= until:
-                break
+            largest_page = max(largest_page, len(page_events))
+            if oldest_ts is None or len(page_events) < largest_page:
+                break  # empty, or smaller than this relay's pages: the end
 
-            until = oldest_ts  # inclusive: re-fetch the boundary timestamp
+            # Exclusive cursor: the next page starts a second before this one's
+            # oldest event, so it always moves back in time. Re-asking at the
+            # same second would let a page of same-second events (which anyone
+            # can post) stall paging and hide everything older. The cost: if a
+            # page boundary splits events sharing one second, the rest of that
+            # second is skipped.
+            if until is not None and oldest_ts > until:
+                oldest_ts = until  # a relay ignoring `until`; still move back
+            until = oldest_ts - 1
             logger.debug(
                 "Relay %s: fetched %d events, advancing cursor to until=%d",
                 relay_url,

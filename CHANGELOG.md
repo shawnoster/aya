@@ -2,6 +2,51 @@
 
 <!-- version list -->
 
+## v2.3.1 (2026-10-26)
+
+### Bug Fixes
+
+- **pair**: Report a rejected pair request through the CLI error path
+  ([#374](https://github.com/shawnoster/aya/pull/374),
+  [`b83ff0a`](https://github.com/shawnoster/aya/commit/b83ff0ad3ebf49a8399bc0404d667ceea719b376))
+
+- **pair**: Require both sides to prove the pairing code
+  ([#374](https://github.com/shawnoster/aya/pull/374),
+  [`b83ff0a`](https://github.com/shawnoster/aya/commit/b83ff0ad3ebf49a8399bc0404d667ceea719b376))
+
+- **pair**: Survive junk events and widen the code to three words
+  ([#374](https://github.com/shawnoster/aya/pull/374),
+  [`b83ff0a`](https://github.com/shawnoster/aya/commit/b83ff0ad3ebf49a8399bc0404d667ceea719b376))
+
+- **pair**: Treat any malformed event as unproven
+  ([#374](https://github.com/shawnoster/aya/pull/374),
+  [`b83ff0a`](https://github.com/shawnoster/aya/commit/b83ff0ad3ebf49a8399bc0404d667ceea719b376))
+
+- **relay**: Hold a packet id from its first attempt, not its first success
+  ([#373](https://github.com/shawnoster/aya/pull/373),
+  [`5fe599f`](https://github.com/shawnoster/aya/commit/5fe599fa5407e1eb52d51275093130d4ab256626))
+
+- **relay**: Keep a republished copy from hiding the real packet
+  ([#373](https://github.com/shawnoster/aya/pull/373),
+  [`5fe599f`](https://github.com/shawnoster/aya/commit/5fe599fa5407e1eb52d51275093130d4ab256626))
+
+- **relay**: Key acceptance on author so a reused packet id can't shadow delivery
+  ([#373](https://github.com/shawnoster/aya/pull/373),
+  [`5fe599f`](https://github.com/shawnoster/aya/commit/5fe599fa5407e1eb52d51275093130d4ab256626))
+
+- **relay**: Normalise stored keys, name the sender in rejections, trusted first
+  ([#373](https://github.com/shawnoster/aya/pull/373),
+  [`5fe599f`](https://github.com/shawnoster/aya/commit/5fe599fa5407e1eb52d51275093130d4ab256626))
+
+- **relay**: Refuse a second packet under an id already ingested this poll
+  ([#373](https://github.com/shawnoster/aya/pull/373),
+  [`5fe599f`](https://github.com/shawnoster/aya/commit/5fe599fa5407e1eb52d51275093130d4ab256626))
+
+- **relay**: Reject packets addressed to another instance or carried by the wrong key
+  ([#373](https://github.com/shawnoster/aya/pull/373),
+  [`5fe599f`](https://github.com/shawnoster/aya/commit/5fe599fa5407e1eb52d51275093130d4ab256626))
+
+
 ## v2.3.0 (2026-10-25)
 
 ### Bug Fixes

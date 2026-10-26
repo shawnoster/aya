@@ -1226,3 +1226,76 @@ class TestHostileRelayInput:
             packets = [pkt async for pkt in client.fetch_pending()]
 
         assert [pkt.intent for pkt in packets] == ["real"]
+
+    async def test_a_boolean_timestamp_is_not_a_cursor(
+        self, client: RelayClient, sender: Identity, monkeypatch
+    ):
+        """JSON true is a bool, and isinstance(True, int) holds; `until` must not become 1."""
+        monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 1)
+        sent: list[dict] = []
+
+        async def fake_read_until_eose(ws, sub_id):
+            yield {"id": "x", "created_at": True}
+
+        async def record(data):
+            msg = json.loads(data)
+            if msg[0] == "REQ":
+                sent.append(msg[2])
+
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        mock_ws.send = AsyncMock(side_effect=record)
+        with (
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+        ):
+            assert [pkt async for pkt in client.fetch_pending()] == []
+
+        assert all("until" not in f for f in sent)
+
+    async def test_a_fake_with_a_real_id_does_not_hide_the_real_event(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ):
+        real = Packet(from_did=sender.did, to_did=recipient.did, intent="real", content="x")
+        genuine = _signed_event(sender, real.to_json())
+        fake = {"id": genuine["id"], "created_at": genuine["created_at"]}
+
+        async def fake_read_until_eose(ws, sub_id):
+            yield fake
+            yield genuine
+
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        with (
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+        ):
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert [pkt.intent for pkt in packets] == ["real"]
+
+    async def test_endless_unverifiable_pages_stop_at_the_cap(
+        self, client: RelayClient, monkeypatch
+    ):
+        monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
+        monkeypatch.setattr("aya.adapters.relay._MAX_FETCH_PAGES", 5)
+        calls = 0
+
+        async def fake_read_until_eose(ws, sub_id):
+            nonlocal calls
+            calls += 1
+            yield {"id": 1, "created_at": 1_700_000_000}
+            yield {"id": 2, "created_at": 1_700_000_000}
+
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        with (
+            patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_until_eose),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+        ):
+            assert [pkt async for pkt in client.fetch_pending()] == []
+
+        assert calls == 5

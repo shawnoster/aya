@@ -43,6 +43,9 @@ _MAX_RETRIES_FETCH = 3
 # Fetch pagination — events per REQ batch.  Pagination continues with an
 # `until` cursor until the relay returns fewer events than this size.
 _FETCH_PAGE_SIZE = 200
+# A relay that keeps returning the same unverifiable events would otherwise
+# page forever. 50 x 200 events is far beyond a week of real traffic.
+_MAX_FETCH_PAGES = 50
 # Default look-back window used when no `since` is specified.  Matches the
 # default packet TTL (7 days) so no live packet can fall outside the window.
 _DEFAULT_FETCH_WINDOW_DAYS = 7
@@ -302,7 +305,7 @@ class RelayClient:
         until: int | None = None
         seen_event_ids: set[str] = set()  # intra-relay dedup for inclusive cursor
 
-        while True:
+        for _page in range(_MAX_FETCH_PAGES):
             filter_: dict[str, Any] = {
                 "kinds": [AYA_KIND],
                 "#p": [self.public_key_hex],
@@ -368,16 +371,17 @@ class RelayClient:
                 event_id = raw.get("id")
                 # Only string ids dedup: an unhashable id (a list, say) would
                 # otherwise raise here and end the fetch for every relay.
-                if isinstance(event_id, str):
-                    if event_id in seen_event_ids:
-                        continue  # already yielded via inclusive cursor overlap
-                    seen_event_ids.add(event_id)
+                if isinstance(event_id, str) and event_id in seen_event_ids:
+                    continue  # already yielded via inclusive cursor overlap
                 new_event_count += 1
                 # After the cursor bookkeeping, so forged events still count
                 # toward the page and can't cut pagination short.
                 if not verify_event(raw):
-                    logger.debug("Skipping event %s: bad id or signature", str(event_id)[:8])
+                    logger.debug("Skipping an event with a bad id or signature")
                     continue
+                # Only verified ids claim a slot: a fake carrying a real event's
+                # id must not make the real one look already seen.
+                seen_event_ids.add(raw["id"])
                 try:
                     # Skip pairing events — same kind (5999) but not
                     # Packet-shaped. Constants live in relay.py to avoid
@@ -409,7 +413,7 @@ class RelayClient:
                         except ValueError as crypto_exc:
                             logger.warning(
                                 "Skipping event %s: NIP-44 decryption failed — %s",
-                                raw.get("id", "?")[:8],
+                                raw["id"][:8],  # a string: verify_event checked it
                                 crypto_exc,
                             )
                             continue
@@ -436,6 +440,8 @@ class RelayClient:
                 new_event_count,
                 until,
             )
+        else:
+            logger.warning("Relay %s: stopped after %d pages", relay_url, _MAX_FETCH_PAGES)
 
     async def send_receipt(self, packet: Packet, sender_nostr_pubkey: str) -> None:
         """Publish a read receipt for the given packet to all configured relays. **ASYNC.**

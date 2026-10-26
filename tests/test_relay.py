@@ -724,7 +724,7 @@ class TestFetchPagination:
     async def test_no_progress_guard_stops_pagination(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """Pagination stops when a full page contains only already-seen event IDs."""
+        """Pagination stops when a full page doesn't move the cursor back in time."""
         base_ts = 1_700_000_000
 
         def _make_event(idx: int) -> dict:

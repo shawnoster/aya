@@ -358,9 +358,7 @@ class RelayClient:
             if not fetch_ok:
                 raise RelayUnreachableError(relay_url)
 
-            # Process events, track the oldest timestamp for cursor advancement,
-            # and count truly new events (guards against infinite loops when many
-            # events share the same created_at at the page boundary).
+            # Process events and track the oldest timestamp for the cursor.
             oldest_ts: int | None = None
             for raw in page_events:
                 raw_ts = raw.get("created_at")

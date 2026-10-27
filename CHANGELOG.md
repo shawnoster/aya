@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.3.4 (2026-10-27)
+
+### Bug Fixes
+
+- **relay**: Fetch known senders first under an authors filter
+  ([#392](https://github.com/shawnoster/aya/pull/392),
+  [`9a348f2`](https://github.com/shawnoster/aya/commit/9a348f22fcd63a2b9d9546b16568d9f30872a001))
+
+
 ## v2.3.3 (2026-10-26)
 
 ### Bug Fixes

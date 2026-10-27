@@ -483,6 +483,9 @@ class TestFetchPending:
 
         assert sorted(pkt.intent for pkt in packets) == ["p0", "p1", "p2"]
         assert client.last_fetch_unreachable == []
+        # The timed-out page was asked again as-is: the cursor didn't move.
+        assert attempts >= 2
+        assert "until" not in relay.filters[1]
 
     async def test_a_relay_that_always_times_out_is_unreachable(
         self, client: RelayClient, sender: Identity, recipient: Identity

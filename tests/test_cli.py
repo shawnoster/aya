@@ -3420,6 +3420,27 @@ class TestDrop:
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)["dropped"] == packet.id
 
+    def test_drop_refuses_a_prefix_from_an_incomplete_listing(
+        self, profile_with_sender: Path, sender: Identity
+    ) -> None:
+        """A relay failed partway: a unique-looking match may not be unique."""
+        p = load_profile(profile_with_sender)
+        packet = self._signed_packet(sender, p.instances["default"].did)
+
+        async def mock_fetch(*args, **kwargs):
+            yield packet
+
+        with patch("aya.adapters.relay.RelayClient") as mock_cls:
+            mock_cls.return_value.fetch_pending = mock_fetch
+            mock_cls.return_value.last_fetch_unreachable = ["wss://relay.example.com"]
+            result = runner.invoke(
+                app,
+                ["drop", packet.id[:10], "--profile", str(profile_with_sender), "--format", "json"],
+            )
+
+        assert result.exit_code != 0
+        assert packet.id not in load_profile(profile_with_sender).dropped_ids
+
     def test_drop_packet_not_found_errors(self, profile_with_sender: Path) -> None:
         async def mock_fetch(*args, **kwargs):
             if False:  # pragma: no cover

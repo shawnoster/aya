@@ -506,11 +506,13 @@ async def _fetch(
 ) -> tuple[Any, str, list[str], list[Packet], bool, list[str]]:
     """Poll every configured relay.
 
-    Returns ``(local, label, relay_urls, packets, reachable, reached)``. *reachable*
-    is an any-relay-answered summary — the client only raises when every relay
-    fails — so it cannot say which relays were reached. *reached* can: the client
-    reports its refusals, and anything not refused answered. Callers recording
-    per-relay state need *reached*; the poll envelope reports *reachable*.
+    Returns ``(local, label, relay_urls, packets, reachable, reached)``. *reached*
+    lists the relays that completed the fetch; the client reports the rest.
+    *reachable* is "at least one relay completed". A relay that failed partway
+    still contributes the packets it delivered, but a poll where no relay
+    completed is not reported as a clean success: the listing may be missing
+    packets. Callers recording per-relay state need *reached*; the poll
+    envelope reports *reachable*.
     """
     local, label = resolve_instance(profile, instance)
     relay_urls = resolve_relays(profile, relay)
@@ -527,7 +529,7 @@ async def _fetch(
     # everything, which matches the pre-existing behaviour for such clients.
     refused = set(getattr(client, "last_fetch_unreachable", []) or [])
     reached = [url for url in relay_urls if url not in refused]
-    return local, label, relay_urls, packets, True, reached
+    return local, label, relay_urls, packets, bool(reached), reached
 
 
 async def inbox(

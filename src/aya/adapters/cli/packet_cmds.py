@@ -215,6 +215,17 @@ def drop(
                     {"packet_id": packet_id},
                 )
 
+            # A relay that failed partway delivered an incomplete listing: a
+            # prefix that looks unique (or absent) there may not be.
+            if list(getattr(client, "last_fetch_unreachable", None) or []):
+                _emit_error(
+                    ErrorCode.RELAY_UNREACHABLE,
+                    (
+                        f"A relay failed partway while resolving prefix '{packet_id}', so "
+                        "the listing is incomplete. Retry, or use the full packet ID."
+                    ),
+                    {"packet_id": packet_id},
+                )
             if not relay_matches:
                 _emit_error(
                     ErrorCode.PACKET_NOT_FOUND,

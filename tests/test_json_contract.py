@@ -138,7 +138,7 @@ class TestInboxContract:
         profile.instances["default"] = identity
         save_profile(profile, profile_path)
 
-        async def _empty_fetch(self):
+        async def _empty_fetch(self, authors=None):
             return
             yield  # pragma: no cover — makes this an async generator
 
@@ -173,7 +173,7 @@ class TestInboxContract:
             content="hello",
         )
 
-        async def _one_packet(self):
+        async def _one_packet(self, authors=None):
             yield fake_packet
 
         monkeypatch.setattr("aya.adapters.relay.RelayClient.fetch_pending", _one_packet)

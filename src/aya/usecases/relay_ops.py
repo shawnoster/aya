@@ -516,8 +516,10 @@ async def _fetch(
     relay_urls = resolve_relays(profile, relay)
     make = _factory(client_factory)
     client = make(relay_urls, local.nostr_private_hex, local.nostr_public_hex)
+    # Known senders are fetched on their own so strangers can't crowd them out.
+    known = sorted({key for keys in sender_keys(profile).values() for key in keys})
     try:
-        packets = [pkt async for pkt in client.fetch_pending()]
+        packets = [pkt async for pkt in client.fetch_pending(authors=known)]
     except Exception:
         logger.exception("Relay fetch failed")
         return local, label, relay_urls, [], False, []

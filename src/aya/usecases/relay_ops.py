@@ -238,8 +238,8 @@ class PollResult:
     instance: str = ""
     relays: list[str] = field(default_factory=list)
     relay_reachable: bool = True
-    # False when packets arrived but no relay finished its fetch (each failed
-    # partway): what's listed is real, but the listing may be missing some.
+    # False whenever no relay finished its fetch. With relay_reachable True, what
+    # is listed is real, but the listing may be missing some.
     complete: bool = True
     bad_signature: list[Packet] = field(default_factory=list)
     misrouted: list[tuple[Packet, str]] = field(default_factory=list)

@@ -364,6 +364,12 @@ def _check_relay_inbox(config: RelayInboxConfig) -> RelayInboxState | None:
         # reporting "no new mail" forever.
         logger.warning("relay-inbox poll: relay unreachable (%s)", ", ".join(result.relays))
         return None
+    if not result.complete:
+        # Still a success (what arrived is real and ingested), but a relay that
+        # always fails partway would otherwise look healthy here forever.
+        logger.warning(
+            "relay-inbox poll: no relay finished its listing (%s)", ", ".join(result.relays)
+        )
 
     ingested = [p for p in result.packets if p.get("ingested")]
     return RelayInboxState(

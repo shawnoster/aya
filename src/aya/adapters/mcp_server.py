@@ -131,8 +131,8 @@ _TOOLS: list[types.Tool] = [
             "packet's claimed (unauthenticated) sender, reason one of "
             "bad_signature, wrong_recipient, wrong_sender_key or duplicate_id. "
             "Two summaries can share an id when different senders used it. "
-            "`complete` is false when packets arrived but no relay finished its "
-            "listing: what's listed is real, more may be waiting."
+            "`complete` is false whenever no relay finished its listing; with "
+            "relay_reachable true, what's listed is real but more may be waiting."
         ),
         input_schema={
             "type": "object",

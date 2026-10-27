@@ -229,8 +229,8 @@ def drop(
                     ErrorCode.RELAY_UNREACHABLE,
                     (
                         f"No relay finished listing while resolving prefix '{packet_id}', "
-                        "so a match may be missing. Retry, use --relay, or pass the full "
-                        "packet ID."
+                        "so a match may be missing. Retry, or use --relay to pick a relay "
+                        "that responds."
                     ),
                     {"packet_id": packet_id},
                 )

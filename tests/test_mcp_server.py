@@ -901,7 +901,7 @@ class TestUnreachableRelayIsFlagged:
     """
 
     @staticmethod
-    def _poll_result(*, reachable: bool):
+    def _poll_result(*, reachable: bool, complete: bool = True):
         from aya.usecases.relay_ops import PollResult
 
         return PollResult(
@@ -909,7 +909,20 @@ class TestUnreachableRelayIsFlagged:
             instance="default",
             relays=["wss://a", "wss://b"],
             relay_reachable=reachable,
+            complete=complete,
         )
+
+    def test_a_partial_poll_is_not_an_error(self):
+        """Packets arrived (and were ingested) but no relay finished: flag, don't fail."""
+        import json
+
+        from aya.adapters.mcp_server import _poll_result
+
+        result = _poll_result(self._poll_result(reachable=True, complete=False))
+        payload = json.loads(result.content[0].text)
+
+        assert not getattr(result, "is_error", False)
+        assert payload["complete"] is False
 
     def test_an_unreachable_poll_is_an_error(self):
         import json

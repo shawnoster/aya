@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v2.3.3 (2026-10-26)
+
+### Bug Fixes
+
+- **relay**: Page back in time until an empty page
+  ([#389](https://github.com/shawnoster/aya/pull/389),
+  [`8d54ff9`](https://github.com/shawnoster/aya/commit/8d54ff910a9b3f3d8f100bece9bb42cc4b27ae4f))
+
+
 ## v2.3.2 (2026-10-26)
 
 ### Bug Fixes

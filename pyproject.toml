@@ -25,7 +25,7 @@ dependencies = [
 # Never install this extra with the project attached (`pip install '.[build]'`):
 # that builds aya's own dependencies, and the action's image runs Python 3.14,
 # where coincurve's cffi build fails (same reason as the pin on line 15).
-build = ["uv~=0.12.5"]
+build = ["uv>=0.12.5,<0.14.0"]
 
 [project.scripts]
 aya = "aya.adapters.cli:app"

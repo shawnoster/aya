@@ -18,6 +18,7 @@ from aya.adapters.relay import (
     AYA_RESULT_KIND,
     RelayClient,
     RelayError,
+    RelayUnreachableError,
     _compute_event_id,
     _read_until_eose,
     _sign_hex,
@@ -457,32 +458,76 @@ class TestFetchPending:
 
         assert packets == []
 
-    async def test_handles_eose_timeout_gracefully(
+    async def test_a_page_that_times_out_is_retried_not_trusted(
         self, client: RelayClient, sender: Identity, recipient: Identity
     ) -> None:
-        """fetch_pending should return whatever packets arrived before EOSE timeout."""
-        p = Packet(
-            from_did=sender.did,
-            to_did=recipient.did,
-            intent="Partial fetch",
-            content="Some data.",
-        )
-        raw_event = {"id": "evt-partial", "pubkey": "ab" * 32, "content": p.to_json()}
+        """#391: no EOSE means an incomplete page; retry it rather than page on."""
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i) for i in range(3)]
+        relay = FakeRelay(events)
+        original = relay._read
+        attempts = 0
 
-        async def fake_read_timeout(ws, sub_id):
-            yield raw_event
+        async def times_out_once(ws, sub_id):
+            nonlocal attempts
+            attempts += 1
+            async for event in original(ws, sub_id):
+                yield event
+                if attempts == 1:
+                    raise TimeoutError  # one event, then silence
+
+        relay._read = times_out_once
+        client._sleep = AsyncMock()
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert sorted(pkt.intent for pkt in packets) == ["p0", "p1", "p2"]
+        assert client.last_fetch_unreachable == []
+        # The timed-out page was asked again as-is: the cursor didn't move.
+        assert attempts >= 2
+        assert "until" not in relay.filters[1]
+
+    async def test_a_relay_that_always_times_out_is_unreachable(
+        self, client: RelayClient, sender: Identity, recipient: Identity
+    ) -> None:
+        async def never_finishes(ws, sub_id):
             raise TimeoutError
+            yield  # pragma: no cover — makes this an async generator
 
-        with patch("aya.adapters.relay._read_until_eose", side_effect=fake_read_timeout):
-            mock_ws = AsyncMock()
-            mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
-            mock_ws.__aexit__ = AsyncMock(return_value=False)
+        client._sleep = AsyncMock()
+        mock_ws = AsyncMock()
+        mock_ws.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_ws.__aexit__ = AsyncMock(return_value=False)
+        with (
+            patch("aya.adapters.relay._read_until_eose", side_effect=never_finishes),
+            patch("aya.adapters.relay.websockets.connect", return_value=mock_ws),
+            pytest.raises(RelayUnreachableError),
+        ):
+            [pkt async for pkt in client.fetch_pending()]
 
-            with patch("aya.adapters.relay.websockets.connect", return_value=mock_ws):
-                packets = [pkt async for pkt in client.fetch_pending()]
+    async def test_earlier_pages_survive_a_later_timeout(
+        self, client: RelayClient, sender: Identity, recipient: Identity, monkeypatch
+    ) -> None:
+        """A relay failing partway keeps what it delivered and is marked unreachable."""
+        monkeypatch.setattr("aya.adapters.relay._FETCH_PAGE_SIZE", 2)
+        base_ts = int(datetime.now(UTC).timestamp()) - 3600
+        events = [_plain_event(sender, recipient, f"p{i}", base_ts - i * 10) for i in range(6)]
+        relay = FakeRelay(events)
+        original = relay._read
 
-        assert len(packets) == 1
-        assert packets[0].id == p.id
+        async def stalls_after_first_page(ws, sub_id):
+            if len(relay.filters) > 1:
+                raise TimeoutError
+            async for event in original(ws, sub_id):
+                yield event
+
+        relay._read = stalls_after_first_page
+        client._sleep = AsyncMock()
+        with relay.serving():
+            packets = [pkt async for pkt in client.fetch_pending()]
+
+        assert sorted(pkt.intent for pkt in packets) == ["p0", "p1"]
+        assert client.last_fetch_unreachable == [client._relay_urls[0]]
 
     async def test_yields_nip44_encrypted_packets(
         self, client: RelayClient, sender: Identity, recipient: Identity

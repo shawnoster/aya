@@ -130,7 +130,9 @@ _TOOLS: list[types.Tool] = [
             "`rejected` lists packets refused as {id, from, reason}, `from` being the "
             "packet's claimed (unauthenticated) sender, reason one of "
             "bad_signature, wrong_recipient, wrong_sender_key or duplicate_id. "
-            "Two summaries can share an id when different senders used it."
+            "Two summaries can share an id when different senders used it. "
+            "`complete` is false whenever no relay finished its listing; with "
+            "relay_reachable true, what's listed is real but more may be waiting."
         ),
         input_schema={
             "type": "object",

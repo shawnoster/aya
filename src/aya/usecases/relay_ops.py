@@ -238,6 +238,9 @@ class PollResult:
     instance: str = ""
     relays: list[str] = field(default_factory=list)
     relay_reachable: bool = True
+    # False whenever no relay finished its fetch. With relay_reachable True, what
+    # is listed is real, but the listing may be missing some.
+    complete: bool = True
     bad_signature: list[Packet] = field(default_factory=list)
     misrouted: list[tuple[Packet, str]] = field(default_factory=list)
 
@@ -257,6 +260,7 @@ class PollResult:
             "instance": self.instance,
             "relays": list(self.relays),
             "relay_reachable": self.relay_reachable,
+            "complete": self.complete,
             "rejected": self.rejected(),
         }
 
@@ -506,11 +510,12 @@ async def _fetch(
 ) -> tuple[Any, str, list[str], list[Packet], bool, list[str]]:
     """Poll every configured relay.
 
-    Returns ``(local, label, relay_urls, packets, reachable, reached)``. *reachable*
-    is an any-relay-answered summary — the client only raises when every relay
-    fails — so it cannot say which relays were reached. *reached* can: the client
-    reports its refusals, and anything not refused answered. Callers recording
-    per-relay state need *reached*; the poll envelope reports *reachable*.
+    Returns ``(local, label, relay_urls, packets, reachable, reached)``.
+    *reachable* is False only when nothing came back at all (the client raised).
+    *reached* lists the relays that completed the fetch; a relay that failed
+    partway still contributes the packets it delivered but isn't listed, so an
+    empty *reached* with *reachable* True means the listing may be incomplete.
+    Callers recording per-relay state need *reached*.
     """
     local, label = resolve_instance(profile, instance)
     relay_urls = resolve_relays(profile, relay)
@@ -543,7 +548,7 @@ async def inbox(
     Returns ``(result, packets)`` — the envelope plus the Packet objects, so a
     surface can render richer detail than the summary dicts carry.
     """
-    local, label, relay_urls, packets, reachable, _reached = await _fetch(
+    local, label, relay_urls, packets, reachable, reached = await _fetch(
         profile, instance, relay, client_factory
     )
     dropped = set(profile.dropped_ids)
@@ -572,6 +577,7 @@ async def inbox(
             instance=label,
             relays=relay_urls,
             relay_reachable=reachable,
+            complete=bool(reached),
             # Copies of packets already ingested are not news here either.
             misrouted=[(pkt, why) for pkt, why in sorted_.misrouted if pkt.id not in ingested],
         ),
@@ -683,6 +689,7 @@ async def receive(
         instance=label,
         relays=relay_urls,
         relay_reachable=reachable,
+        complete=bool(reached),
         bad_signature=sorted_packets.bad_signature,
         misrouted=misrouted,
     )

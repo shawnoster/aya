@@ -282,7 +282,9 @@ class RelayClient:
                             yield packet
             except RelayUnreachableError:
                 unreachable.append(relay_url)
-        if unreachable and len(unreachable) == len(self._relay_urls):
+        # Raise only if nothing came back at all: a relay that failed partway
+        # still delivered its earlier pages, and they are worth keeping.
+        if unreachable and len(unreachable) == len(self._relay_urls) and not seen:
             raise RelayUnreachableError(
                 f"All {len(self._relay_urls)} relay(s) unreachable: {unreachable}"
             )
@@ -349,14 +351,14 @@ class RelayClient:
                     logger.debug("Connecting to %s (page cursor until=%s)", relay_url, until)
                     async with websockets.connect(relay_url) as ws:
                         await ws.send(json.dumps(["REQ", sub_id, filter_]))
-                        try:
-                            async for raw in _read_until_eose(ws, sub_id):
-                                page_events.append(raw)
-                        except TimeoutError:
-                            logger.warning(
-                                "Relay %s did not send EOSE within timeout; closing subscription",
-                                relay_url,
-                            )
+                        # No EOSE in time means the page is incomplete, and an
+                        # incomplete page can't move the cursor: events older
+                        # than the ones received may be newer than ones never
+                        # sent, and an empty one would end paging. The timeout
+                        # propagates as a transient error, so the page is retried
+                        # and, if it keeps timing out, the relay is unreachable.
+                        async for raw in _read_until_eose(ws, sub_id):
+                            page_events.append(raw)
                         await ws.send(json.dumps(["CLOSE", sub_id]))
                     fetch_ok = True
                     break  # page fetched successfully

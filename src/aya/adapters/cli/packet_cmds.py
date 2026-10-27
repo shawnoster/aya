@@ -215,14 +215,22 @@ def drop(
                     {"packet_id": packet_id},
                 )
 
-            # A relay that failed partway delivered an incomplete listing: a
-            # prefix that looks unique (or absent) there may not be.
-            if list(getattr(client, "last_fetch_unreachable", None) or []):
+            if len(relay_matches) > 1:
+                _emit_error(
+                    ErrorCode.AMBIGUOUS_PREFIX,
+                    f"Ambiguous prefix '{packet_id}' — matches {len(relay_matches)} relay packets.",
+                    {"packet_id": packet_id, "matches": len(relay_matches)},
+                )
+            # If no relay finished its listing, a prefix that looks unique (or
+            # absent) may not be. One relay finishing is enough, as for receive.
+            failed = list(getattr(client, "last_fetch_unreachable", None) or [])
+            if failed and len(failed) >= len(relay_urls):
                 _emit_error(
                     ErrorCode.RELAY_UNREACHABLE,
                     (
-                        f"A relay failed partway while resolving prefix '{packet_id}', so "
-                        "the listing is incomplete. Retry, or use the full packet ID."
+                        f"No relay finished listing while resolving prefix '{packet_id}', "
+                        "so a match may be missing. Retry, use --relay, or pass the full "
+                        "packet ID."
                     ),
                     {"packet_id": packet_id},
                 )
@@ -232,12 +240,6 @@ def drop(
                     f"No packet matching '{packet_id}' found locally or on relay. "
                     "Use the full packet ID if it's already past relay retention.",
                     {"packet_id": packet_id},
-                )
-            if len(relay_matches) > 1:
-                _emit_error(
-                    ErrorCode.AMBIGUOUS_PREFIX,
-                    f"Ambiguous prefix '{packet_id}' — matches {len(relay_matches)} relay packets.",
-                    {"packet_id": packet_id, "matches": len(relay_matches)},
                 )
 
             full_id = next(iter(relay_matches))

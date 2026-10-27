@@ -177,6 +177,11 @@ def inbox(
 
         if not result.relay_reachable:
             err.print(f"[yellow]Could not reach relay.{context_suffix}[/yellow]")
+        elif not result.complete:
+            err.print(
+                "[yellow]A relay failed partway; this list may be incomplete."
+                f"{context_suffix}[/yellow]"
+            )
         if not packets:
             console.print(f"[dim]Inbox empty.{context_suffix}[/dim]")
             return

@@ -139,6 +139,8 @@ def _render_receive(
     if not result.relay_reachable:
         err.print(f"[yellow]Could not reach relay — skipping relay fetch.{context}[/yellow]")
         return
+    if not result.complete:
+        err.print(f"[yellow]A relay failed partway; more may be waiting.{context}[/yellow]")
     if not result.packets:
         console.print(f"[dim]No pending packets.{context}[/dim]")
         return

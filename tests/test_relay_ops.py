@@ -442,7 +442,7 @@ class TestReceive:
         assert p.ingested_ids == []
         assert result.envelope()["rejected"][0]["reason"] == "duplicate_id"
 
-    async def test_a_poll_where_no_relay_completed_is_not_reachable(self, profile, peer):
+    async def test_a_poll_where_no_relay_completed_is_incomplete(self, profile, peer):
         """Packets from a relay that failed partway still arrive, but the poll
         doesn't claim a complete listing."""
         p, path = profile
@@ -454,7 +454,10 @@ class TestReceive:
         result = await receive(p, path, client_factory=FakeClient)
 
         assert result.packets[0]["intent"] == "from the first page"
-        assert result.relay_reachable is False
+        assert result.packets[0]["ingested"] is True
+        # Reachable (packets came back, and were ingested), but not complete.
+        assert result.relay_reachable is True
+        assert result.envelope()["complete"] is False
 
     async def test_envelope_names_instance_and_relays(self, profile):
         p, path = profile
